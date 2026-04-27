@@ -16,7 +16,7 @@ pub struct Snapshot {
     pub userdata: Option<serde_json::Value>,
 }
 
-/// Auto-discover: snap-tools opera em todas as configs snapper que existirem.
+/// Auto-discover: snapgroup opera em todas as configs snapper que existirem.
 /// Adicionar suporte pra um novo subvolume = só rodar `snapper -c <nome> create-config`.
 pub fn list_configs() -> Result<Vec<String>> {
     let out = Command::new("snapper")
@@ -64,7 +64,7 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
 }
 
 pub fn create(config: &str, description: &str, group_id: i64) -> Result<u32> {
-    let userdata = format!("snap-tools-id={group_id}");
+    let userdata = format!("snapgroup-id={group_id}");
     let out = Command::new("snapper")
         .args([
             "-c",

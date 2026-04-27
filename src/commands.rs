@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
-    let desc = description.unwrap_or_else(|| format!("sg save {id}"));
+    let desc = description.unwrap_or_else(|| format!("snapg save {id}"));
 
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
@@ -38,7 +38,7 @@ pub fn save(description: Option<String>) -> Result<()> {
 }
 
 pub fn undo(yes: bool) -> Result<()> {
-    let g = group::latest_group()?.context("nenhum grupo sg save encontrado")?;
+    let g = group::latest_group()?.context("nenhum grupo snapg save encontrado")?;
     print_group("REVERTER", &g);
 
     if !yes && !confirm("Reverter todos os snapshots do grupo? (s/N) ")? {
@@ -135,7 +135,7 @@ fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
 }
 
 pub fn delete(yes: bool) -> Result<()> {
-    let g = group::latest_group()?.context("nenhum grupo sg save encontrado")?;
+    let g = group::latest_group()?.context("nenhum grupo snapg save encontrado")?;
     print_group("APAGAR", &g);
 
     if !yes && !confirm("Apagar todos os snapshots do grupo? (s/N) ")? {
@@ -310,7 +310,7 @@ fn gc_inner(yes: bool, mount_path: &Path) -> Result<()> {
 pub fn list() -> Result<()> {
     let groups = group::list_groups()?;
     if groups.is_empty() {
-        println!("nenhum grupo sg save encontrado");
+        println!("nenhum grupo snapg save encontrado");
         return Ok(());
     }
     for g in &groups {
