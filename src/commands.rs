@@ -151,15 +151,35 @@ pub fn delete(yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Estado dos backups encontrados no top-level: subvolumes nomeados
-/// `<current>_backup_<label>` deixados por undos anteriores.
+/// Tipo de subvol residual encontrado no top-level.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackupKind {
+    /// `<current>_backup_<label>` — deixado por undo. Usado pelo redo pra
+    /// restaurar o estado pré-undo.
+    UndoBackup,
+    /// `<current>.snapgroup_redo_discard_<label>` — deixado por redo.
+    /// É o subvol vivo *anterior* ao redo, preservado pra cleanup pós-reboot.
+    RedoDiscard,
+}
+
+impl BackupKind {
+    fn label_str(self) -> &'static str {
+        match self {
+            BackupKind::UndoBackup => "undo-backup",
+            BackupKind::RedoDiscard => "redo-discard",
+        }
+    }
+}
+
+/// Estado dos subvols residuais encontrados no top-level.
 struct BackupEntry {
     config: String,
     mountpoint: String,
     current_subvol: String,
-    backup_subvol: String, // ex: "@home_backup_2026-04-26_19:57:24"
+    backup_subvol: String, // nome no top-level
     label: String,         // ex: "2026-04-26_19:57:24"
     path: PathBuf,
+    kind: BackupKind,
 }
 
 /// Mapeia config → (mountpoint, current_subvol). Lookup base pra redo/gc.
@@ -174,8 +194,21 @@ fn config_subvol_map() -> Result<Vec<(String, String, String)>> {
     Ok(out)
 }
 
-/// Varre o top-level e retorna entradas cujo nome casa com `<current>_backup_<label>`
-/// pra alguma config conhecida. Ignora qualquer outro subvol/diretório.
+/// Tenta casar `name` com algum prefixo conhecido pra `current`.
+/// Retorna (kind, label) se casar.
+fn match_backup_name(name: &str, current: &str) -> Option<(BackupKind, String)> {
+    let undo_prefix = format!("{current}_backup_");
+    if let Some(label) = name.strip_prefix(&undo_prefix) {
+        return Some((BackupKind::UndoBackup, label.to_string()));
+    }
+    let redo_prefix = format!("{current}.snapgroup_redo_discard_");
+    if let Some(label) = name.strip_prefix(&redo_prefix) {
+        return Some((BackupKind::RedoDiscard, label.to_string()));
+    }
+    None
+}
+
+/// Varre o top-level e retorna subvols residuais (UndoBackup + RedoDiscard).
 fn discover_backups(toplevel: &Path) -> Result<Vec<BackupEntry>> {
     let cfg_map = config_subvol_map()?;
     let mut found = Vec::new();
@@ -183,15 +216,15 @@ fn discover_backups(toplevel: &Path) -> Result<Vec<BackupEntry>> {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         for (cfg, mp, current) in &cfg_map {
-            let prefix = format!("{current}_backup_");
-            if let Some(label) = name.strip_prefix(&prefix) {
+            if let Some((kind, label)) = match_backup_name(&name, current) {
                 found.push(BackupEntry {
                     config: cfg.clone(),
                     mountpoint: mp.clone(),
                     current_subvol: current.clone(),
                     backup_subvol: name.clone(),
-                    label: label.to_string(),
+                    label,
                     path: entry.path(),
+                    kind,
                 });
                 break;
             }
@@ -211,7 +244,12 @@ pub fn redo(yes: bool) -> Result<()> {
 }
 
 fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
-    let backups = discover_backups(mount_path)?;
+    // Redo só considera UndoBackup — RedoDiscard é o subvol vivo prévio,
+    // não algo a "restaurar de volta".
+    let backups: Vec<BackupEntry> = discover_backups(mount_path)?
+        .into_iter()
+        .filter(|b| b.kind == BackupKind::UndoBackup)
+        .collect();
     if backups.is_empty() {
         bail!("nenhum backup de undo encontrado — nada pra desfazer");
     }
@@ -275,20 +313,38 @@ pub fn gc(yes: bool) -> Result<()> {
 fn gc_inner(yes: bool, mount_path: &Path) -> Result<()> {
     let mut backups = discover_backups(mount_path)?;
     if backups.is_empty() {
-        println!("nenhum backup de undo pra coletar");
+        println!("nenhum subvol residual pra coletar");
         return Ok(());
     }
-    // Mais antigos primeiro pra leitura humana.
-    backups.sort_by(|a, b| a.label.cmp(&b.label).then(a.config.cmp(&b.config)));
+    // Mais antigos primeiro pra leitura humana; UndoBackup antes de RedoDiscard
+    // dentro do mesmo label (ordem cronológica de criação).
+    backups.sort_by(|a, b| {
+        a.label
+            .cmp(&b.label)
+            .then((a.kind as u8).cmp(&(b.kind as u8)))
+            .then(a.config.cmp(&b.config))
+    });
 
-    println!("Backups de undo encontrados ({}):", backups.len());
+    let undo_count = backups.iter().filter(|b| b.kind == BackupKind::UndoBackup).count();
+    let redo_count = backups.len() - undo_count;
+    println!(
+        "Subvols residuais encontrados ({}): {undo_count} undo-backup, {redo_count} redo-discard",
+        backups.len()
+    );
     for b in &backups {
-        println!("  [{}] {} ({})", b.label, b.backup_subvol, b.config);
+        println!(
+            "  [{}] {} ({}) [{}]",
+            b.label,
+            b.backup_subvol,
+            b.config,
+            b.kind.label_str()
+        );
     }
     println!();
-    println!("⚠ apagar invalida `snapg redo` para esses pontos no tempo. Operação irreversível.");
+    println!("⚠ apagar undo-backup invalida `snapg redo` para esse ponto no tempo.");
+    println!("  redo-discard é seguro de apagar a qualquer momento pós-reboot.");
 
-    if !yes && !confirm("Apagar TODOS os backups listados? (s/N) ")? {
+    if !yes && !confirm("Apagar TODOS os subvols listados? (s/N) ")? {
         println!("cancelado");
         return Ok(());
     }
