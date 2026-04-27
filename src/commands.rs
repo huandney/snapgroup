@@ -107,7 +107,7 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
         return Err(rerr.error);
     }
 
-    if let Err(re) = rollback::revert_done(&rerr.done, mount_path) {
+    if let Err(re) = rollback::revert_partial_undo(&rerr.done, mount_path) {
         eprintln!();
         eprintln!("✗ revert automático falhou no meio: {re:#}");
         eprintln!("  toplevel ainda montado em {}", mount_path.display());
@@ -249,9 +249,11 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
         })
         .collect();
 
-    rollback::revert_done(&done, mount_path).context("revert_done no redo")?;
+    rollback::revert_for_redo(&done, mount_path, &latest).context("revert_for_redo")?;
 
     println!("✓ redo aplicado — sistema voltou ao estado pré-undo ({latest})");
+    println!("  subvols antigos preservados como `<subvol>.snapgroup_redo_discard_{latest}`");
+    println!("  (limpe com `snapg gc` depois do reboot)");
     if confirm("Reiniciar agora? (s/N) ")? {
         std::process::Command::new("systemctl").arg("reboot").status()?;
         return Ok(());

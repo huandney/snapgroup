@@ -126,11 +126,16 @@ fn rollback_member(m: &Member, toplevel: &Path) -> Result<Done> {
     })
 }
 
-/// Reverte rollbacks já feitos: restaura backup, descarta o subvol revertido.
-/// SAFE: rename é atômico; delete só roda depois do rename bem-sucedido.
-/// Operação em ordem reversa pra simetria, embora nessa fase os rollbacks
-/// sejam independentes.
-pub fn revert_done(done: &[Done], toplevel: &Path) -> Result<()> {
+/// Reverte rollbacks já feitos durante uma falha PARCIAL de undo.
+///
+/// INVARIANTE: usar SOMENTE quando o subvol "revertido" (current) ainda
+/// não foi montado pelo kernel — i.e., antes do reboot. Nessa fase o
+/// `current` é a cópia writable recém-promovida, criada do snapshot RO.
+/// Ninguém depende dela; pode ser deletada sem risco.
+///
+/// **Não usar pra `redo`**, onde `current` É a rootfs viva: nesse caso
+/// usar `revert_for_redo` (sem delete).
+pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
@@ -160,7 +165,7 @@ pub fn revert_done(done: &[Done], toplevel: &Path) -> Result<()> {
             });
         }
 
-        // 3. Apaga o subvol revertido (best-effort — se falhar, log warning mas não aborta)
+        // 3. Apaga o subvol revertido (SEGURO aqui — nunca foi montado).
         if let Err(e) = btrfs::delete_subvolume(&discard) {
             eprintln!(
                 "⚠ revert {}: backup restaurado mas subvol descartado não foi deletado: {e:#}",
@@ -171,6 +176,51 @@ pub fn revert_done(done: &[Done], toplevel: &Path) -> Result<()> {
                 discard.display()
             );
         }
+    }
+    Ok(())
+}
+
+/// Faz redo: troca current ↔ backup do mesmo label, sem deletar nada.
+///
+/// O subvol "revertido" (current pré-redo) é a rootfs/home/etc VIVA — o
+/// kernel ainda o tem montado por inode mesmo depois do rename, e deletar
+/// quebra o sistema rodando (foi exatamente esse bug que travou na primeira
+/// versão do redo).
+///
+/// Solução: deixa um `<subvol>.snapgroup_redo_discard_<label>` no top-level.
+/// Após reboot, o subvol fica desmontado e pode ser limpo pelo `gc`.
+pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
+    for d in done.iter().rev() {
+        let current = toplevel.join(&d.current_subvol);
+        let backup = toplevel.join(&d.backup_subvol);
+        let discard_name = format!("{}.snapgroup_redo_discard_{label}", d.current_subvol);
+        let discard = toplevel.join(&discard_name);
+
+        // 0. Move .snapshots de volta pro backup (simétrico ao rollback_member).
+        let current_dotsnap = current.join(".snapshots");
+        let backup_dotsnap = backup.join(".snapshots");
+        if btrfs::is_subvolume(&current_dotsnap) {
+            fs::rename(&current_dotsnap, &backup_dotsnap).with_context(|| {
+                format!("redo {}: mover .snapshots de volta pro backup", d.config)
+            })?;
+        }
+
+        // 1. Move o subvol revertido (= rootfs viva) pra fora do nome ativo.
+        // Mount sobrevive — kernel referencia por inode, não path.
+        fs::rename(&current, &discard).with_context(|| {
+            format!("redo {}: tirar atual de {}", d.config, d.current_subvol)
+        })?;
+
+        // 2. Restaura o backup pro nome ativo (fstab volta a achar no próximo boot).
+        if let Err(e) = fs::rename(&backup, &current) {
+            let _ = fs::rename(&discard, &current);
+            return Err(e).with_context(|| {
+                format!("redo {}: restaurar backup {}", d.config, d.backup_subvol)
+            });
+        }
+
+        // 3. NÃO DELETA. Discard fica como `<subvol>.snapgroup_redo_discard_<label>`
+        // até o próximo reboot. `gc` limpa depois.
     }
     Ok(())
 }
