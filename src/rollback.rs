@@ -10,7 +10,7 @@ pub struct Done {
     pub config: String,
     pub mountpoint: String,
     pub current_subvol: String, // ex: "@home" — agora aponta pro novo RW
-    pub backup_subvol: String,  // ex: "@home_backup_<epoch>" — o ativo anterior
+    pub backup_subvol: String,  // ex: "@home_snapg_undo_<epoch>" — o ativo anterior
 }
 
 pub struct RollbackError {
@@ -25,7 +25,7 @@ struct Prep {
     config: String,
     mountpoint: String,
     current_subvol: String,
-    backup_subvol: String, // ex: "@home_backup_<label>"
+    backup_subvol: String, // ex: "@home_snapg_undo_<label>"
 }
 
 fn prep_intermediate_name(current_subvol: &str) -> String {
@@ -112,7 +112,7 @@ fn prepare_member(m: &Member, toplevel: &Path, label: &str) -> Result<Prep> {
     let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
         .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
 
-    let backup_subvol = format!("{current_subvol}_backup_{label}");
+    let backup_subvol = format!("{current_subvol}_snapg_undo_{label}");
     let intermediate_name = prep_intermediate_name(&current_subvol);
 
     let src = toplevel.join(&snap_subvol_path);
@@ -157,7 +157,10 @@ fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
     if let Err(e) = fs::rename(&current, &backup) {
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!("renomear subvol ativo {} → {}", p.current_subvol, p.backup_subvol)
+            format!(
+                "renomear subvol ativo {} → {}",
+                p.current_subvol, p.backup_subvol
+            )
         });
     }
 
@@ -178,7 +181,10 @@ fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!("mover .snapshots de {} pro novo {}", p.backup_subvol, p.current_subvol)
+            format!(
+                "mover .snapshots de {} pro novo {}",
+                p.backup_subvol, p.current_subvol
+            )
         });
     }
 
@@ -217,8 +223,12 @@ pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
         }
 
         // 1. Move o subvol revertido pra fora do nome ativo
-        fs::rename(&current, &discard)
-            .with_context(|| format!("revert {}: tirar revertido de {}", d.config, d.current_subvol))?;
+        fs::rename(&current, &discard).with_context(|| {
+            format!(
+                "revert {}: tirar revertido de {}",
+                d.config, d.current_subvol
+            )
+        })?;
 
         // 2. Restaura o backup pro nome ativo (fstab volta a achar)
         if let Err(e) = fs::rename(&backup, &current) {
@@ -251,13 +261,13 @@ pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
 /// quebra o sistema rodando (foi exatamente esse bug que travou na primeira
 /// versão do redo).
 ///
-/// Solução: deixa um `<subvol>.snapgroup_redo_discard_<label>` no top-level.
+/// Solução: deixa um `<subvol>_snapg_discard_<label>` no top-level.
 /// Após reboot, o subvol fica desmontado e pode ser limpo pelo `gc`.
 pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
-        let discard_name = format!("{}.snapgroup_redo_discard_{label}", d.current_subvol);
+        let discard_name = format!("{}_snapg_discard_{label}", d.current_subvol);
         let discard = toplevel.join(&discard_name);
 
         // 0. Move .snapshots de volta pro backup (simétrico ao rollback_member).
@@ -271,9 +281,8 @@ pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()
 
         // 1. Move o subvol revertido (= rootfs viva) pra fora do nome ativo.
         // Mount sobrevive — kernel referencia por inode, não path.
-        fs::rename(&current, &discard).with_context(|| {
-            format!("redo {}: tirar atual de {}", d.config, d.current_subvol)
-        })?;
+        fs::rename(&current, &discard)
+            .with_context(|| format!("redo {}: tirar atual de {}", d.config, d.current_subvol))?;
 
         // 2. Restaura o backup pro nome ativo (fstab volta a achar no próximo boot).
         if let Err(e) = fs::rename(&backup, &current) {
@@ -283,7 +292,7 @@ pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()
             });
         }
 
-        // 3. NÃO DELETA. Discard fica como `<subvol>.snapgroup_redo_discard_<label>`
+        // 3. NÃO DELETA. Discard fica como `<subvol>_snapg_discard_<label>`
         // até o próximo reboot. `gc` limpa depois.
     }
     Ok(())
