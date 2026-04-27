@@ -52,9 +52,15 @@ Se qualquer etapa falhar, rollback é revertido automaticamente (ou com confirma
 
 Stateless: varre o top-level procurando `<subvol>_backup_<label>`, agrupa pelo label (timestamp ISO, ordem lex = ordem cronológica), restaura o grupo mais recente. Pareamento garantido — só restaura membros do mesmo `label`.
 
+Os subvols vivos pré-redo viram `<subvol>.snapgroup_redo_discard_<label>` (não dá pra deletar enquanto montados). Cleanup é automático via "serviço fantasma":
+
+1. Após `redo` ok, snapg roda `systemctl enable snapg-cleanup.service`.
+2. No próximo boot, o systemd executa o serviço, que chama `snapg boot-clean`: apaga todos os `*.snapgroup_redo_discard_*` e em seguida roda `systemctl disable snapg-cleanup.service`.
+3. O serviço fica inerte de novo até o próximo redo. Zero overhead em boots normais.
+
 ## `gc` (limpeza)
 
-Apaga todos os `<subvol>_backup_<label>` do top-level. **Por design, manual e nunca automático** — `gc` automático tornaria `redo` não-confiável. Se precisar de retenção automática no futuro, use `systemd.timer` chamando `snapg gc -y`.
+Apaga todos os `<subvol>_backup_<label>` (undo-backups) e qualquer `<subvol>.snapgroup_redo_discard_<label>` remanescente. **Por design, manual e nunca automático para undo-backups** — `gc` automático tornaria `redo` não-confiável. Para `redo-discards` o cleanup automático rola via o serviço descrito acima; `gc` manual continua útil pra limpeza retroativa.
 
 ## Status
 

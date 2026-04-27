@@ -1,0 +1,18 @@
+post_install() {
+    systemctl daemon-reload
+    # Não habilita aqui — o `snapg redo` arma o serviço sob demanda.
+}
+
+post_upgrade() {
+    systemctl daemon-reload
+}
+
+pre_remove() {
+    # Best-effort: se o serviço estiver armado (após um redo sem reboot),
+    # desarma antes de remover o unit.
+    systemctl disable snapg-cleanup.service 2>/dev/null || true
+}
+
+post_remove() {
+    systemctl daemon-reload
+}

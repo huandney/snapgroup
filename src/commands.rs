@@ -291,12 +291,96 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
 
     println!("✓ redo aplicado — sistema voltou ao estado pré-undo ({latest})");
     println!("  subvols antigos preservados como `<subvol>.snapgroup_redo_discard_{latest}`");
-    println!("  (limpe com `snapg gc` depois do reboot)");
+
+    // Arma o serviço fantasma: no próximo boot ele roda `snapg boot-clean`,
+    // apaga os discards e se desabilita sozinho.
+    match arm_boot_cleanup() {
+        Ok(()) => println!("  cleanup automático armado para o próximo boot"),
+        Err(e) => eprintln!(
+            "⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"
+        ),
+    }
+
     if confirm("Reiniciar agora? (s/N) ")? {
         std::process::Command::new("systemctl").arg("reboot").status()?;
         return Ok(());
     }
     println!("⚠ reinicie manualmente para concluir o redo");
+    Ok(())
+}
+
+const BOOT_CLEANUP_UNIT: &str = "snapg-cleanup.service";
+
+fn arm_boot_cleanup() -> Result<()> {
+    let out = std::process::Command::new("systemctl")
+        .args(["enable", BOOT_CLEANUP_UNIT])
+        .output()
+        .context("invocar systemctl enable")?;
+    if !out.status.success() {
+        bail!(
+            "systemctl enable {BOOT_CLEANUP_UNIT}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn disarm_boot_cleanup() -> Result<()> {
+    let out = std::process::Command::new("systemctl")
+        .args(["disable", BOOT_CLEANUP_UNIT])
+        .output()
+        .context("invocar systemctl disable")?;
+    if !out.status.success() {
+        bail!(
+            "systemctl disable {BOOT_CLEANUP_UNIT}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Subcomando interno chamado pelo `snapg-cleanup.service` no boot.
+/// Apaga todos os redo-discards no top-level e desarma o serviço.
+/// Output vai pro journal (stdout/stderr capturados pelo systemd).
+pub fn boot_clean() -> Result<()> {
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = (|| -> Result<()> {
+        let discards: Vec<BackupEntry> = discover_backups(&mount_path)?
+            .into_iter()
+            .filter(|b| b.kind == BackupKind::RedoDiscard)
+            .collect();
+
+        if discards.is_empty() {
+            println!("snapg boot-clean: nenhum redo-discard encontrado");
+            return Ok(());
+        }
+
+        let total = discards.len();
+        let mut ok = 0usize;
+        for b in &discards {
+            match btrfs::delete_subvolume(&b.path) {
+                Ok(()) => {
+                    println!("snapg boot-clean: removido {}", b.backup_subvol);
+                    ok += 1;
+                }
+                Err(e) => eprintln!("snapg boot-clean: falha em {}: {e:#}", b.backup_subvol),
+            }
+        }
+        println!("snapg boot-clean: {ok}/{total} discards removidos");
+        Ok(())
+    })();
+
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result?;
+
+    // Desarma o serviço — independente de ter discards ou não, a missão
+    // (rodar uma vez pós-redo) acabou. Erro aqui não é fatal: log e segue.
+    if let Err(e) = disarm_boot_cleanup() {
+        eprintln!("snapg boot-clean: falha ao desarmar serviço: {e:#}");
+    }
     Ok(())
 }
 

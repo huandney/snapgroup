@@ -41,4 +41,7 @@ pub enum Command {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Uso interno: limpa redo-discards e se desarma do systemd. Não invoque manualmente.
+    #[command(hide = true)]
+    BootClean,
 }

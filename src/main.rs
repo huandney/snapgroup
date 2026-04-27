@@ -19,5 +19,6 @@ fn main() -> Result<()> {
         cli::Command::List => commands::list(),
         cli::Command::Delete { yes } => commands::delete(yes),
         cli::Command::Gc { yes } => commands::gc(yes),
+        cli::Command::BootClean => commands::boot_clean(),
     }
 }

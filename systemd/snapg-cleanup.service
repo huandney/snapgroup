@@ -1,0 +1,11 @@
+[Unit]
+Description=Snapgroup post-redo cleanup (apaga redo-discards após reboot)
+Documentation=https://github.com/huandney/snapgroup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/snapg boot-clean
+
+[Install]
+WantedBy=multi-user.target
