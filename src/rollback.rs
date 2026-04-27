@@ -19,18 +19,74 @@ pub struct RollbackError {
     pub error: anyhow::Error,
 }
 
-/// Executa rollback em sequência. Retorna lista de membros já feitos
-/// (em ordem) ou erro detalhado se algum falhar.
+/// Resultado da Fase 1 (preparação) — descreve um membro pronto pra commit.
+/// Ainda nada foi tocado no sistema vivo nesse ponto.
+struct Prep {
+    config: String,
+    mountpoint: String,
+    current_subvol: String,
+    backup_subvol: String, // ex: "@home_backup_<label>"
+}
+
+fn prep_intermediate_name(current_subvol: &str) -> String {
+    format!("{current_subvol}.snapgroup_prep")
+}
+
+/// Two-phase rollback de um grupo.
+///
+/// Fase 1 (preparação, IO-pesada): cria `<subvol>.snapgroup_prep` a partir
+/// do snapshot RO de cada membro. Falha aqui (ENOSPC, IO error, etc) é
+/// frequente o suficiente pra justificar a separação. Se qualquer membro
+/// falhar nessa fase, todos os preps criados são deletados e o sistema
+/// vivo permanece **100% intocado**.
+///
+/// Fase 2 (commit, metadata-only): para cada membro, faz live→backup,
+/// prep→live, fix `.snapshots`. São apenas renames, atômicos por membro,
+/// extremamente improváveis de falhar. Se ainda assim falhar no meio de
+/// um grupo, retorna `RollbackError` com os membros já commitados pra que
+/// o caller decida se reverte (`revert_partial_undo`).
 pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, RollbackError> {
-    let mut done = Vec::new();
+    // Label compartilhado entre todos os membros do grupo — garante que
+    // `redo` consiga reagrupar pelo mesmo timestamp.
+    let label = match btrfs::now_local_label() {
+        Ok(l) => l,
+        Err(e) => {
+            return Err(RollbackError {
+                done: Vec::new(),
+                failed_config: String::from("(setup)"),
+                error: e.context("obter label de tempo"),
+            });
+        }
+    };
+
+    // === Fase 1: preparação ===
+    let mut preps = Vec::new();
     for m in &group.members {
-        match rollback_member(m, toplevel) {
+        match prepare_member(m, toplevel, &label) {
+            Ok(p) => preps.push(p),
+            Err(e) => {
+                cleanup_preps(&preps, toplevel);
+                return Err(RollbackError {
+                    done: Vec::new(),
+                    failed_config: m.config.clone(),
+                    error: e.context("fase 1 (prepare) — sistema vivo intacto"),
+                });
+            }
+        }
+    }
+
+    // === Fase 2: commit ===
+    let mut done = Vec::new();
+    for p in &preps {
+        match commit_prep(p, toplevel) {
             Ok(d) => done.push(d),
             Err(e) => {
+                // Limpa preps remanescentes (do membro que falhou em diante).
+                cleanup_preps(&preps[done.len()..], toplevel);
                 return Err(RollbackError {
                     done,
-                    failed_config: m.config.clone(),
-                    error: e,
+                    failed_config: p.config.clone(),
+                    error: e.context("fase 2 (commit)"),
                 });
             }
         }
@@ -38,7 +94,9 @@ pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, Rollb
     Ok(done)
 }
 
-fn rollback_member(m: &Member, toplevel: &Path) -> Result<Done> {
+/// Fase 1: cria a cópia writable do snapshot RO num nome intermediário.
+/// Operação cara (metadata copy) e propensa a ENOSPC. **Não toca em nada vivo.**
+fn prepare_member(m: &Member, toplevel: &Path, label: &str) -> Result<Prep> {
     let mountpoint = snapper::config_subvolume(&m.config)?;
 
     // Path top-level do subvol atualmente ativo (ex: "@home")
@@ -54,75 +112,81 @@ fn rollback_member(m: &Member, toplevel: &Path) -> Result<Done> {
     let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
         .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
 
-    let label = btrfs::now_local_label()?;
     let backup_subvol = format!("{current_subvol}_backup_{label}");
-    // Nome distintivo pra evitar colisão com qualquer subvol "real".
-    let intermediate_name = format!("{current_subvol}.snapgroup_new");
+    let intermediate_name = prep_intermediate_name(&current_subvol);
 
     let src = toplevel.join(&snap_subvol_path);
     let intermediate = toplevel.join(&intermediate_name);
-    let current = toplevel.join(&current_subvol);
-    let backup = toplevel.join(&backup_subvol);
 
     // Limpa lixo de tentativa anterior abortada (defensivo).
     if intermediate.exists() {
         let _ = btrfs::delete_subvolume(&intermediate);
     }
 
-    // Etapa 1: cria cópia writable do snapshot read-only.
-    // Esta é a operação mais cara (cópia metadata) e a que mais pode falhar
-    // (ENOSPC). Se falhar, NADA foi mudado ainda — abort limpo.
     btrfs::create_snapshot(&src, &intermediate)
         .with_context(|| format!("criar cópia writable do snap #{}", m.snapshot.number))?;
 
-    // Etapa 2: arquiva o subvol ativo. rename é metadata-only, atômico,
-    // sem I/O. Mount em /, /home etc. continua funcionando (kernel guarda
-    // por inode, não path).
+    Ok(Prep {
+        config: m.config.clone(),
+        mountpoint,
+        current_subvol,
+        backup_subvol,
+    })
+}
+
+/// Best-effort: deleta todos os intermediates criados na fase 1.
+/// Usado quando fase 1 ou fase 2 abortam.
+fn cleanup_preps(preps: &[Prep], toplevel: &Path) {
+    for p in preps {
+        let intermediate = toplevel.join(prep_intermediate_name(&p.current_subvol));
+        if intermediate.exists() {
+            let _ = btrfs::delete_subvolume(&intermediate);
+        }
+    }
+}
+
+/// Fase 2: faz os renames que efetivam o rollback. Apenas metadata, atômico
+/// por syscall. Falha aqui é rara (mesma fs, sem IO).
+fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
+    let intermediate = toplevel.join(prep_intermediate_name(&p.current_subvol));
+    let current = toplevel.join(&p.current_subvol);
+    let backup = toplevel.join(&p.backup_subvol);
+
+    // Etapa 1: arquiva o subvol ativo. Rename é metadata-only; mount
+    // sobrevive (kernel referencia por inode, não path).
     if let Err(e) = fs::rename(&current, &backup) {
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!(
-                "renomear subvol ativo {current_subvol} → {backup_subvol}"
-            )
+            format!("renomear subvol ativo {} → {}", p.current_subvol, p.backup_subvol)
         });
     }
 
-    // Etapa 3: promove o intermediate ao nome ativo.
-    // Se isso falhar (extremamente improvável — mesma fs, sem I/O), faz
-    // best-effort de voltar pra estado anterior.
+    // Etapa 2: promove o intermediate ao nome ativo.
     if let Err(e) = fs::rename(&intermediate, &current) {
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
-        return Err(e)
-            .with_context(|| format!("promover intermediate → {current_subvol}"));
+        return Err(e).with_context(|| format!("promover intermediate → {}", p.current_subvol));
     }
 
-    // Etapa 4: corrige nested .snapshots. Quando o subvol ativo tinha
-    // .snapshots como subvol aninhado (caso CachyOS/openSUSE), ele foi pra
-    // junto do backup no rename. O novo subvol ativo (criado de snapshot)
-    // tem só placeholder vazio. Move o real de volta — rename é metadata-only,
-    // funciona pra subvol aninhado entre subvols irmãos no mesmo fs.
+    // Etapa 3: corrige `.snapshots` aninhado (foi junto do backup no rename).
     let backup_dotsnap = backup.join(".snapshots");
     let new_dotsnap = current.join(".snapshots");
     if btrfs::is_subvolume(&backup_dotsnap)
         && let Err(e) = fs::rename(&backup_dotsnap, &new_dotsnap)
     {
-        // Reverte tudo: volta intermediate→current, backup→original.
         let _ = fs::rename(&current, &intermediate);
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!(
-                "mover .snapshots de {backup_subvol} pro novo {current_subvol}"
-            )
+            format!("mover .snapshots de {} pro novo {}", p.backup_subvol, p.current_subvol)
         });
     }
 
     Ok(Done {
-        config: m.config.clone(),
-        mountpoint,
-        current_subvol,
-        backup_subvol,
+        config: p.config.clone(),
+        mountpoint: p.mountpoint.clone(),
+        current_subvol: p.current_subvol.clone(),
+        backup_subvol: p.backup_subvol.clone(),
     })
 }
 
