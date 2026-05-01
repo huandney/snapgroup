@@ -157,10 +157,7 @@ fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
     if let Err(e) = fs::rename(&current, &backup) {
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!(
-                "renomear subvol ativo {} → {}",
-                p.current_subvol, p.backup_subvol
-            )
+            format!("renomear subvol ativo {} → {}", p.current_subvol, p.backup_subvol)
         });
     }
 
@@ -181,10 +178,7 @@ fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
         return Err(e).with_context(|| {
-            format!(
-                "mover .snapshots de {} pro novo {}",
-                p.backup_subvol, p.current_subvol
-            )
+            format!("mover .snapshots de {} pro novo {}", p.backup_subvol, p.current_subvol)
         });
     }
 
@@ -223,12 +217,8 @@ pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
         }
 
         // 1. Move o subvol revertido pra fora do nome ativo
-        fs::rename(&current, &discard).with_context(|| {
-            format!(
-                "revert {}: tirar revertido de {}",
-                d.config, d.current_subvol
-            )
-        })?;
+        fs::rename(&current, &discard)
+            .with_context(|| format!("revert {}: tirar revertido de {}", d.config, d.current_subvol))?;
 
         // 2. Restaura o backup pro nome ativo (fstab volta a achar)
         if let Err(e) = fs::rename(&backup, &current) {

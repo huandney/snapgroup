@@ -58,16 +58,9 @@ pub fn undo(yes: bool) -> Result<()> {
         Ok(done) => {
             // Umount best-effort — não impede sucesso se falhar (mount em /run vai sumir no boot).
             let _ = btrfs::umount_toplevel(&mount_path);
-            println!(
-                "✓ rollback completo do grupo {} ({} membros)",
-                g.id,
-                done.len()
-            );
+            println!("✓ rollback completo do grupo {} ({} membros)", g.id, done.len());
             for d in &done {
-                println!(
-                    "    {}: subvol antigo arquivado como {}",
-                    d.config, d.backup_subvol
-                );
+                println!("    {}: subvol antigo arquivado como {}", d.config, d.backup_subvol);
             }
 
             if confirm("Reiniciar agora? (s/N) ")? {
@@ -86,9 +79,11 @@ pub fn undo(yes: bool) -> Result<()> {
 fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
     eprintln!();
     eprintln!("⚠ FALHA PARCIAL no rollback do grupo {}", g.id);
-    if rerr.done.is_empty() {
+    let is_empty = rerr.done.is_empty();
+    if is_empty {
         eprintln!("  nenhum membro foi feito (falhou no primeiro)");
-    } else {
+    }
+    if !is_empty {
         let names: Vec<&str> = rerr.done.iter().map(|d| d.config.as_str()).collect();
         eprintln!("  já feito ({}): {}", rerr.done.len(), names.join(", "));
     }
@@ -118,10 +113,7 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
         eprintln!();
         eprintln!("✗ revert automático falhou no meio: {re:#}");
         eprintln!("  toplevel ainda montado em {}", mount_path.display());
-        eprintln!(
-            "  resolva manualmente lá e depois: sudo umount {}",
-            mount_path.display()
-        );
+        eprintln!("  resolva manualmente lá e depois: sudo umount {}", mount_path.display());
         return Err(rerr.error);
     }
 
@@ -133,25 +125,13 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
 
 fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
     eprintln!();
-    eprintln!(
-        "Pra reverter manualmente os já feitos (toplevel montado em {}):",
-        mount_path.display()
-    );
+    eprintln!("Pra reverter manualmente os já feitos (toplevel montado em {}):", mount_path.display());
     for d in done {
         let mp = mount_path.display();
         eprintln!("  # {} (mountpoint {})", d.config, d.mountpoint);
-        eprintln!(
-            "  sudo mv {mp}/{} {mp}/{}.discard",
-            d.current_subvol, d.current_subvol
-        );
-        eprintln!(
-            "  sudo mv {mp}/{} {mp}/{}",
-            d.backup_subvol, d.current_subvol
-        );
-        eprintln!(
-            "  sudo btrfs subvolume delete {mp}/{}.discard",
-            d.current_subvol
-        );
+        eprintln!("  sudo mv {mp}/{} {mp}/{}.discard", d.current_subvol, d.current_subvol);
+        eprintln!("  sudo mv {mp}/{} {mp}/{}", d.backup_subvol, d.current_subvol);
+        eprintln!("  sudo btrfs subvolume delete {mp}/{}.discard", d.current_subvol);
     }
     eprintln!("  sudo umount {}", mount_path.display());
 }
@@ -285,15 +265,9 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
     let mut group = by_label.remove(&latest).unwrap();
     group.sort_by(|a, b| a.config.cmp(&b.config));
 
-    println!(
-        "== REDO último undo [{latest}] ({} membros) ==",
-        group.len()
-    );
+    println!("== REDO último undo [{latest}] ({} membros) ==", group.len());
     for b in &group {
-        println!(
-            "  {}: {} → restaurar como {}",
-            b.config, b.backup_subvol, b.current_subvol
-        );
+        println!("  {}: {} → restaurar como {}", b.config, b.backup_subvol, b.current_subvol);
     }
 
     if !yes && !confirm("Desfazer último undo (restaurar esses backups)? (s/N) ")? {
@@ -316,13 +290,18 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
     println!("✓ redo aplicado — sistema voltou ao estado pré-undo ({latest})");
     println!("  subvols antigos preservados como `<subvol>_snapg_discard_{latest}`");
 
-    // Arma o serviço fantasma: no próximo boot ele roda `snapg boot-clean`,
-    // apaga os discards e se desabilita sozinho.
-    match arm_boot_cleanup() {
-        Ok(()) => println!("  cleanup automático armado para o próximo boot"),
-        Err(e) => eprintln!(
-            "⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"
-        ),
+    // Arma o serviço fantasma no rootfs RESTAURADO (o que vai bootar).
+    // O sistema atual virou "discard" e seu /etc/systemd não será lido no próximo boot.
+    let root_member = done.iter().find(|d| d.mountpoint == "/");
+    if let Some(rm) = root_member {
+        let restored_root_path = mount_path.join(&rm.current_subvol);
+        match arm_boot_cleanup(&restored_root_path) {
+            Ok(()) => println!("  cleanup automático armado para o próximo boot"),
+            Err(e) => eprintln!("⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"),
+        }
+    }
+    if root_member.is_none() {
+        eprintln!("⚠ grupo não inclui a raiz ('/'), não é possível armar o cleanup automático");
     }
 
     if confirm("Reiniciar agora? (s/N) ")? {
@@ -337,9 +316,10 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
 
 const BOOT_CLEANUP_UNIT: &str = "snapg-cleanup.service";
 
-fn arm_boot_cleanup() -> Result<()> {
+fn arm_boot_cleanup(root_fs: &Path) -> Result<()> {
+    let root_arg = format!("--root={}", root_fs.display());
     let out = std::process::Command::new("systemctl")
-        .args(["enable", BOOT_CLEANUP_UNIT])
+        .args([&root_arg, "enable", BOOT_CLEANUP_UNIT])
         .output()
         .context("invocar systemctl enable")?;
     if !out.status.success() {
@@ -440,18 +420,9 @@ fn gc_inner(yes: bool, mount_path: &Path) -> Result<()> {
         .filter(|b| b.kind == BackupKind::UndoBackup)
         .count();
     let redo_count = backups.len() - undo_count;
-    println!(
-        "Subvols residuais encontrados ({}): {undo_count} undo-backup, {redo_count} redo-discard",
-        backups.len()
-    );
+    println!("Subvols residuais encontrados ({}): {undo_count} undo-backup, {redo_count} redo-discard", backups.len());
     for b in &backups {
-        println!(
-            "  [{}] {} ({}) [{}]",
-            b.label,
-            b.backup_subvol,
-            b.config,
-            b.kind.label_str()
-        );
+        println!("  [{}] {} ({}) [{}]", b.label, b.backup_subvol, b.config, b.kind.label_str());
     }
     println!();
     println!("⚠ apagar undo-backup invalida `snapg redo` para esse ponto no tempo.");
@@ -492,26 +463,16 @@ pub fn list() -> Result<()> {
             .unwrap_or("");
         println!("[{}]  {} membros  {}", g.id, g.members.len(), date);
         for m in &g.members {
-            println!(
-                "    {}: #{}  {}",
-                m.config, m.snapshot.number, m.snapshot.description
-            );
+            println!("    {}: #{}  {}", m.config, m.snapshot.number, m.snapshot.description);
         }
     }
     Ok(())
 }
 
 fn print_group(action: &str, g: &Group) {
-    println!(
-        "== {action} grupo {} ({} membros) ==",
-        g.id,
-        g.members.len()
-    );
+    println!("== {action} grupo {} ({} membros) ==", g.id, g.members.len());
     for m in &g.members {
-        println!(
-            "  {}: #{}  {}  {}",
-            m.config, m.snapshot.number, m.snapshot.date, m.snapshot.description
-        );
+        println!("  {}: #{}  {}  {}", m.config, m.snapshot.number, m.snapshot.date, m.snapshot.description);
     }
 }
 
