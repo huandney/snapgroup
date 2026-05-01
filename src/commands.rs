@@ -8,6 +8,18 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Trunca texto pra caber na largura do terminal.
+/// Previne wrapping que causa bug visual no dialoguer (linhas "comendo" o conteúdo acima).
+fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {
+    let width = console::Term::stdout().size().1 as usize;
+    let max = width.saturating_sub(prefix_len);
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
+
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
     let desc = description.unwrap_or_else(|| format!("snapg save {id}"));
@@ -133,11 +145,15 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
     let mut items: Vec<String> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
 
+    // Select prefix: "> " = 2 chars
+    let prefix_len = 4;
+
     if let Some(ref r) = regret {
-        items.push(format!(
+        let text = format!(
             "⟲ Estado Anterior à Restauração (Regret) — {}",
             r.creation_time
-        ));
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Regret);
     }
 
@@ -152,13 +168,14 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
             .first()
             .map(|m| m.snapshot.description.as_str())
             .unwrap_or("");
-        items.push(format!(
+        let text = format!(
             "Checkpoint {} ({} — {} membros) {}",
             g.id,
             date,
             g.members.len(),
             desc
-        ));
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
     }
 
@@ -336,14 +353,80 @@ fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
 }
 
 pub fn delete(yes: bool) -> Result<()> {
-    let g = group::latest_group()?.context("nenhum grupo snapg save encontrado")?;
-    print_group("APAGAR", &g);
+    let groups = group::list_groups()?;
+    if groups.is_empty() {
+        println!("nenhum grupo snapg save encontrado");
+        return Ok(());
+    }
 
-    if !yes && !confirm("Apagar todos os snapshots do grupo? (s/N) ")? {
+    // -y: deleta o mais recente sem TUI (backward compat / scripting).
+    if yes {
+        let g = &groups[0];
+        delete_group(g)?;
+        return Ok(());
+    }
+
+    // MultiSelect prefix: "> [ ] " = 6 chars
+    let prefix_len = 6;
+    let mut items: Vec<String> = vec![
+        truncate_for_terminal("⚠ TODOS os checkpoints", prefix_len),
+    ];
+    for g in &groups {
+        let date = g
+            .members
+            .first()
+            .map(|m| m.snapshot.date.as_str())
+            .unwrap_or("");
+        let desc = g
+            .members
+            .first()
+            .map(|m| m.snapshot.description.as_str())
+            .unwrap_or("");
+        let text = format!(
+            "Checkpoint {} ({} — {} membros) {}",
+            g.id, date, g.members.len(), desc
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
+    }
+
+    let selections = dialoguer::MultiSelect::new()
+        .with_prompt("Selecione checkpoints para apagar (Espaço=marcar, Enter=confirmar)")
+        .items(&items)
+        .interact()
+        .context("seleção cancelada")?;
+
+    if selections.is_empty() {
+        println!("nenhum checkpoint selecionado");
+        return Ok(());
+    }
+
+    let select_all = selections.contains(&0);
+    let targets: Vec<&Group> = if select_all {
+        groups.iter().collect()
+    } else {
+        selections.iter()
+            .filter(|&&i| i > 0)
+            .map(|&i| &groups[i - 1])
+            .collect()
+    };
+
+    println!("== APAGAR {} checkpoint(s) ==", targets.len());
+    for g in &targets {
+        println!("  Checkpoint {} ({} membros)", g.id, g.members.len());
+    }
+
+    if !confirm("Confirmar exclusão? (s/N) ")? {
         println!("cancelado");
         return Ok(());
     }
 
+    for g in &targets {
+        delete_group(g)?;
+    }
+    Ok(())
+}
+
+fn delete_group(g: &Group) -> Result<()> {
     for m in &g.members {
         snapper::delete(&m.config, m.snapshot.number)
             .with_context(|| format!("apagar {} #{}", m.config, m.snapshot.number))?;
