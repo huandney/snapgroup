@@ -31,7 +31,9 @@ pub fn list_groups() -> Result<Vec<Group>> {
     let mut by_id: HashMap<GroupId, Vec<Member>> = HashMap::new();
     for cfg in &configs {
         for snap in snapper::list(cfg)? {
-            let Some(id) = extract_id(&snap) else { continue };
+            let Some(id) = extract_id(&snap) else {
+                continue;
+            };
             by_id.entry(id).or_default().push(Member {
                 config: cfg.clone(),
                 snapshot: snap,

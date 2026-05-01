@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "snapg", version, about = "Wrapper Snapper com snapshots agrupados por subvolume")]
+#[command(
+    name = "snapg",
+    version,
+    about = "Wrapper Snapper com snapshots agrupados por subvolume"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

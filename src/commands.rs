@@ -316,13 +316,18 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
     println!("✓ redo aplicado — sistema voltou ao estado pré-undo ({latest})");
     println!("  subvols antigos preservados como `<subvol>_snapg_discard_{latest}`");
 
-    // Arma o serviço fantasma: no próximo boot ele roda `snapg boot-clean`,
-    // apaga os discards e se desabilita sozinho.
-    match arm_boot_cleanup() {
-        Ok(()) => println!("  cleanup automático armado para o próximo boot"),
-        Err(e) => eprintln!(
-            "⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"
-        ),
+    // Arma o serviço fantasma no rootfs RESTAURADO (o que vai bootar).
+    // O sistema atual virou "discard" e seu /etc/systemd não será lido no próximo boot.
+    if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
+        let restored_root_path = mount_path.join(&root_member.current_subvol);
+        match arm_boot_cleanup(&restored_root_path) {
+            Ok(()) => println!("  cleanup automático armado para o próximo boot"),
+            Err(e) => eprintln!(
+                "⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"
+            ),
+        }
+    } else {
+        eprintln!("⚠ grupo não inclui a raiz ('/'), não é possível armar o cleanup automático");
     }
 
     if confirm("Reiniciar agora? (s/N) ")? {
@@ -337,9 +342,10 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
 
 const BOOT_CLEANUP_UNIT: &str = "snapg-cleanup.service";
 
-fn arm_boot_cleanup() -> Result<()> {
+fn arm_boot_cleanup(root_fs: &Path) -> Result<()> {
+    let root_arg = format!("--root={}", root_fs.display());
     let out = std::process::Command::new("systemctl")
-        .args(["enable", BOOT_CLEANUP_UNIT])
+        .args([&root_arg, "enable", BOOT_CLEANUP_UNIT])
         .output()
         .context("invocar systemctl enable")?;
     if !out.status.success() {
