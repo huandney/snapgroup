@@ -197,12 +197,46 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
     }
 }
 
+/// True se /boot está montado em FAT32 (vfat). Isso significa que o kernel
+/// vive fora do BTRFS e precisa de sincronização manual no rollback.
+fn boot_is_fat32() -> bool {
+    std::process::Command::new("findmnt")
+        .args(["-no", "FSTYPE", "/boot"])
+        .output()
+        .map(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stdout).trim().eq_ignore_ascii_case("vfat")
+        })
+        .unwrap_or(false)
+}
+
+/// Emite warning fatal: /boot em FAT32 pode dessincronizar kernel ↔ módulos.
+/// Retorna false se o utilizador cancelar.
+fn warn_fat32_boot() -> Result<bool> {
+    if !boot_is_fat32() {
+        return Ok(true);
+    }
+    eprintln!();
+    eprintln!("⚠ ATENÇÃO: /boot está em FAT32 (vfat)");
+    eprintln!("  O rollback reverte o BTRFS (módulos do kernel), mas o kernel");
+    eprintln!("  em /boot (FAT32) NÃO será revertido automaticamente.");
+    eprintln!("  Se o kernel mudou entre o snapshot e o estado atual,");
+    eprintln!("  o sistema pode não arrancar (kernel panic por mismatch).");
+    eprintln!();
+    confirm("Continuar mesmo assim? (s/N) ")
+}
+
 fn execute_restore_checkpoint(
     group: &Group,
     configs: &[String],
     mount_path: &Path,
 ) -> Result<()> {
     print_group("RESTAURAR", group);
+
+    if !warn_fat32_boot()? {
+        println!("cancelado (risco de dessincronização de boot)");
+        return Ok(());
+    }
 
     if !confirm("Restaurar este checkpoint? (s/N) ")? {
         println!("cancelado");
@@ -623,12 +657,15 @@ fn confirm(prompt: &str) -> Result<bool> {
 }
 
 fn prompt_reboot() -> Result<()> {
-    if confirm("Reiniciar agora? (s/N) ")? {
-        std::process::Command::new("systemctl")
-            .arg("reboot")
-            .status()?;
+    if !confirm("Reiniciar agora? (s/N) ")? {
+        println!("⚠ reinicie manualmente para concluir a restauração");
         return Ok(());
     }
-    println!("⚠ reinicie manualmente para concluir a restauração");
+    // -i ignora inhibitors (ex: sessão GNOME bloqueando reboot).
+    // Sem isso, o reboot falha silenciosamente e o utilizador fica
+    // rodando no subvolume antigo sem saber.
+    std::process::Command::new("systemctl")
+        .args(["reboot", "-i"])
+        .status()?;
     Ok(())
 }
