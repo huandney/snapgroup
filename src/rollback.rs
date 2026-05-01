@@ -10,7 +10,7 @@ pub struct Done {
     pub config: String,
     pub mountpoint: String,
     pub current_subvol: String, // ex: "@home" — agora aponta pro novo RW
-    pub backup_subvol: String,  // ex: "@home_snapg_undo_<epoch>" — o ativo anterior
+    pub backup_subvol: String,  // ex: "@home_snapg_regret" — o ativo anterior
 }
 
 pub struct RollbackError {
@@ -25,11 +25,36 @@ struct Prep {
     config: String,
     mountpoint: String,
     current_subvol: String,
-    backup_subvol: String, // ex: "@home_snapg_undo_<label>"
+    backup_subvol: String, // ex: "@home_snapg_regret"
+}
+
+/// Nome fixo do regret pra um dado subvolume ativo.
+/// Ex: "@home" → "@home_snapg_regret"
+pub fn regret_name(current_subvol: &str) -> String {
+    format!("{current_subvol}_snapg_regret")
 }
 
 fn prep_intermediate_name(current_subvol: &str) -> String {
     format!("{current_subvol}.snapgroup_prep")
+}
+
+/// Deleta regrets existentes de todas as configs no toplevel.
+/// Idempotente: se não existir regret, é no-op silencioso.
+pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()> {
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        let current = btrfs::subvol_relative_path(Path::new(&mp))
+            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
+        let rname = regret_name(&current);
+        let regret_path = toplevel.join(&rname);
+        if !regret_path.exists() {
+            continue;
+        }
+        btrfs::delete_subvolume(&regret_path)
+            .with_context(|| format!("deletar regret {rname}"))?;
+        println!("  regret anterior deletado: {rname}");
+    }
+    Ok(())
 }
 
 /// Two-phase rollback de um grupo.
@@ -40,29 +65,18 @@ fn prep_intermediate_name(current_subvol: &str) -> String {
 /// falhar nessa fase, todos os preps criados são deletados e o sistema
 /// vivo permanece **100% intocado**.
 ///
-/// Fase 2 (commit, metadata-only): para cada membro, faz live→backup,
+/// Fase 2 (commit, metadata-only): para cada membro, faz live→regret,
 /// prep→live, fix `.snapshots`. São apenas renames, atômicos por membro,
 /// extremamente improváveis de falhar. Se ainda assim falhar no meio de
 /// um grupo, retorna `RollbackError` com os membros já commitados pra que
-/// o caller decida se reverte (`revert_partial_undo`).
+/// o caller decida se reverte (`revert_partial`).
+///
+/// INVARIANTE: o caller DEVE ter deletado regrets existentes antes de chamar.
 pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, RollbackError> {
-    // Label compartilhado entre todos os membros do grupo — garante que
-    // `redo` consiga reagrupar pelo mesmo timestamp.
-    let label = match btrfs::now_local_label() {
-        Ok(l) => l,
-        Err(e) => {
-            return Err(RollbackError {
-                done: Vec::new(),
-                failed_config: String::from("(setup)"),
-                error: e.context("obter label de tempo"),
-            });
-        }
-    };
-
     // === Fase 1: preparação ===
     let mut preps = Vec::new();
     for m in &group.members {
-        match prepare_member(m, toplevel, &label) {
+        match prepare_member(m, toplevel) {
             Ok(p) => preps.push(p),
             Err(e) => {
                 cleanup_preps(&preps, toplevel);
@@ -96,7 +110,7 @@ pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, Rollb
 
 /// Fase 1: cria a cópia writable do snapshot RO num nome intermediário.
 /// Operação cara (metadata copy) e propensa a ENOSPC. **Não toca em nada vivo.**
-fn prepare_member(m: &Member, toplevel: &Path, label: &str) -> Result<Prep> {
+fn prepare_member(m: &Member, toplevel: &Path) -> Result<Prep> {
     let mountpoint = snapper::config_subvolume(&m.config)?;
 
     // Path top-level do subvol atualmente ativo (ex: "@home")
@@ -112,7 +126,7 @@ fn prepare_member(m: &Member, toplevel: &Path, label: &str) -> Result<Prep> {
     let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
         .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
 
-    let backup_subvol = format!("{current_subvol}_snapg_undo_{label}");
+    let backup_subvol = regret_name(&current_subvol);
     let intermediate_name = prep_intermediate_name(&current_subvol);
 
     let src = toplevel.join(&snap_subvol_path);
@@ -190,16 +204,15 @@ fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
     })
 }
 
-/// Reverte rollbacks já feitos durante uma falha PARCIAL de undo.
+/// Reverte rollbacks já feitos durante uma falha PARCIAL.
 ///
 /// INVARIANTE: usar SOMENTE quando o subvol "revertido" (current) ainda
 /// não foi montado pelo kernel — i.e., antes do reboot. Nessa fase o
 /// `current` é a cópia writable recém-promovida, criada do snapshot RO.
 /// Ninguém depende dela; pode ser deletada sem risco.
 ///
-/// **Não usar pra `redo`**, onde `current` É a rootfs viva: nesse caso
-/// usar `revert_for_redo` (sem delete).
-pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
+/// **Não usar pra `revert_regret`**, onde `current` É a rootfs viva.
+pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
@@ -244,16 +257,15 @@ pub fn revert_partial_undo(done: &[Done], toplevel: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Faz redo: troca current ↔ backup do mesmo label, sem deletar nada.
+/// Restaura regret: troca current ↔ regret, sem deletar nada.
 ///
-/// O subvol "revertido" (current pré-redo) é a rootfs/home/etc VIVA — o
+/// O subvol "revertido" (current pré-restore) é a rootfs/home/etc VIVA — o
 /// kernel ainda o tem montado por inode mesmo depois do rename, e deletar
-/// quebra o sistema rodando (foi exatamente esse bug que travou na primeira
-/// versão do redo).
+/// quebra o sistema rodando.
 ///
 /// Solução: deixa um `<subvol>_snapg_discard_<label>` no top-level.
-/// Após reboot, o subvol fica desmontado e pode ser limpo pelo `gc`.
-pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
+/// Após reboot, o subvol fica desmontado e pode ser limpo pelo boot-clean.
+pub fn revert_regret(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
@@ -265,25 +277,25 @@ pub fn revert_for_redo(done: &[Done], toplevel: &Path, label: &str) -> Result<()
         let backup_dotsnap = backup.join(".snapshots");
         if btrfs::is_subvolume(&current_dotsnap) {
             fs::rename(&current_dotsnap, &backup_dotsnap).with_context(|| {
-                format!("redo {}: mover .snapshots de volta pro backup", d.config)
+                format!("revert_regret {}: mover .snapshots de volta pro backup", d.config)
             })?;
         }
 
         // 1. Move o subvol revertido (= rootfs viva) pra fora do nome ativo.
         // Mount sobrevive — kernel referencia por inode, não path.
         fs::rename(&current, &discard)
-            .with_context(|| format!("redo {}: tirar atual de {}", d.config, d.current_subvol))?;
+            .with_context(|| format!("revert_regret {}: tirar atual de {}", d.config, d.current_subvol))?;
 
-        // 2. Restaura o backup pro nome ativo (fstab volta a achar no próximo boot).
+        // 2. Restaura o regret pro nome ativo (fstab volta a achar no próximo boot).
         if let Err(e) = fs::rename(&backup, &current) {
             let _ = fs::rename(&discard, &current);
             return Err(e).with_context(|| {
-                format!("redo {}: restaurar backup {}", d.config, d.backup_subvol)
+                format!("revert_regret {}: restaurar regret {}", d.config, d.backup_subvol)
             });
         }
 
         // 3. NÃO DELETA. Discard fica como `<subvol>_snapg_discard_<label>`
-        // até o próximo reboot. `gc` limpa depois.
+        // até o próximo reboot. boot-clean limpa depois.
     }
     Ok(())
 }
