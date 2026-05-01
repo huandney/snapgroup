@@ -93,7 +93,15 @@ PKGBUILD: `depends=('snapper' 'btrfs-progs' 'util-linux' 'fzf')`. Build via `mak
 
 -------------
 # Próximos ajustes:
+
+Prioridade alta:
 - Ao dar undo mais de uma vez, apagar o snapg_undo anterior, sempre mantendo um para limpeza
 - Quando rodarmos snapg delete, apagar o o snapg_undo associado a ele
 - Ao dar comando list mostrar tambem o snapg_undo mas temos que pensar em uma forma para ter fácil vizualização entre os instantâneos normais e os provenientes do undo
+
+
+Prioridade média:
+- Resolver problema grave quando o instantâneo é restaurado com uma versão diferente do kernel, temos que fazer algo parecido com o que o snapper faz e intergrá-lo ao limine.
+
+Prioridade baixa:
 - Major: Tornar o código compativel com recuperação em conjunto com mais de um mesmo ssd, ou seja com diferentes uuid
