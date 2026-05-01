@@ -79,11 +79,9 @@ pub fn undo(yes: bool) -> Result<()> {
 fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
     eprintln!();
     eprintln!("⚠ FALHA PARCIAL no rollback do grupo {}", g.id);
-    let is_empty = rerr.done.is_empty();
-    if is_empty {
+    if rerr.done.is_empty() {
         eprintln!("  nenhum membro foi feito (falhou no primeiro)");
-    }
-    if !is_empty {
+    } else {
         let names: Vec<&str> = rerr.done.iter().map(|d| d.config.as_str()).collect();
         eprintln!("  já feito ({}): {}", rerr.done.len(), names.join(", "));
     }
@@ -292,15 +290,13 @@ fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
 
     // Arma o serviço fantasma no rootfs RESTAURADO (o que vai bootar).
     // O sistema atual virou "discard" e seu /etc/systemd não será lido no próximo boot.
-    let root_member = done.iter().find(|d| d.mountpoint == "/");
-    if let Some(rm) = root_member {
-        let restored_root_path = mount_path.join(&rm.current_subvol);
+    if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
+        let restored_root_path = mount_path.join(&root_member.current_subvol);
         match arm_boot_cleanup(&restored_root_path) {
             Ok(()) => println!("  cleanup automático armado para o próximo boot"),
             Err(e) => eprintln!("⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"),
         }
-    }
-    if root_member.is_none() {
+    } else {
         eprintln!("⚠ grupo não inclui a raiz ('/'), não é possível armar o cleanup automático");
     }
 
