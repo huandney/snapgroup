@@ -1,3 +1,4 @@
+mod boot;
 mod btrfs;
 mod cli;
 mod commands;

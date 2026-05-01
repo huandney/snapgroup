@@ -1,3 +1,4 @@
+use crate::boot;
 use crate::btrfs;
 use crate::group::{self, Group, GroupId};
 use crate::rollback::{self, RollbackError};
@@ -200,14 +201,7 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
 /// True se /boot está montado em FAT32 (vfat). Isso significa que o kernel
 /// vive fora do BTRFS e precisa de sincronização manual no rollback.
 fn boot_is_fat32() -> bool {
-    std::process::Command::new("findmnt")
-        .args(["-no", "FSTYPE", "/boot"])
-        .output()
-        .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout).trim().eq_ignore_ascii_case("vfat")
-        })
-        .unwrap_or(false)
+    boot::is_fat32()
 }
 
 /// Emite warning fatal: /boot em FAT32 pode dessincronizar kernel ↔ módulos.
@@ -259,6 +253,17 @@ fn execute_restore_checkpoint(
                     d.config, d.backup_subvol
                 );
             }
+
+            // Sincroniza kernel/initramfs em /boot (FAT32) com o snapshot restaurado.
+            if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+                let restored_root = mount_path.join(&root.current_subvol);
+                if let Err(e) = boot::sync_fat32(&restored_root) {
+                    eprintln!("⚠ sincronização do boot falhou: {e:#}");
+                    eprintln!("  o rollback BTRFS foi aplicado, mas /boot pode estar dessincronizado.");
+                    eprintln!("  verifique manualmente antes de reiniciar.");
+                }
+            }
+
             prompt_reboot()
         }
         Err(rerr) => handle_partial(group, rerr, mount_path),
@@ -296,9 +301,16 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     println!("✓ regret restaurado — sistema voltou ao estado anterior");
     println!("  subvols atuais preservados como discard (limpos no próximo boot)");
 
-    // Arma o cleanup no rootfs RESTAURADO (o que vai bootar).
+    // Sincroniza kernel/initramfs em /boot (FAT32) com o regret restaurado.
     if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
         let restored_root_path = mount_path.join(&root_member.current_subvol);
+
+        if let Err(e) = boot::sync_fat32(&restored_root_path) {
+            eprintln!("⚠ sincronização do boot falhou: {e:#}");
+            eprintln!("  verifique manualmente antes de reiniciar.");
+        }
+
+        // Arma o cleanup no rootfs RESTAURADO (o que vai bootar).
         match arm_boot_cleanup(&restored_root_path) {
             Ok(()) => println!("  cleanup automático armado para o próximo boot"),
             Err(e) => eprintln!(
