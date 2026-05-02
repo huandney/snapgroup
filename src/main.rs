@@ -1,3 +1,4 @@
+mod boot;
 mod btrfs;
 mod cli;
 mod commands;
@@ -14,11 +15,9 @@ fn main() -> Result<()> {
     sudo::ensure_root()?;
     match cli.command {
         cli::Command::Save { description } => commands::save(description),
-        cli::Command::Undo { yes } => commands::undo(yes),
-        cli::Command::Redo { yes } => commands::redo(yes),
+        cli::Command::Restore => commands::restore(),
         cli::Command::List => commands::list(),
         cli::Command::Delete { yes } => commands::delete(yes),
-        cli::Command::Gc { yes } => commands::gc(yes),
         cli::Command::BootClean => commands::boot_clean(),
     }
 }

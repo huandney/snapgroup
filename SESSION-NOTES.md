@@ -58,42 +58,42 @@ Em distros que botam `/root` dentro do `@` (sem subvol próprio), `create-config
 
 ```
 src/
-├── main.rs       — dispatch
-├── cli.rs        — clap derive (Save/Undo/List/Delete)
+├── main.rs       — dispatch (Save/Restore/List/Delete/BootClean)
+├── cli.rs        — clap derive (Save/Restore/List/Delete/BootClean)
 ├── sudo.rs       — re-exec via sudo se UID != 0
 ├── snapper.rs    — list_configs, list, create, delete, config_subvolume
-├── btrfs.rs      — mount_toplevel, create_snapshot, fs_uuid, is_subvolume, now_local_label
-├── group.rs      — GroupId = epoch, agrupa por userdata snap-tools-id
-├── rollback.rs   — rename-swap + nested .snapshots handling + revert_done
-└── commands.rs   — save/undo/list/delete
+├── btrfs.rs      — mount_toplevel, create_snapshot, fs_uuid, is_subvolume, now_local_label, subvol_creation_time
+├── group.rs      — GroupId = epoch, agrupa por userdata snapgroup-id
+├── rollback.rs   — rename-swap + nested .snapshots + regret Highlander + revert_regret
+└── commands.rs   — save/restore/list/delete/boot_clean
 ```
 
-PKGBUILD: `depends=('snapper' 'btrfs-progs' 'util-linux' 'fzf')`. Build via `makepkg -si` na raiz.
+Dependências: `clap`, `anyhow`, `serde`, `serde_json`, `dialoguer`.
+
+PKGBUILD: `depends=('snapper' 'btrfs-progs' 'util-linux')`. Build via `makepkg -si` na raiz.
 
 ## Próximos passos
 
-1. **Testar fluxo completo** com fix do nested aplicado:
+1. **Testar fluxo completo** da arquitetura Restore Highlander:
    ```bash
-   cargo run -- save "teste fix nested"
-   cargo run -- list
-   cargo run -- undo
-   sudo snapper -c root list   # tem que mostrar histórico
-   sudo snapper -c home list   # idem
-   findmnt -no SOURCE / /home  # @ e @home (não backup)
+   snapg save "teste restore"
+   snapg list                    # mostra checkpoint, sem regret
+   snapg restore                 # TUI — selecionar checkpoint
+   snapg list                    # mostra regret ativo + data
+   snapg save "novo ponto"
+   snapg list                    # regret sumiu (save mata regret)
    ```
 2. Validar que reboot não quebra (`/.snapshots` continua subvol acessível pós-boot)
-3. (Opcional, stage 2) Detecção de gaps: warn quando subvol top-level sem snapper config
-4. Documentar no README: limitação multi-disk, como adicionar `/root`, pré-requisitos
-5. Stage 2/3: publicar GitHub + AUR
+3. Documentar no README: limitação multi-disk, como adicionar `/root`, pré-requisitos
+4. Publicar GitHub + AUR
+
+## Fase futura (documentada, não implementada)
+
+- **Restauração parcial (TUI expandida):** Ao pressionar tecla designada sobre um Checkpoint, expandir pra mostrar membros individuais e permitir selecionar quais restaurar. Ex: restaurar `@` mas não `@home`. Depende de desacoplar `rollback_group()` pra aceitar subset de membros.
+- **Multi-disk:** Agrupar membros por UUID no restore, montar/desmontar toplevel por UUID.
+- **Integração com bootloader:** Resolver problema de kernel mismatch ao restaurar snapshot com versão diferente do kernel.
 
 ## UUID do filesystem (referência)
 
 `28b7475c-8589-4710-a16c-cfe60b0b1218`
 
-
--------------
-# Próximos ajustes:
-- Ao dar undo mais de uma vez, apagar o snapg_undo anterior, sempre mantendo um para limpeza
-- Quando rodarmos snapg delete, apagar o o snapg_undo associado a ele
-- Ao dar comando list mostrar tambem o snapg_undo mas temos que pensar em uma forma para ter fácil vizualização entre os instantâneos normais e os provenientes do undo
-- Major: Tornar o código compativel com recuperação em conjunto com mais de um mesmo ssd, ou seja com diferentes uuid

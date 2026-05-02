@@ -52,7 +52,3 @@ pub fn list_groups() -> Result<Vec<Group>> {
     groups.sort_by_key(|g| std::cmp::Reverse(g.id));
     Ok(groups)
 }
-
-pub fn latest_group() -> Result<Option<Group>> {
-    Ok(list_groups()?.into_iter().next())
-}
