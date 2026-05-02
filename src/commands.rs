@@ -198,13 +198,13 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
     }
 }
 
-/// True se /boot está montado em FAT32 (vfat). Isso significa que o kernel
-/// vive fora do BTRFS e precisa de sincronização manual no rollback.
+/// True se /boot está montado em FAT32 (vfat). Isso significa que kernel e
+/// initramfs vivem fora do BTRFS e precisam de sincronização no rollback.
 fn boot_is_fat32() -> bool {
     boot::is_fat32()
 }
 
-/// Emite warning fatal: /boot em FAT32 pode dessincronizar kernel ↔ módulos.
+/// Emite warning: /boot em FAT32 é modo legado e menos transacional que BTRFS.
 /// Retorna false se o utilizador cancelar.
 fn warn_fat32_boot() -> Result<bool> {
     if !boot_is_fat32() {
@@ -212,10 +212,10 @@ fn warn_fat32_boot() -> Result<bool> {
     }
     eprintln!();
     eprintln!("⚠ ATENÇÃO: /boot está em FAT32 (vfat)");
-    eprintln!("  O rollback reverte o BTRFS (módulos do kernel), mas o kernel");
-    eprintln!("  em /boot (FAT32) NÃO será revertido automaticamente.");
-    eprintln!("  Se o kernel mudou entre o snapshot e o estado atual,");
-    eprintln!("  o sistema pode não arrancar (kernel panic por mismatch).");
+    eprintln!("  O snapg tentará sincronizar kernel/initramfs em /boot,");
+    eprintln!("  mas este é um modo legado: /boot fica fora do snapshot BTRFS.");
+    eprintln!("  Se a sincronização falhar, o backup de /boot será restaurado,");
+    eprintln!("  mas o modo nativo recomendado continua sendo /boot em BTRFS.");
     eprintln!();
     confirm("Continuar mesmo assim? (s/N) ")
 }
