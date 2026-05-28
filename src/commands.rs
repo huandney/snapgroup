@@ -1,13 +1,25 @@
+use crate::boot;
 use crate::btrfs;
-use crate::group::{self, Group};
+use crate::group::{self, Group, GroupId};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Trunca texto pra caber na largura do terminal.
+/// Previne wrapping que causa bug visual no dialoguer (linhas "comendo" o conteúdo acima).
+fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {
+    let width = console::Term::stdout().size().1 as usize;
+    let max = width.saturating_sub(prefix_len);
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
 
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
@@ -21,6 +33,10 @@ pub fn save(description: Option<String>) -> Result<()> {
              sudo snapper -c home create-config /home"
         );
     }
+
+    // Highlander: save mata regret existente.
+    // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
+    kill_regrets(&configs)?;
 
     let mut created = Vec::new();
     for cfg in &configs {
@@ -37,43 +53,276 @@ pub fn save(description: Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn undo(yes: bool) -> Result<()> {
-    let g = group::latest_group()?.context("nenhum grupo snapg save encontrado")?;
-    print_group("REVERTER", &g);
-
-    if !yes && !confirm("Reverter todos os snapshots do grupo? (s/N) ")? {
-        println!("cancelado");
-        return Ok(());
-    }
-
-    // Pre-flight: assume / e demais mountpoints na mesma fs btrfs.
-    // Se o setup tiver fs diferentes, isto precisa virar lookup por config.
+/// Monta toplevel, varre regrets existentes e deleta. Idempotente.
+fn kill_regrets(configs: &[String]) -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = rollback::rollback_group(&g, &mount_path);
+    let result = rollback::delete_existing_regrets(&mount_path, configs);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
 
-    match result {
-        Ok(done) => {
-            // Umount best-effort — não impede sucesso se falhar (mount em /run vai sumir no boot).
-            let _ = btrfs::umount_toplevel(&mount_path);
-            println!("✓ rollback completo do grupo {} ({} membros)", g.id, done.len());
-            for d in &done {
-                println!("    {}: subvol antigo arquivado como {}", d.config, d.backup_subvol);
-            }
-
-            if confirm("Reiniciar agora? (s/N) ")? {
-                std::process::Command::new("systemctl")
-                    .arg("reboot")
-                    .status()?;
-                return Ok(());
-            }
-            println!("⚠ reinicie manualmente para concluir o rollback");
-            Ok(())
-        }
-        Err(rerr) => handle_partial(&g, rerr, &mount_path),
+pub fn restore() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        bail!("nenhuma config snapper encontrada");
     }
+
+    let groups = group::list_groups()?;
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = restore_inner(&groups, &configs, &mount_path);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+/// Entrada de regret descoberta no toplevel.
+struct RegretEntry {
+    config: String,
+    mountpoint: String,
+    current_subvol: String,
+    regret_subvol: String,
+}
+
+/// Regret ativo com data de criação (metadata BTRFS).
+struct RegretInfo {
+    entries: Vec<RegretEntry>,
+    creation_time: String,
+}
+
+/// Descobre regrets existentes no toplevel.
+fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
+    let mut entries = Vec::new();
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        let current = btrfs::subvol_relative_path(std::path::Path::new(&mp))
+            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
+        let rname = rollback::regret_name(&current);
+        let regret_path = toplevel.join(&rname);
+        if !regret_path.exists() {
+            continue;
+        }
+        entries.push(RegretEntry {
+            config: cfg.clone(),
+            mountpoint: mp,
+            current_subvol: current,
+            regret_subvol: rname,
+        });
+    }
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    // Creation time do primeiro regret (todos criados no mesmo instante).
+    let first_path = toplevel.join(&entries[0].regret_subvol);
+    let creation_time = btrfs::subvol_creation_time(&first_path)
+        .unwrap_or_else(|_| String::from("data desconhecida"));
+    Ok(Some(RegretInfo {
+        entries,
+        creation_time,
+    }))
+}
+
+/// Ação selecionada na TUI.
+enum RestoreAction {
+    Checkpoint(GroupId),
+    Regret,
+}
+
+fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Result<()> {
+    let regret = discover_regrets(mount_path, configs)?;
+    let has_regret = regret.is_some();
+
+    if groups.is_empty() && !has_regret {
+        println!("nenhum checkpoint ou regret encontrado — nada pra restaurar");
+        return Ok(());
+    }
+
+    // Monta lista de opções pra TUI.
+    let mut items: Vec<String> = Vec::new();
+    let mut actions: Vec<RestoreAction> = Vec::new();
+
+    // Select prefix: "> " = 2 chars
+    let prefix_len = 4;
+
+    if let Some(ref r) = regret {
+        let text = format!(
+            "⟲ Estado Anterior à Restauração (Regret) — {}",
+            r.creation_time
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
+        actions.push(RestoreAction::Regret);
+    }
+
+    for g in groups {
+        let date = g
+            .members
+            .first()
+            .map(|m| m.snapshot.date.as_str())
+            .unwrap_or("");
+        let desc = g
+            .members
+            .first()
+            .map(|m| m.snapshot.description.as_str())
+            .unwrap_or("");
+        let text = format!(
+            "Checkpoint {} ({} — {} membros) {}",
+            g.id,
+            date,
+            g.members.len(),
+            desc
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
+        actions.push(RestoreAction::Checkpoint(g.id));
+    }
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("Selecione o ponto de restauração")
+        .items(&items)
+        .default(0)
+        .interact()
+        .context("seleção cancelada")?;
+
+    match &actions[selection] {
+        RestoreAction::Checkpoint(group_id) => {
+            let group = groups.iter().find(|g| g.id == *group_id).unwrap();
+            execute_restore_checkpoint(group, configs, mount_path)
+        }
+        RestoreAction::Regret => {
+            execute_restore_regret(regret.unwrap(), mount_path)
+        }
+    }
+}
+
+/// True se /boot está montado em FAT32 (vfat). Isso significa que kernel e
+/// initramfs vivem fora do BTRFS e precisam de sincronização no rollback.
+fn boot_is_fat32() -> bool {
+    boot::is_fat32()
+}
+
+/// Emite warning: /boot em FAT32 é modo legado e menos transacional que BTRFS.
+/// Retorna false se o utilizador cancelar.
+fn warn_fat32_boot() -> Result<bool> {
+    if !boot_is_fat32() {
+        return Ok(true);
+    }
+    eprintln!();
+    eprintln!("⚠ ATENÇÃO: /boot está em FAT32 (vfat)");
+    eprintln!("  O snapg tentará sincronizar kernel/initramfs em /boot,");
+    eprintln!("  mas este é um modo legado: /boot fica fora do snapshot BTRFS.");
+    eprintln!("  Se a sincronização falhar, o backup de /boot será restaurado,");
+    eprintln!("  mas o modo nativo recomendado continua sendo /boot em BTRFS.");
+    eprintln!();
+    confirm("Continuar mesmo assim? (s/N) ")
+}
+
+fn execute_restore_checkpoint(
+    group: &Group,
+    configs: &[String],
+    mount_path: &Path,
+) -> Result<()> {
+    print_group("RESTAURAR", group);
+
+    if !warn_fat32_boot()? {
+        println!("cancelado (risco de dessincronização de boot)");
+        return Ok(());
+    }
+
+    if !confirm("Restaurar este checkpoint? (s/N) ")? {
+        println!("cancelado");
+        return Ok(());
+    }
+
+    // Highlander: deleta regret existente antes de criar o novo.
+    rollback::delete_existing_regrets(mount_path, configs)?;
+
+    match rollback::rollback_group(group, mount_path) {
+        Ok(done) => {
+            println!(
+                "✓ rollback completo do grupo {} ({} membros)",
+                group.id,
+                done.len()
+            );
+            for d in &done {
+                println!(
+                    "    {}: sistema atual arquivado como {}",
+                    d.config, d.backup_subvol
+                );
+            }
+
+            // Sincroniza kernel/initramfs em /boot (FAT32) com o snapshot restaurado.
+            if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+                let restored_root = mount_path.join(&root.current_subvol);
+                if let Err(e) = boot::sync_fat32(&restored_root) {
+                    eprintln!("⚠ sincronização do boot falhou: {e:#}");
+                    eprintln!("  o rollback BTRFS foi aplicado, mas /boot pode estar dessincronizado.");
+                    eprintln!("  verifique manualmente antes de reiniciar.");
+                }
+            }
+
+            prompt_reboot()
+        }
+        Err(rerr) => handle_partial(group, rerr, mount_path),
+    }
+}
+
+fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
+    println!("== RESTAURAR Regret ({}) ==", regret.creation_time);
+    for e in &regret.entries {
+        println!(
+            "  {}: {} → restaurar como {}",
+            e.config, e.regret_subvol, e.current_subvol
+        );
+    }
+
+    if !confirm("Restaurar o estado anterior (regret)? (s/N) ")? {
+        println!("cancelado");
+        return Ok(());
+    }
+
+    let done: Vec<rollback::Done> = regret
+        .entries
+        .into_iter()
+        .map(|e| rollback::Done {
+            config: e.config,
+            mountpoint: e.mountpoint,
+            current_subvol: e.current_subvol,
+            backup_subvol: e.regret_subvol,
+        })
+        .collect();
+
+    let label = btrfs::now_local_label().context("obter label de tempo")?;
+    rollback::revert_regret(&done, mount_path, &label).context("restaurar regret")?;
+
+    println!("✓ regret restaurado — sistema voltou ao estado anterior");
+    println!("  subvols atuais preservados como discard (limpos no próximo boot)");
+
+    // Sincroniza kernel/initramfs em /boot (FAT32) com o regret restaurado.
+    if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
+        let restored_root_path = mount_path.join(&root_member.current_subvol);
+
+        if let Err(e) = boot::sync_fat32(&restored_root_path) {
+            eprintln!("⚠ sincronização do boot falhou: {e:#}");
+            eprintln!("  verifique manualmente antes de reiniciar.");
+        }
+
+        // Arma o cleanup no rootfs RESTAURADO (o que vai bootar).
+        match arm_boot_cleanup(&restored_root_path) {
+            Ok(()) => println!("  cleanup automático armado para o próximo boot"),
+            Err(e) => eprintln!(
+                "⚠ não consegui armar cleanup automático: {e:#}\n  \
+                 limpe manualmente após reboot: snapg boot-clean"
+            ),
+        }
+    } else {
+        eprintln!("⚠ grupo não inclui a raiz ('/'), cleanup automático não armado");
+    }
+
+    prompt_reboot()
 }
 
 fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
@@ -93,7 +342,6 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
     eprintln!();
 
     if rerr.done.is_empty() {
-        let _ = btrfs::umount_toplevel(mount_path);
         return Err(rerr.error);
     }
 
@@ -103,46 +351,128 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
     );
     if !confirm(&prompt)? {
         print_manual_recovery(&rerr.done, mount_path);
-        let _ = btrfs::umount_toplevel(mount_path);
         return Err(rerr.error);
     }
 
-    if let Err(re) = rollback::revert_partial_undo(&rerr.done, mount_path) {
+    if let Err(re) = rollback::revert_partial(&rerr.done, mount_path) {
         eprintln!();
         eprintln!("✗ revert automático falhou no meio: {re:#}");
-        eprintln!("  toplevel ainda montado em {}", mount_path.display());
-        eprintln!("  resolva manualmente lá e depois: sudo umount {}", mount_path.display());
+        eprintln!(
+            "  toplevel ainda montado em {}",
+            mount_path.display()
+        );
+        eprintln!(
+            "  resolva manualmente lá e depois: sudo umount {}",
+            mount_path.display()
+        );
         return Err(rerr.error);
     }
 
-    let _ = btrfs::umount_toplevel(mount_path);
     println!();
-    println!("✓ rollback parcial revertido — sistema voltou ao estado pré-undo");
+    println!("✓ rollback parcial revertido — sistema voltou ao estado pré-restore");
     Err(rerr.error)
 }
 
 fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
     eprintln!();
-    eprintln!("Pra reverter manualmente os já feitos (toplevel montado em {}):", mount_path.display());
+    eprintln!(
+        "Pra reverter manualmente os já feitos (toplevel montado em {}):",
+        mount_path.display()
+    );
     for d in done {
         let mp = mount_path.display();
         eprintln!("  # {} (mountpoint {})", d.config, d.mountpoint);
-        eprintln!("  sudo mv {mp}/{} {mp}/{}.discard", d.current_subvol, d.current_subvol);
-        eprintln!("  sudo mv {mp}/{} {mp}/{}", d.backup_subvol, d.current_subvol);
-        eprintln!("  sudo btrfs subvolume delete {mp}/{}.discard", d.current_subvol);
+        eprintln!(
+            "  sudo mv {mp}/{} {mp}/{}.discard",
+            d.current_subvol, d.current_subvol
+        );
+        eprintln!(
+            "  sudo mv {mp}/{} {mp}/{}",
+            d.backup_subvol, d.current_subvol
+        );
+        eprintln!(
+            "  sudo btrfs subvolume delete {mp}/{}.discard",
+            d.current_subvol
+        );
     }
     eprintln!("  sudo umount {}", mount_path.display());
 }
 
 pub fn delete(yes: bool) -> Result<()> {
-    let g = group::latest_group()?.context("nenhum grupo snapg save encontrado")?;
-    print_group("APAGAR", &g);
+    let groups = group::list_groups()?;
+    if groups.is_empty() {
+        println!("nenhum grupo snapg save encontrado");
+        return Ok(());
+    }
 
-    if !yes && !confirm("Apagar todos os snapshots do grupo? (s/N) ")? {
+    // -y: deleta o mais recente sem TUI (backward compat / scripting).
+    if yes {
+        let g = &groups[0];
+        delete_group(g)?;
+        return Ok(());
+    }
+
+    // MultiSelect prefix: "> [ ] " = 6 chars
+    let prefix_len = 6;
+    let mut items: Vec<String> = vec![
+        truncate_for_terminal("⚠ TODOS os checkpoints", prefix_len),
+    ];
+    for g in &groups {
+        let date = g
+            .members
+            .first()
+            .map(|m| m.snapshot.date.as_str())
+            .unwrap_or("");
+        let desc = g
+            .members
+            .first()
+            .map(|m| m.snapshot.description.as_str())
+            .unwrap_or("");
+        let text = format!(
+            "Checkpoint {} ({} — {} membros) {}",
+            g.id, date, g.members.len(), desc
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
+    }
+
+    let selections = dialoguer::MultiSelect::new()
+        .with_prompt("Selecione checkpoints para apagar (Espaço=marcar, Enter=confirmar)")
+        .items(&items)
+        .interact()
+        .context("seleção cancelada")?;
+
+    if selections.is_empty() {
+        println!("nenhum checkpoint selecionado");
+        return Ok(());
+    }
+
+    let select_all = selections.contains(&0);
+    let targets: Vec<&Group> = if select_all {
+        groups.iter().collect()
+    } else {
+        selections.iter()
+            .filter(|&&i| i > 0)
+            .map(|&i| &groups[i - 1])
+            .collect()
+    };
+
+    println!("== APAGAR {} checkpoint(s) ==", targets.len());
+    for g in &targets {
+        println!("  Checkpoint {} ({} membros)", g.id, g.members.len());
+    }
+
+    if !confirm("Confirmar exclusão? (s/N) ")? {
         println!("cancelado");
         return Ok(());
     }
 
+    for g in &targets {
+        delete_group(g)?;
+    }
+    Ok(())
+}
+
+fn delete_group(g: &Group) -> Result<()> {
     for m in &g.members {
         snapper::delete(&m.config, m.snapshot.number)
             .with_context(|| format!("apagar {} #{}", m.config, m.snapshot.number))?;
@@ -151,163 +481,57 @@ pub fn delete(yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Tipo de subvol residual encontrado no top-level.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BackupKind {
-    /// `<current>_snapg_undo_<label>` — deixado por undo. Usado pelo redo pra
-    /// restaurar o estado pré-undo.
-    UndoBackup,
-    /// `<current>_snapg_discard_<label>` — deixado por redo.
-    /// É o subvol vivo *anterior* ao redo, preservado pra cleanup pós-reboot.
-    RedoDiscard,
-}
-
-impl BackupKind {
-    fn label_str(self) -> &'static str {
-        match self {
-            BackupKind::UndoBackup => "undo-backup",
-            BackupKind::RedoDiscard => "redo-discard",
-        }
-    }
-}
-
-/// Estado dos subvols residuais encontrados no top-level.
-struct BackupEntry {
-    config: String,
-    mountpoint: String,
-    current_subvol: String,
-    backup_subvol: String, // nome no top-level
-    label: String,         // ex: "2026-04-26_19:57:24"
-    path: PathBuf,
-    kind: BackupKind,
-}
-
-/// Mapeia config → (mountpoint, current_subvol). Lookup base pra redo/gc.
-fn config_subvol_map() -> Result<Vec<(String, String, String)>> {
-    let mut out = Vec::new();
-    for cfg in snapper::list_configs()? {
-        let mp = snapper::config_subvolume(&cfg)?;
-        let current = btrfs::subvol_relative_path(Path::new(&mp))
-            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
-        out.push((cfg, mp, current));
-    }
-    Ok(out)
-}
-
-/// Tenta casar `name` com algum prefixo conhecido pra `current`.
-/// Retorna (kind, label) se casar.
-fn match_backup_name(name: &str, current: &str) -> Option<(BackupKind, String)> {
-    let undo_prefix = format!("{current}_snapg_undo_");
-    if let Some(label) = name.strip_prefix(&undo_prefix) {
-        return Some((BackupKind::UndoBackup, label.to_string()));
-    }
-    let redo_prefix = format!("{current}_snapg_discard_");
-    if let Some(label) = name.strip_prefix(&redo_prefix) {
-        return Some((BackupKind::RedoDiscard, label.to_string()));
-    }
-    None
-}
-
-/// Varre o top-level e retorna subvols residuais (UndoBackup + RedoDiscard).
-fn discover_backups(toplevel: &Path) -> Result<Vec<BackupEntry>> {
-    let cfg_map = config_subvol_map()?;
-    let mut found = Vec::new();
-    for entry in fs::read_dir(toplevel).context("ler toplevel pra descobrir backups")? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        for (cfg, mp, current) in &cfg_map {
-            if let Some((kind, label)) = match_backup_name(&name, current) {
-                found.push(BackupEntry {
-                    config: cfg.clone(),
-                    mountpoint: mp.clone(),
-                    current_subvol: current.clone(),
-                    backup_subvol: name.clone(),
-                    label,
-                    path: entry.path(),
-                    kind,
-                });
-                break;
+pub fn list() -> Result<()> {
+    let groups = group::list_groups()?;
+    if groups.is_empty() {
+        println!("nenhum grupo snapg save encontrado");
+    } else {
+        for g in &groups {
+            let date = g
+                .members
+                .first()
+                .map(|m| m.snapshot.date.as_str())
+                .unwrap_or("");
+            println!("[{}]  {} membros  {}", g.id, g.members.len(), date);
+            for m in &g.members {
+                println!(
+                    "    {}: #{}  {}",
+                    m.config, m.snapshot.number, m.snapshot.description
+                );
             }
         }
     }
-    Ok(found)
+
+    // Mostra regret ativo, se existir.
+    show_regret_status()?;
+    Ok(())
 }
 
-pub fn redo(yes: bool) -> Result<()> {
+/// Monta toplevel, verifica se há regret ativo e exibe info.
+fn show_regret_status() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        return Ok(());
+    }
+
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = redo_inner(yes, &mount_path);
+    let result = (|| -> Result<()> {
+        let regret = discover_regrets(&mount_path, &configs)?;
+        if let Some(r) = regret {
+            println!();
+            println!(
+                "⚠ Regret ativo ({}) — use 'snapg restore' para restaurar",
+                r.creation_time
+            );
+        }
+        Ok(())
+    })();
+
     let _ = btrfs::umount_toplevel(&mount_path);
     result
-}
-
-fn redo_inner(yes: bool, mount_path: &Path) -> Result<()> {
-    // Redo só considera UndoBackup — RedoDiscard é o subvol vivo prévio,
-    // não algo a "restaurar de volta".
-    let backups: Vec<BackupEntry> = discover_backups(mount_path)?
-        .into_iter()
-        .filter(|b| b.kind == BackupKind::UndoBackup)
-        .collect();
-    if backups.is_empty() {
-        bail!("nenhum backup de undo encontrado — nada pra desfazer");
-    }
-
-    // Agrupa por label (= timestamp do undo). Lex sort funciona pelo formato ISO.
-    let mut by_label: HashMap<String, Vec<BackupEntry>> = HashMap::new();
-    for b in backups {
-        by_label.entry(b.label.clone()).or_default().push(b);
-    }
-    let latest = by_label.keys().max().expect("by_label não vazio").clone();
-    let mut group = by_label.remove(&latest).unwrap();
-    group.sort_by(|a, b| a.config.cmp(&b.config));
-
-    println!("== REDO último undo [{latest}] ({} membros) ==", group.len());
-    for b in &group {
-        println!("  {}: {} → restaurar como {}", b.config, b.backup_subvol, b.current_subvol);
-    }
-
-    if !yes && !confirm("Desfazer último undo (restaurar esses backups)? (s/N) ")? {
-        println!("cancelado");
-        return Ok(());
-    }
-
-    let done: Vec<rollback::Done> = group
-        .into_iter()
-        .map(|b| rollback::Done {
-            config: b.config,
-            mountpoint: b.mountpoint,
-            current_subvol: b.current_subvol,
-            backup_subvol: b.backup_subvol,
-        })
-        .collect();
-
-    rollback::revert_for_redo(&done, mount_path, &latest).context("revert_for_redo")?;
-
-    println!("✓ redo aplicado — sistema voltou ao estado pré-undo ({latest})");
-    println!("  subvols antigos preservados como `<subvol>_snapg_discard_{latest}`");
-
-    // Arma o serviço fantasma no rootfs RESTAURADO (o que vai bootar).
-    // O sistema atual virou "discard" e seu /etc/systemd não será lido no próximo boot.
-    if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
-        let restored_root_path = mount_path.join(&root_member.current_subvol);
-        match arm_boot_cleanup(&restored_root_path) {
-            Ok(()) => println!("  cleanup automático armado para o próximo boot"),
-            Err(e) => eprintln!("⚠ não consegui armar cleanup automático: {e:#}\n  use `snapg gc` manualmente após reboot"),
-        }
-    } else {
-        eprintln!("⚠ grupo não inclui a raiz ('/'), não é possível armar o cleanup automático");
-    }
-
-    if confirm("Reiniciar agora? (s/N) ")? {
-        std::process::Command::new("systemctl")
-            .arg("reboot")
-            .status()?;
-        return Ok(());
-    }
-    println!("⚠ reinicie manualmente para concluir o redo");
-    Ok(())
 }
 
 const BOOT_CLEANUP_UNIT: &str = "snapg-cleanup.service";
@@ -342,133 +566,87 @@ fn disarm_boot_cleanup() -> Result<()> {
 }
 
 /// Subcomando interno chamado pelo `snapg-cleanup.service` no boot.
-/// Apaga todos os redo-discards no top-level e desarma o serviço.
+/// Apaga todos os discards no top-level e desarma o serviço.
 /// Output vai pro journal (stdout/stderr capturados pelo systemd).
 pub fn boot_clean() -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = (|| -> Result<()> {
-        let discards: Vec<BackupEntry> = discover_backups(&mount_path)?
-            .into_iter()
-            .filter(|b| b.kind == BackupKind::RedoDiscard)
-            .collect();
-
-        if discards.is_empty() {
-            println!("snapg boot-clean: nenhum redo-discard encontrado");
-            return Ok(());
-        }
-
-        let total = discards.len();
-        let mut ok = 0usize;
-        for b in &discards {
-            match btrfs::delete_subvolume(&b.path) {
-                Ok(()) => {
-                    println!("snapg boot-clean: removido {}", b.backup_subvol);
-                    ok += 1;
-                }
-                Err(e) => eprintln!("snapg boot-clean: falha em {}: {e:#}", b.backup_subvol),
-            }
-        }
-        println!("snapg boot-clean: {ok}/{total} discards removidos");
-        Ok(())
-    })();
-
+    let result = boot_clean_inner(&mount_path);
     let _ = btrfs::umount_toplevel(&mount_path);
     result?;
 
-    // Desarma o serviço — independente de ter discards ou não, a missão
-    // (rodar uma vez pós-redo) acabou. Erro aqui não é fatal: log e segue.
+    // Desarma o serviço — independente de ter discards ou não.
     if let Err(e) = disarm_boot_cleanup() {
         eprintln!("snapg boot-clean: falha ao desarmar serviço: {e:#}");
     }
     Ok(())
 }
 
-pub fn gc(yes: bool) -> Result<()> {
-    let uuid = btrfs::fs_uuid("/")?;
-    let mount_path = rollback::toplevel_mount_path(&uuid);
-    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+fn boot_clean_inner(mount_path: &Path) -> Result<()> {
+    let discards = discover_discards(mount_path)?;
+    if discards.is_empty() {
+        println!("snapg boot-clean: nenhum discard encontrado");
+        return Ok(());
+    }
 
-    let result = gc_inner(yes, &mount_path);
-    let _ = btrfs::umount_toplevel(&mount_path);
-    result
+    let total = discards.len();
+    let mut ok = 0usize;
+    for (name, path) in &discards {
+        match btrfs::delete_subvolume(path) {
+            Ok(()) => {
+                println!("snapg boot-clean: removido {name}");
+                ok += 1;
+            }
+            Err(e) => eprintln!("snapg boot-clean: falha em {name}: {e:#}"),
+        }
+    }
+    println!("snapg boot-clean: {ok}/{total} discards removidos");
+    Ok(())
 }
 
-fn gc_inner(yes: bool, mount_path: &Path) -> Result<()> {
-    let mut backups = discover_backups(mount_path)?;
-    if backups.is_empty() {
-        println!("nenhum subvol residual pra coletar");
-        return Ok(());
-    }
-    // Mais antigos primeiro pra leitura humana; UndoBackup antes de RedoDiscard
-    // dentro do mesmo label (ordem cronológica de criação).
-    backups.sort_by(|a, b| {
-        a.label
-            .cmp(&b.label)
-            .then((a.kind as u8).cmp(&(b.kind as u8)))
-            .then(a.config.cmp(&b.config))
-    });
-
-    let undo_count = backups
-        .iter()
-        .filter(|b| b.kind == BackupKind::UndoBackup)
-        .count();
-    let redo_count = backups.len() - undo_count;
-    println!("Subvols residuais encontrados ({}): {undo_count} undo-backup, {redo_count} redo-discard", backups.len());
-    for b in &backups {
-        println!("  [{}] {} ({}) [{}]", b.label, b.backup_subvol, b.config, b.kind.label_str());
-    }
-    println!();
-    println!("⚠ apagar undo-backup invalida `snapg redo` para esse ponto no tempo.");
-    println!("  redo-discard é seguro de apagar a qualquer momento pós-reboot.");
-
-    if !yes && !confirm("Apagar TODOS os subvols listados? (s/N) ")? {
-        println!("cancelado");
-        return Ok(());
-    }
-
-    let mut errors = 0usize;
-    for b in &backups {
-        match btrfs::delete_subvolume(&b.path) {
-            Ok(()) => println!("✓ removido {}", b.backup_subvol),
-            Err(e) => {
-                eprintln!("✗ {}: {e:#}", b.backup_subvol);
-                errors += 1;
+/// Descobre subvols `_snapg_discard_*` no toplevel (deixados por revert_regret).
+fn discover_discards(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
+    let cfg_map = config_subvol_map()?;
+    let mut found = Vec::new();
+    for entry in fs::read_dir(toplevel).context("ler toplevel pra descobrir discards")? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        for (_, _, current) in &cfg_map {
+            let prefix = format!("{current}_snapg_discard_");
+            if name.starts_with(&prefix) {
+                found.push((name, entry.path()));
+                break;
             }
         }
     }
-    if errors > 0 {
-        bail!("{errors} backup(s) não puderam ser deletados");
-    }
-    Ok(())
+    Ok(found)
 }
 
-pub fn list() -> Result<()> {
-    let groups = group::list_groups()?;
-    if groups.is_empty() {
-        println!("nenhum grupo snapg save encontrado");
-        return Ok(());
+/// Mapeia config → (mountpoint, current_subvol).
+fn config_subvol_map() -> Result<Vec<(String, String, String)>> {
+    let mut out = Vec::new();
+    for cfg in snapper::list_configs()? {
+        let mp = snapper::config_subvolume(&cfg)?;
+        let current = btrfs::subvol_relative_path(Path::new(&mp))
+            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
+        out.push((cfg, mp, current));
     }
-    for g in &groups {
-        let date = g
-            .members
-            .first()
-            .map(|m| m.snapshot.date.as_str())
-            .unwrap_or("");
-        println!("[{}]  {} membros  {}", g.id, g.members.len(), date);
-        for m in &g.members {
-            println!("    {}: #{}  {}", m.config, m.snapshot.number, m.snapshot.description);
-        }
-    }
-    Ok(())
+    Ok(out)
 }
 
 fn print_group(action: &str, g: &Group) {
-    println!("== {action} grupo {} ({} membros) ==", g.id, g.members.len());
+    println!(
+        "== {action} grupo {} ({} membros) ==",
+        g.id,
+        g.members.len()
+    );
     for m in &g.members {
-        println!("  {}: #{}  {}  {}", m.config, m.snapshot.number, m.snapshot.date, m.snapshot.description);
+        println!(
+            "  {}: #{}  {}  {}",
+            m.config, m.snapshot.number, m.snapshot.date, m.snapshot.description
+        );
     }
 }
 
@@ -488,4 +666,18 @@ fn confirm(prompt: &str) -> Result<bool> {
         buf.trim().to_lowercase().as_str(),
         "s" | "sim" | "y" | "yes"
     ))
+}
+
+fn prompt_reboot() -> Result<()> {
+    if !confirm("Reiniciar agora? (s/N) ")? {
+        println!("⚠ reinicie manualmente para concluir a restauração");
+        return Ok(());
+    }
+    // -i ignora inhibitors (ex: sessão GNOME bloqueando reboot).
+    // Sem isso, o reboot falha silenciosamente e o utilizador fica
+    // rodando no subvolume antigo sem saber.
+    std::process::Command::new("systemctl")
+        .args(["reboot", "-i"])
+        .status()?;
+    Ok(())
 }

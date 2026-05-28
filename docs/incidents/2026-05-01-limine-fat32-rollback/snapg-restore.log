@@ -1,0 +1,363 @@
+❯ snapg restore
+[sudo] senha para huandney:
+Selecione o ponto de restauração: Checkpoint 1777685550 (2026-05-01 21:32:30 — 3 membros) Tudo Certo
+== RESTAURAR grupo 1777685550 (3 membros) ==
+  home: #299  2026-05-01 21:32:30  Tudo Certo
+  root: #307  2026-05-01 21:32:30  Tudo Certo
+  root_home: #285  2026-05-01 21:32:32  Tudo Certo
+
+⚠ ATENÇÃO: /boot está em FAT32 (vfat)
+  O rollback reverte o BTRFS (módulos do kernel), mas o kernel
+  em /boot (FAT32) NÃO será revertido automaticamente.
+  Se o kernel mudou entre o snapshot e o estado atual,
+  o sistema pode não arrancar (kernel panic por mismatch).
+
+Continuar mesmo assim? (s/N) s
+Restaurar este checkpoint? (s/N) s
+  regret anterior deletado: @home_snapg_regret
+  regret anterior deletado: @_snapg_regret
+  regret anterior deletado: @root_snapg_regret
+✓ rollback completo do grupo 1777685550 (3 membros)
+    home: sistema atual arquivado como @home_snapg_regret
+    root: sistema atual arquivado como @_snapg_regret
+    root_home: sistema atual arquivado como @root_snapg_regret
+  boot sync: kernel mudou 7.0.3-1-cachyos → 7.0.1-1-cachyos
+  boot sync: backup dos ficheiros atuais em /boot/.snapg_boot_backup
+  boot sync: vmlinuz copiado → /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos
+  boot sync: vmlinuz copiado → /boot/0262533c4ca04359a5f379b8e3f83042/limine_history/vmlinuz-linux-cachyos_sha256_48cfae4335f131aab667e71ccf0c8f56f77131358c34298d1f40cccd4e285c5e
+  boot sync: vmlinuz copiado → /boot/0262533c4ca04359a5f379b8e3f83042/limine_history/vmlinuz-linux-cachyos_sha256_a1753979a6918d9ee53f6293328bf3233372b9453d2bf5cb426c39388a283cef
+⚠ sincronização do boot falhou: nenhum preset .preset encontrado em /etc/mkinitcpio.d
+  o rollback BTRFS foi aplicado, mas /boot pode estar dessincronizado.
+  verifique manualmente antes de reiniciar.
+
+
+--------------------------------------------
+
+olha a solução do limine snapper restore
+
+
+Snapshot ID     : 307
+Date            : 2026-05-01 21:32:30
+Description     : Tudo Certo
+Restore method  : replace
+
+ Confirm restore of snapshot 307 using the "replace" method?
+ Type [y]es to restore, [l]ist to display all snapshots, or [c]ancel to abort.
+
+Your input: y
+
+Enter snapshot description for subvolume @:
+
+Time to start mounting Btrfs.
+Succeeded: mount -t btrfs -o subvol=/ /dev/disk/by-uuid/28b7475c-8589-4710-a16c-cfe60b0b1218 /run/lss/
+Time to start restoring snapshot ID: 307
+Create snapshot of '/run/lss/@/.snapshots/307/snapshot' in '/run/lss/@_lss_2026-05-01T23:15:58'
+Succeeded: btrfs subvolume snapshot '/run/lss/@/.snapshots/307/snapshot' '/run/lss/@_lss_2026-05-01T23:15:58'
+Succeeded: mv '/run/lss/@' '/run/lss/@_backup_2026-05-01T23:15:58'
+Succeeded: mv '/run/lss/@_lss_2026-05-01T23:15:58' '/run/lss/@'
+Time to move all child subvolumes back to the parent subvolume: @
+Succeeded: mv '/run/lss/@_backup_2026-05-01T23:15:58/.snapshots' '/run/lss/@/'
+Time to add the "backup before restore #307" entry to the Snapper list and Limine snapshot list.
+Succeeded: mv '/run/lss/@_backup_2026-05-01T23:15:58' '/run/lss/@/.snapshots/311/snapshot'
+Saved /run/lss/@/.snapshots/311/info.xml
+Removed: /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos
+Removed: /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos
+Time to restore matching kernel versions.
+Copied: /boot/0262533c4ca04359a5f379b8e3f83042/limine_history/vmlinuz-linux-cachyos_sha256_48cfae4335f131aab667e71ccf0c8f56f77131358c34298d1f40cccd4e285c5e -> /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos
+Copied: /boot/0262533c4ca04359a5f379b8e3f83042/limine_history/initramfs-linux-cachyos_sha256_7f080f056aa654675098aeb70d75532c84d6ed7db5d8ecb225607fc058d487cb -> /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos
+Saved: /boot/0262533c4ca04359a5f379b8e3f83042/limine_history/snapshots.json
+Updated: /boot/limine.conf
+
+
+---------------------
+
+Linux: Loading kernel 'boot():/8262533c4ca84359a5f379b8e3f83842/linux-cachyos/vmlinuz-linux-cachyos..... PANIC: Blake2b hash for URI 'boot():/8262533c4ca84359a5f379b8e3f83842/linux-cachyos/valinuz-linux-cachyos' does not match!
+
+Stacktrace: [8x628784c3]
+
+[0x62888665]
+
+<panic+8x143>
+
+[0x6288a1ab]
+
+<boot+8xd8>
+
+<uri_open+8x415> <linux_load+8x6b>
+
+[8x62884488]
+
+[0x62882c6e] <_wenu+8x98e>
+
+End of trace. Press a key to return to wenu.
+
+-----------------------
+veja tambem o processo de instalação:
+
+==> Pacotes:
+bpf 7.0.1-1 -> 7.0.2-1
+cachyos-ananicy-rules 1:1.1.34-1 -> 1:1.1.35-1
+cpupower 7.0.1-1 -> 7.0.2-1
+device-mapper 2.03.39-1.1 -> 2.03.40-1.1
+ethtool 1:6.19-1.1 -> 1:7.0-1.1
+firefox 150.0-1 -> 150.0.1-1.1
+fzf 0.71.0-1.1 -> 0.72.0-1.1
+geoclue 2.8.0-2.1 -> 2.8.1-1.1
+github-cli 2.91.0-3.1 -> 2.92.0-1.1
+gnutls 3.8.12-2 -> 3.8.13-1
+gtk-update-icon-cache 1:4.22.3-1.1 -> 1:4.22.4-1.1
+gtk4 1:4.22.3-1.1 -> 1:4.22.4-1.1
+iana-etc 20260409-1 -> 20260425-1
+js140 140.10.0-1.1 -> 140.10.1-1.1
+lib32-curl 8.19.0-1 -> 8.20.0-3
+lib32-mesa 2:26.0.5-2 -> 2:26.0.6-2
+lib32-nvidia-580xx-utils 580.142-1 -> 580.159.03-1
+lib32-opencl-nvidia-580xx 580.142-1 -> 580.159.03-1
+lib32-vulkan-intel 2:26.0.5-2 -> 2:26.0.6-2
+lib32-vulkan-mesa-implicit-layers 2:26.0.5-2 -> 2:26.0.6-2
+lib32-wayland 1.24.0-1 -> 1.25.0-1
+libblockdev 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-crypto 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-fs 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-loop 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-mdraid 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-nvme 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-part 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-smart 3.4.0-3.1 -> 3.5.0-1.1
+libblockdev-swap 3.4.0-3.1 -> 3.5.0-1.1
+libbpf 1.6.2-1.1 -> 1.7.0-1.1
+libcups 2:2.4.18-1 -> 2:2.4.19-1
+libgsf 1.14.56-1.1 -> 1.14.58-1.1
+linux-cachyos 7.0.1-1 -> 7.0.3-1
+linux-cachyos-headers 7.0.1-1 -> 7.0.3-1
+lvm2 2.03.39-1.1 -> 2.03.40-1.1
+mesa 2:26.0.5-4 -> 2:26.0.6-2
+noto-fonts 1:2026.04.01-1 -> 1:2026.05.01-1
+nvidia-580xx-dkms 580.142-3 -> 580.159.03-2
+nvidia-580xx-utils 580.142-3 -> 580.159.03-2
+obsidian 1.12.7-1 -> 1.12.7-2
+opencl-nvidia-580xx 580.142-3 -> 580.159.03-2
+openexr 3.4.10-1.1 -> 3.4.11-1.1
+openvpn 2.7.2-1.1 -> 2.7.3-1.1
+rsync 3.4.1-2.1 -> 3.4.2-1.1
+shelly 2.1.4-1 -> 2.2.1-1
+thin-provisioning-tools 1.3.1-1.1 -> 1.3.2-1.1
+unrar 1:7.2.5-1.1 -> 1:7.2.6-1.1
+vulkan-intel 2:26.0.5-4 -> 2:26.0.6-2
+vulkan-mesa-implicit-layers 2:26.0.5-4 -> 2:26.0.6-2
+wireless-regdb 2026.02.04-1 -> 2026.03.18-1
+xorg-xwayland 24.1.10-1.1 -> 24.1.11-1.1
+
+-> Prosseguir com a atualização? [S/n] s
+
+==> Procurando notícias recentes do Arch...
+
+==> Nenhuma notícia recente do Arch encontrada
+
+==> Atualizando Pacotes...
+
+[sudo] senha para huandney: 
+:: Sincronizando a base de dados de pacotes...
+ cachyos-v3                                                                                         124,7 KiB   326 KiB/s 00:00 [-----------------------------------------------------------------------------] 100%
+ cachyos-core-v3 está atualizado
+ cachyos-extra-v3                                                                                     4,1 MiB  5,00 MiB/s 00:01 [-----------------------------------------------------------------------------] 100%
+ cachyos                                                                                            526,0 KiB  1112 KiB/s 00:00 [-----------------------------------------------------------------------------] 100%
+ core                                                                                               125,1 KiB   315 KiB/s 00:00 [-----------------------------------------------------------------------------] 100%
+ extra                                                                                                8,2 MiB  8,08 MiB/s 00:01 [-----------------------------------------------------------------------------] 100%
+ multilib                                                                                           127,1 KiB   303 KiB/s 00:00 [-----------------------------------------------------------------------------] 100%
+:: Iniciando atualização completa do sistema...
+atenção: geocode-glib: local (3.26.4-6.1) é mais novo que cachyos-v3 (3.26.4-6)
+resolvendo dependências...
+procurando pacotes conflitantes...
+
+Pacote (52)                                Versão antiga   Versão nova       Diferença
+
+extra/bpf                                  7.0.1-1         7.0.2-1            0,00 MiB
+cachyos/cachyos-ananicy-rules              1:1.1.34-1      1:1.1.35-1        -0,01 MiB
+extra/cpupower                             7.0.1-1         7.0.2-1            0,00 MiB
+cachyos-core-v3/device-mapper              2.03.39-1.1     2.03.40-1.1        0,03 MiB
+cachyos-extra-v3/ethtool                   1:6.19-1.1      1:7.0-1.1          0,01 MiB
+cachyos-extra-v3/firefox                   150.0-1         150.0.1-1.1       -0,29 MiB
+cachyos-extra-v3/fzf                       0.71.0-1.1      0.72.0-1.1         0,02 MiB
+cachyos-extra-v3/geoclue                   2.8.0-2.1       2.8.1-1.1          0,00 MiB
+cachyos-extra-v3/github-cli                2.91.0-3.1      2.92.0-1.1         0,03 MiB
+core/gnutls                                3.8.12-2        3.8.13-1           0,07 MiB
+cachyos-extra-v3/gtk-update-icon-cache     1:4.22.3-1.1    1:4.22.4-1.1       0,00 MiB
+cachyos-extra-v3/gtk4                      1:4.22.3-1.1    1:4.22.4-1.1       0,00 MiB
+core/iana-etc                              20260409-1      20260425-1         0,00 MiB
+cachyos-extra-v3/js140                     140.10.0-1.1    140.10.1-1.1       0,00 MiB
+multilib/lib32-curl                        8.19.0-1        8.20.0-3          -0,01 MiB
+cachyos/lib32-mesa                         2:26.0.5-2      2:26.0.6-2         0,00 MiB
+cachyos/lib32-nvidia-580xx-utils           580.142-1       580.159.03-1       0,01 MiB
+cachyos/lib32-opencl-nvidia-580xx          580.142-1       580.159.03-1       0,00 MiB
+cachyos/lib32-vulkan-intel                 2:26.0.5-2      2:26.0.6-2         0,00 MiB
+cachyos/lib32-vulkan-mesa-implicit-layers  2:26.0.5-2      2:26.0.6-2         0,00 MiB
+multilib/lib32-wayland                     1.24.0-1        1.25.0-1           0,01 MiB
+cachyos-extra-v3/libblockdev               3.4.0-3.1       3.5.0-1.1          0,08 MiB
+cachyos-extra-v3/libblockdev-crypto        3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-fs            3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-loop          3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-mdraid        3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-nvme          3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-part          3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-smart         3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-extra-v3/libblockdev-swap          3.4.0-3.1       3.5.0-1.1          0,00 MiB
+cachyos-core-v3/libbpf                     1.6.2-1.1       1.7.0-1.1          0,02 MiB
+extra/libcups                              2:2.4.18-1      2:2.4.19-1         0,00 MiB
+cachyos-extra-v3/libgsf                    1.14.56-1.1     1.14.58-1.1        0,00 MiB
+cachyos-v3/linux-cachyos                   7.0.1-1         7.0.3-1           -0,76 MiB
+cachyos-v3/linux-cachyos-headers           7.0.1-1         7.0.3-1           -2,04 MiB
+cachyos-core-v3/lvm2                       2.03.39-1.1     2.03.40-1.1        0,01 MiB
+cachyos/mesa                               2:26.0.5-4      2:26.0.6-2         0,00 MiB
+extra/noto-fonts                           1:2026.04.01-1  1:2026.05.01-1     0,00 MiB
+cachyos/nvidia-580xx-dkms                  580.142-3       580.159.03-2       0,02 MiB
+cachyos/nvidia-580xx-utils                 580.142-3       580.159.03-2       0,07 MiB
+extra/obsidian                             1.12.7-1        1.12.7-2           0,00 MiB
+cachyos/opencl-nvidia-580xx                580.142-3       580.159.03-2       0,00 MiB
+cachyos-extra-v3/openexr                   3.4.10-1.1      3.4.11-1.1         0,00 MiB
+cachyos-extra-v3/openvpn                   2.7.2-1.1       2.7.3-1.1          0,00 MiB
+cachyos-extra-v3/rsync                     3.4.1-2.1       3.4.2-1.1          0,01 MiB
+cachyos/shelly                             2.1.4-1         2.2.1-1           -0,64 MiB
+cachyos-core-v3/thin-provisioning-tools    1.3.1-1.1       1.3.2-1.1         -0,18 MiB
+cachyos-extra-v3/unrar                     1:7.2.5-1.1     1:7.2.6-1.1        0,00 MiB
+cachyos/vulkan-intel                       2:26.0.5-4      2:26.0.6-2         0,00 MiB
+cachyos/vulkan-mesa-implicit-layers        2:26.0.5-4      2:26.0.6-2         0,00 MiB
+core/wireless-regdb                        2026.02.04-1    2026.03.18-1       0,00 MiB
+cachyos-extra-v3/xorg-xwayland             24.1.10-1.1     24.1.11-1.1        0,00 MiB
+
+Tamanho total instalado:  2564,02 MiB
+Alteração no tamanho:       -3,53 MiB
+
+:: Continuar a instalação? [S/n] s
+(52/52) verificando chaves no chaveiro                                                                                          [-----------------------------------------------------------------------------] 100%
+(52/52) verificando integridade do pacote                                                                                       [-----------------------------------------------------------------------------] 100%
+(52/52) carregando arquivos do pacote                                                                                           [-----------------------------------------------------------------------------] 100%
+(52/52) verificando conflitos de arquivos                                                                                       [-----------------------------------------------------------------------------] 100%
+:: Executando hooks pré-transação...
+(1/5) Performing snapper pre snapshots for the following configurations...
+==> root: 318
+==> home: 306
+==> root_home: 292
+(2/5) Waiting for limine-snapper-sync to finish...
+(3/5) Record kernels marked for removal in Limine
+(4/5) Removing linux initcpios...
+(5/5) Remove DKMS modules
+==> dkms remove --no-depmod nvidia/580.142 -k 7.0.1-1-cachyos
+==> depmod 7.0.1-1-cachyos
+:: Processando alterações do pacote...
+( 1/52) atualizando iana-etc                                                                                                    [-----------------------------------------------------------------------------] 100%
+( 2/52) atualizando gnutls                                                                                                      [-----------------------------------------------------------------------------] 100%
+( 3/52) atualizando bpf                                                                                                         [-----------------------------------------------------------------------------] 100%
+( 4/52) atualizando cachyos-ananicy-rules                                                                                       [-----------------------------------------------------------------------------] 100%
+( 5/52) atualizando cpupower                                                                                                    [-----------------------------------------------------------------------------] 100%
+( 6/52) atualizando device-mapper                                                                                               [-----------------------------------------------------------------------------] 100%
+( 7/52) atualizando ethtool                                                                                                     [-----------------------------------------------------------------------------] 100%
+( 8/52) atualizando noto-fonts                                                                                                  [-----------------------------------------------------------------------------] 100%
+( 9/52) atualizando mesa                                                                                                        [-----------------------------------------------------------------------------] 100%
+(10/52) atualizando lib32-wayland                                                                                               [-----------------------------------------------------------------------------] 100%
+(11/52) atualizando lib32-curl                                                                                                  [-----------------------------------------------------------------------------] 100%
+(12/52) atualizando lib32-mesa                                                                                                  [-----------------------------------------------------------------------------] 100%
+(13/52) atualizando lib32-nvidia-580xx-utils                                                                                    [-----------------------------------------------------------------------------] 100%
+(14/52) atualizando lib32-opencl-nvidia-580xx                                                                                   [-----------------------------------------------------------------------------] 100%
+(15/52) atualizando opencl-nvidia-580xx                                                                                         [-----------------------------------------------------------------------------] 100%
+(16/52) atualizando nvidia-580xx-utils                                                                                          [-----------------------------------------------------------------------------] 100%
+(17/52) atualizando libbpf                                                                                                      [-----------------------------------------------------------------------------] 100%
+(18/52) atualizando gtk-update-icon-cache                                                                                       [-----------------------------------------------------------------------------] 100%
+(19/52) atualizando libcups                                                                                                     [-----------------------------------------------------------------------------] 100%
+(20/52) atualizando firefox                                                                                                     [-----------------------------------------------------------------------------] 100%
+(21/52) atualizando fzf                                                                                                         [-----------------------------------------------------------------------------] 100%
+(22/52) atualizando geoclue                                                                                                     [-----------------------------------------------------------------------------] 100%
+(23/52) atualizando github-cli                                                                                                  [-----------------------------------------------------------------------------] 100%
+(24/52) atualizando gtk4                                                                                                        [-----------------------------------------------------------------------------] 100%
+(25/52) atualizando js140                                                                                                       [-----------------------------------------------------------------------------] 100%
+(26/52) atualizando vulkan-mesa-implicit-layers                                                                                 [-----------------------------------------------------------------------------] 100%
+(27/52) atualizando lib32-vulkan-mesa-implicit-layers                                                                           [-----------------------------------------------------------------------------] 100%
+(28/52) atualizando vulkan-intel                                                                                                [-----------------------------------------------------------------------------] 100%
+(29/52) atualizando lib32-vulkan-intel                                                                                          [-----------------------------------------------------------------------------] 100%
+(30/52) atualizando libblockdev                                                                                                 [-----------------------------------------------------------------------------] 100%
+(31/52) atualizando libblockdev-crypto                                                                                          [-----------------------------------------------------------------------------] 100%
+(32/52) atualizando libblockdev-fs                                                                                              [-----------------------------------------------------------------------------] 100%
+(33/52) atualizando libblockdev-loop                                                                                            [-----------------------------------------------------------------------------] 100%
+(34/52) atualizando libblockdev-mdraid                                                                                          [-----------------------------------------------------------------------------] 100%
+(35/52) atualizando libblockdev-nvme                                                                                            [-----------------------------------------------------------------------------] 100%
+(36/52) atualizando libblockdev-part                                                                                            [-----------------------------------------------------------------------------] 100%
+(37/52) atualizando libblockdev-smart                                                                                           [-----------------------------------------------------------------------------] 100%
+(38/52) atualizando libblockdev-swap                                                                                            [-----------------------------------------------------------------------------] 100%
+(39/52) atualizando libgsf                                                                                                      [-----------------------------------------------------------------------------] 100%
+(40/52) atualizando linux-cachyos                                                                                               [-----------------------------------------------------------------------------] 100%
+(41/52) atualizando linux-cachyos-headers                                                                                       [-----------------------------------------------------------------------------] 100%
+(42/52) atualizando thin-provisioning-tools                                                                                     [-----------------------------------------------------------------------------] 100%
+(43/52) atualizando lvm2                                                                                                        [-----------------------------------------------------------------------------] 100%
+(44/52) atualizando nvidia-580xx-dkms                                                                                           [-----------------------------------------------------------------------------] 100%
+(45/52) atualizando obsidian                                                                                                    [-----------------------------------------------------------------------------] 100%
+You can add custom permanent flags for Obsidian in .config/obsidian/user-flags.conf
+(46/52) atualizando openexr                                                                                                     [-----------------------------------------------------------------------------] 100%
+(47/52) atualizando openvpn                                                                                                     [-----------------------------------------------------------------------------] 100%
+(48/52) atualizando rsync                                                                                                       [-----------------------------------------------------------------------------] 100%
+(49/52) atualizando shelly                                                                                                      [-----------------------------------------------------------------------------] 100%
+(50/52) atualizando unrar                                                                                                       [-----------------------------------------------------------------------------] 100%
+(51/52) atualizando wireless-regdb                                                                                              [-----------------------------------------------------------------------------] 100%
+(52/52) atualizando xorg-xwayland                                                                                               [-----------------------------------------------------------------------------] 100%
+:: Executando hooks pós-transação...
+( 1/21) Creating system user accounts...
+( 2/21) Creating temporary files...
+( 3/21) Reloading system manager configuration...
+( 4/21) Updating the MIME type database...
+( 5/21) Enqueuing marked services...
+( 6/21) Reloading device manager configuration...
+( 7/21) Arming ConditionNeedsUpdate...
+( 8/21) Updating module dependencies...
+( 9/21) Install DKMS modules
+==> dkms install --no-depmod nvidia/580.159.03 -k 7.0.3-1-cachyos
+==> depmod 7.0.3-1-cachyos
+(10/21) Clean Limine boot entries of removed kernels
+(11/21) Updating linux initcpios...
+Building initramfs for linux-cachyos (7.0.3-1-cachyos)
+==> Using drop-in configuration file: '10-chwd.conf'
+==> Using drop-in configuration file: '10-limine-snapper-sync.conf'
+==> Starting build: '7.0.3-1-cachyos'
+  -> Running build hook: [base]
+  -> Running build hook: [systemd]
+  -> Running build hook: [autodetect]
+  -> Running build hook: [microcode]
+  -> Running build hook: [kms]
+  -> Running build hook: [modconf]
+  -> Running build hook: [block]
+  -> Running build hook: [keyboard]
+  -> Running build hook: [sd-vconsole]
+  -> Running build hook: [plymouth]
+  -> Running build hook: [filesystems]
+  -> Running build hook: [sd-btrfs-overlayfs]
+==> Generating module dependencies
+==> Creating zstd-compressed initcpio image: '/tmp/staging_initramfs.img'
+  -> Early uncompressed CPIO image generation successful
+==> Initcpio image generation successful
+Kernel stored in /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos
+Initramfs stored in /boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos
+Updated: /boot/limine.conf
+(12/21) Check if user should be informed about rebooting after certain system package upgrades.
+==> INFO: Reboot is recommended due to the upgrade of core system package(s).
+(13/21) Reloading system bus configuration...
+(14/21) Updating fontconfig cache...
+(15/21) Compiling GSettings XML schema files...
+(16/21) Updating icon theme caches...
+(17/21) Checking which packages need to be rebuilt
+(18/21) Updating the info directory file...
+(19/21) Updating the desktop file MIME type cache...
+(20/21) Updating Vim help tags...
+(21/21) Performing snapper post snapshots for the following configurations...
+==> root: 319
+==> home: 307
+==> root_home: 293
+
+==> A atualização foi aplicada
+
+==> Nenhum pacote órfão encontrado
+
+==> Nenhum pacote em cache antigo ou desinstalado encontrado
+
+==> Reinicialização necessária:
+Há uma atualização de kernel pendente em seu sistema que requer uma reinicialização para ser aplicada
+
+
+

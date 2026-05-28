@@ -6,7 +6,7 @@ pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/undo/redo/l
 arch=('x86_64')
 url="https://github.com/huandney/snapgroup"
 license=('MIT')
-depends=('snapper' 'btrfs-progs' 'util-linux' 'fzf')
+depends=('snapper' 'btrfs-progs' 'util-linux' 'coreutils' 'fzf')
 makedepends=('cargo')
 install=snapgroup.install
 # Build local: rode `makepkg -si` na raiz do repo. Sem source remoto por enquanto.
