@@ -40,6 +40,14 @@ pub fn sync_fat32(restored_root: &Path) -> Result<()> {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em /boot");
     }
 
+    // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
+    // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
+    // de interrupção junto. O caminho pesado só roda quando o kernel difere.
+    if boot_matches_snapshot(restored_root, &groups)? {
+        println!("  boot sync: /boot já corresponde ao snapshot, nada a fazer");
+        return Ok(());
+    }
+
     let critical = critical_boot_files(&groups);
     backup_boot_files(&critical)?;
 
@@ -112,37 +120,45 @@ fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
     Ok(())
 }
 
-/// Gate de segurança pós-sync: confirma que cada vmlinuz ativo em /boot é
-/// byte-idêntico ao vmlinuz do kver correspondente no snapshot restaurado.
-/// Se divergir, o /boot ficou descasado dos módulos do root — bootar nesse
-/// estado cai em emergency mode (kernel não acha seus próprios módulos, ex:
-/// "unknown filesystem type vfat"). Falar isso aqui transforma um sync
-/// interrompido/parcial num erro explícito em vez de um reboot silencioso
-/// pra um sistema que não sobe.
-fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+/// True se cada vmlinuz ativo em /boot já é byte-idêntico ao vmlinuz do kver
+/// correspondente no snapshot restaurado — a pergunta "o /boot já casa com o
+/// root?". Serve a dois usos: gate de entrada (pular o sync quando nada mudou)
+/// e verificação pós-sync. O sinal certo é o snapshot, não `uname -r` (que só
+/// reflete o kernel que carregou no boot atual). `Err` só para falha real de
+/// leitura/mapeamento; um mismatch é `Ok(false)`, não erro.
+fn boot_matches_snapshot(restored_root: &Path, groups: &[KernelGroup]) -> Result<bool> {
     let modules_root = restored_root.join("usr/lib/modules");
     let pkgbase_map = read_pkgbase_map(&modules_root)?;
     for group in groups {
         let kver = pkgbase_map.get(&group.kernel_name).with_context(|| {
-            format!(
-                "verificação: snapshot não tem módulos para '{}'",
-                group.kernel_name
-            )
+            format!("snapshot não tem módulos para '{}'", group.kernel_name)
         })?;
         let snap_vmlinuz = modules_root.join(kver).join("vmlinuz");
         let expected =
             fs::read(&snap_vmlinuz).with_context(|| format!("ler {}", snap_vmlinuz.display()))?;
         for dest in &group.vmlinuz_paths {
+            if !dest.exists() {
+                return Ok(false);
+            }
             let got = fs::read(dest).with_context(|| format!("ler {}", dest.display()))?;
             if got != expected {
-                bail!(
-                    "/boot dessincronizado: {} não corresponde ao kernel {kver} do snapshot",
-                    dest.display()
-                );
+                return Ok(false);
             }
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+/// Verificação pós-sync: se o /boot não casa com o snapshot depois de copiar
+/// kernel e regenerar initramfs, o sync não surtiu efeito (parcial/interrompido).
+/// Bootar nesse estado cai em emergency mode (kernel não acha seus módulos, ex:
+/// "unknown filesystem type vfat"), então vira erro explícito em vez de um
+/// reboot silencioso pra um sistema que não sobe.
+fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+    if boot_matches_snapshot(restored_root, groups)? {
+        return Ok(());
+    }
+    bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
 }
 
 fn regen_initramfs(config: &Path, kver: &str, restored_root: &Path, out: &Path) -> Result<()> {
