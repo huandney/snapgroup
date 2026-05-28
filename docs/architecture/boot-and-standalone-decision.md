@@ -105,6 +105,17 @@ obrigarem a manter FAT32.
 > Emergency Mode. B2.1 está hoje *funcional e seguro* no caminho feliz — a
 > recomendação por B2.3 é por **atomicidade**, não por B2.1 estar quebrado.
 > Ver `docs/incidents/2026-05-28-fat32-restore-emergency/postmortem.md` §5.
+>
+> **Limitação conhecida do B2.1 (gap do initramfs):** a verificação
+> (`verify_synced`/`boot_matches_snapshot`) e o gate de skip comparam só o
+> `vmlinuz`, não o initramfs — porque o initramfs não é um artefato
+> armazenado no snapshot, é regenerado. Logo: (a) um restore de **mesmo
+> kernel** pula a regeneração e mantém o initramfs do sistema vivo, que pode
+> divergir se o `mkinitcpio.conf`/hooks do snapshot forem diferentes; (b) um
+> `mkinitcpio` que sai 0 com initramfs errado passa no verify. O caso crítico
+> (módulos version-locked) está coberto pelo vmlinuz. Este gap é **inerente
+> ao B2.1** e só desaparece no B2.3 (`/boot` no BTRFS, initramfs revertido
+> atomicamente junto com o snapshot).
 
 ---
 

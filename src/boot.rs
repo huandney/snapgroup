@@ -125,14 +125,24 @@ fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
 /// root?". Serve a dois usos: gate de entrada (pular o sync quando nada mudou)
 /// e verificação pós-sync. O sinal certo é o snapshot, não `uname -r` (que só
 /// reflete o kernel que carregou no boot atual). `Err` só para falha real de
-/// leitura/mapeamento; um mismatch é `Ok(false)`, não erro.
+/// leitura; kernel ausente no snapshot ou conteúdo divergente é `Ok(false)`
+/// (mismatch) — leva ao caminho de sync, que falha com mensagem por-kernel.
+///
+/// LIMITAÇÃO: compara só o `vmlinuz`, não o initramfs. O initramfs não é um
+/// artefato armazenado no snapshot (é regenerado), então não há o que comparar
+/// byte a byte. Consequências: (a) num restore de mesmo kernel o gate pula a
+/// regeneração, mantendo o initramfs do sistema vivo — se o snapshot tiver
+/// `mkinitcpio.conf`/hooks diferentes, o initramfs pode não casar; (b) um
+/// mkinitcpio que sai 0 com initramfs errado passa no verify. O caso crítico
+/// (módulos version-locked) é coberto pelo vmlinuz; o gap do initramfs só
+/// some de vez com `/boot` no BTRFS (ver ADR boot-and-standalone-decision §B2.3).
 fn boot_matches_snapshot(restored_root: &Path, groups: &[KernelGroup]) -> Result<bool> {
     let modules_root = restored_root.join("usr/lib/modules");
     let pkgbase_map = read_pkgbase_map(&modules_root)?;
     for group in groups {
-        let kver = pkgbase_map.get(&group.kernel_name).with_context(|| {
-            format!("snapshot não tem módulos para '{}'", group.kernel_name)
-        })?;
+        let Some(kver) = pkgbase_map.get(&group.kernel_name) else {
+            return Ok(false);
+        };
         let snap_vmlinuz = modules_root.join(kver).join("vmlinuz");
         let expected =
             fs::read(&snap_vmlinuz).with_context(|| format!("ler {}", snap_vmlinuz.display()))?;
@@ -162,22 +172,41 @@ fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
 }
 
 fn regen_initramfs(config: &Path, kver: &str, restored_root: &Path, out: &Path) -> Result<()> {
+    // Gera para um temporário no mesmo diretório e renomeia atomicamente.
+    // Escrever direto em `out` deixaria um initramfs parcial no caminho ativo
+    // se o mkinitcpio fosse interrompido (SIGKILL no reboot, queda de luz) —
+    // bootar com initramfs truncado cai em emergency mode. O `.` inicial impede
+    // que o temp seja classificado como artefato de boot por `scan_boot_dir`.
+    let file_name = out
+        .file_name()
+        .with_context(|| format!("initramfs sem nome de arquivo: {}", out.display()))?;
+    let tmp = out.with_file_name(format!(".{}.snapg_tmp", file_name.to_string_lossy()));
+
     let res = Command::new("mkinitcpio")
         .args(["--nopost", "-c"])
         .arg(config)
         .args(["-k", kver, "-r"])
         .arg(restored_root)
         .arg("-g")
-        .arg(out)
+        .arg(&tmp)
         .output()
         .context("mkinitcpio falhou")?;
     if !res.status.success() {
+        let _ = fs::remove_file(&tmp);
         bail!(
             "mkinitcpio {kver} → {}: {}",
             out.display(),
             String::from_utf8_lossy(&res.stderr)
         );
     }
+
+    fs::rename(&tmp, out).with_context(|| {
+        format!(
+            "mover initramfs {} → {}",
+            tmp.display(),
+            out.display()
+        )
+    })?;
     Ok(())
 }
 
