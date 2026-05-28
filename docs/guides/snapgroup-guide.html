@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Guia do snapgroup para iniciantes</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1419;
+      --paper: #151a1f;
+      --paper-2: #1b2229;
+      --ink: #e6e1cf;
+      --muted: #9da9a0;
+      --line: #2d3640;
+      --accent: #ffb454;
+      --accent-2: #f07178;
+      --accent-3: #59c2ff;
+      --accent-4: #95e6cb;
+      --code-bg: #0b1014;
+      --code-ink: #e6e1cf;
+      --soft: #16231c;
+      --warn: #2b2416;
+      --danger: #2b191d;
+      --header: #0b1014;
+      --heading: #ffd580;
+      --inline-code: rgba(255, 180, 84, 0.14);
+      --kbd-bg: #1f2a33;
+      --kbd-border: #53606c;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+    }
+
+    header {
+      background: var(--header);
+      color: var(--ink);
+      padding: 28px 18px 24px;
+      border-bottom: 6px solid var(--accent);
+    }
+
+    header .wrap, main, footer {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    h1, h2, h3 {
+      color: var(--heading);
+      line-height: 1.18;
+    }
+
+    h1 { margin: 0 0 12px; font-size: clamp(2rem, 7vw, 3.8rem); }
+    h2 {
+      margin: 34px 0 14px;
+      font-size: clamp(1.45rem, 5vw, 2.25rem);
+      border-bottom: 2px solid var(--line);
+      padding-bottom: 8px;
+    }
+    h3 { margin: 24px 0 10px; font-size: 1.18rem; }
+    h4 { margin: 18px 0 6px; color: var(--accent-4); font-size: 1rem; }
+    p { margin: 0 0 14px; }
+
+    a { color: var(--accent); font-weight: 700; text-decoration-thickness: 2px; }
+
+    main { padding: 22px 16px 44px; }
+    footer { padding: 24px 16px 48px; color: var(--muted); }
+
+    .lead {
+      max-width: 760px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin: 16px 0;
+    }
+
+    .note   { background: var(--soft); border-left: 5px solid var(--accent-4); }
+    .tip    { background: var(--soft); border-left: 5px solid var(--accent-3); }
+    .warn   { background: var(--warn); border-left: 5px solid var(--accent); }
+    .danger { background: var(--danger); border-left: 5px solid var(--accent-2); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+
+    .mini {
+      min-height: 100%;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .mini h3 { margin-top: 0; }
+
+    code {
+      background: var(--inline-code);
+      border-radius: 5px;
+      padding: 0.1em 0.32em;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: 8px;
+      padding: 14px;
+      margin: 14px 0;
+      font-size: 0.9rem;
+    }
+
+    pre code { background: transparent; padding: 0; color: inherit; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 10px; vertical-align: top; }
+    th { background: var(--paper-2); }
+    tr:last-child td { border-bottom: 0; }
+
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .toc a {
+      display: block;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      text-decoration: none;
+    }
+
+    details {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 800;
+      color: var(--accent-3);
+    }
+
+    .flow { display: grid; gap: 10px; margin: 16px 0; }
+
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 12px;
+      align-items: start;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .badge {
+      display: inline-grid;
+      place-items: center;
+      min-width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #0f1419;
+      font-weight: 900;
+    }
+
+    .file { font-weight: 800; color: var(--accent-3); }
+    .muted { color: var(--muted); }
+    .tag {
+      display: inline-block;
+      font-size: 0.78em;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: var(--paper-2);
+      color: var(--accent-4);
+      border: 1px solid var(--line);
+      margin-left: 6px;
+      font-weight: 700;
+    }
+
+    .kbd {
+      display: inline-block;
+      border: 1px solid var(--kbd-border);
+      border-bottom-width: 3px;
+      background: var(--kbd-bg);
+      border-radius: 5px;
+      padding: 0 0.38em;
+      font-family: inherit;
+      font-size: 0.9em;
+      font-weight: 700;
+    }
+
+    @media (max-width: 640px) {
+      header { padding-top: 22px; }
+      main { padding-inline: 12px; }
+      .step { grid-template-columns: 34px 1fr; }
+      .badge { min-width: 30px; height: 30px; }
+
+      pre { font-size: 0.78rem; padding: 10px; }
+
+      /* Tabela vira cards empilhados */
+      table {
+        display: block;
+        white-space: normal;
+        border: none;
+        background: transparent;
+      }
+      thead { display: none; }
+      tbody { display: block; }
+      tr {
+        display: block;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+      }
+      td {
+        display: block;
+        border: none;
+        padding: 4px 0;
+        white-space: normal;
+      }
+      td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--accent-4);
+        margin-bottom: 2px;
+      }
+      td:first-child::before { display: none; }
+      td:first-child {
+        font-size: 1.05rem;
+        margin-bottom: 4px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>snapgroup por dentro</h1>
+      <p class="lead">Um guia em HTML pra abrir no celular e entender, aos poucos, como este projeto Rust liga comandos de terminal, Snapper, Btrfs, rollback e boot. Pensado pra quem está começando em Rust.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel note">
+      <h2 id="como-usar">Como usar este guia</h2>
+      <p>Leia em camadas. Primeiro o problema. Depois o fluxo dos comandos. Depois conceitos de Rust. Só então os arquivos.</p>
+      <p>O objetivo não é decorar. É conseguir responder: <strong>"quando eu digito um comando, qual arquivo recebe isso, qual função roda e que efeito ela causa no sistema?"</strong></p>
+      <p>Os blocos <code>&lt;details&gt;</code> abrem com clique. Use-os como uma trilha. Se a explicação ficar fácil, passa adiante. Se travar, abre.</p>
+    </section>
+
+    <nav class="toc" aria-label="Sumário">
+      <a href="#visao-geral">1. Visão geral</a>
+      <a href="#dominio">2. Conceitos do domínio</a>
+      <a href="#rust-basico">3. Rust básico</a>
+      <a href="#arquitetura">4. Arquitetura</a>
+      <a href="#fluxos">5. Fluxo dos comandos</a>
+      <a href="#rust-projeto">6. Rust no projeto</a>
+      <a href="#arquivos">7. Arquivo por arquivo</a>
+      <a href="#perigos">8. Pontos perigosos</a>
+      <a href="#roteiro">9. Roteiro de estudo</a>
+    </nav>
+
+    <!-- =========== 1. VISÃO GERAL =========== -->
+    <section>
+      <h2 id="visao-geral">1. Visão Geral</h2>
+      <p>O projeto <code>snapgroup</code> compila num binário chamado <code>snapg</code>. Ele é um <em>wrapper</em> em volta do <code>snapper</code> — ou seja, não substitui o Snapper, só usa o Snapper por baixo e adiciona uma ideia nova em cima: <strong>tratar vários snapshots como um único checkpoint lógico</strong>.</p>
+
+      <div class="panel tip">
+        <p><strong>Exemplo prático.</strong> Seu sistema tem dois subvolumes Btrfs: um pra <code>/</code> e outro pra <code>/home</code>. O Snapper normalmente cria um snapshot de cada lado, separadamente. Se você quiser voltar os dois pra um ponto coerente no tempo, tem que correr atrás de dois números diferentes na unha. O <code>snapg</code> resolve isso colocando o mesmo identificador (um <em>timestamp</em> Unix) nos dois snapshots quando você roda <code>snapg save</code>. Pra restaurar, ele acha todos os membros com aquele ID e restaura juntos.</p>
+      </div>
+
+      <div class="grid">
+        <article class="mini">
+          <h3>Snapper</h3>
+          <p>Ferramenta externa (já existe no Linux). Cria, lista e apaga snapshots Btrfs. O projeto chama o comando <code>snapper</code> como subprocesso.</p>
+        </article>
+        <article class="mini">
+          <h3>Btrfs</h3>
+          <p>Sistema de arquivos que suporta subvolumes e snapshots baratos. O rollback real acontece renomeando subvolumes.</p>
+        </article>
+        <article class="mini">
+          <h3>Grupo (checkpoint)</h3>
+          <p>Conjunto de snapshots que compartilham o mesmo <code>snapgroup-id</code> (um timestamp Unix). É o que o <code>save</code> cria.</p>
+        </article>
+        <article class="mini">
+          <h3>Regret</h3>
+          <p>O estado anterior à última restauração, guardado como subvolume <code>_snapg_regret</code>. É o botão de arrependimento.</p>
+        </article>
+      </div>
+
+      <div class="panel warn">
+        <p><strong>Nota didática — README desatualizado.</strong> O <code>README.md</code> ainda descreve comandos antigos: <code>undo</code>, <code>redo</code> e <code>gc</code>. O código atual (em <code>src/cli.rs</code>) usa um conjunto diferente:</p>
+        <ul>
+          <li><code>save</code> — cria checkpoint</li>
+          <li><code>list</code> — lista checkpoints e mostra regret se existir</li>
+          <li><code>restore</code> — TUI interativa pra escolher checkpoint ou regret</li>
+          <li><code>delete</code> — apaga checkpoints (seleção interativa, ou <code>-y</code> pro mais recente)</li>
+          <li><code>boot-clean</code> — comando interno, escondido, chamado por <code>snapg-cleanup.service</code> no boot</li>
+        </ul>
+        <p>O README precisa ser atualizado. Por enquanto, ignore as referências a <code>undo/redo/gc</code> lá.</p>
+      </div>
+    </section>
+
+    <!-- =========== 2. CONCEITOS DO DOMÍNIO =========== -->
+    <section>
+      <h2 id="dominio">2. Conceitos do Domínio</h2>
+
+      <details open>
+        <summary>O que é um snapshot?</summary>
+        <p>É uma foto de um subvolume em um momento do tempo. No Btrfs, essa foto não copia todos os arquivos imediatamente — ela compartilha blocos com o estado original e só diverge quando algo muda (copy-on-write).</p>
+        <p>No projeto, o Snapper cria snapshots <strong>read-only</strong> (só leitura). Pra restaurar, o <code>snapgroup</code> primeiro tira uma cópia <em>writable</em> (leitura/escrita) desse snapshot e só depois troca pelo sistema vivo.</p>
+      </details>
+
+      <details open>
+        <summary>O que é um subvolume?</summary>
+        <p>Pense num subvolume como uma raiz independente dentro do Btrfs. Em muitos sistemas Arch/CachyOS/openSUSE, <code>/</code> aponta pra <code>@</code> e <code>/home</code> aponta pra <code>@home</code>.</p>
+        <pre><code>Top-level Btrfs (subvolid=5)
+├── @            -> montado como /
+├── @home        -> montado como /home
+├── @snapshots   -> snapshots do root
+└── @home/.snapshots -> snapshots do home</code></pre>
+        <p>O detalhe importante: pra trocar <code>@</code> por outro subvolume, o programa precisa enxergar os subvolumes como <em>irmãos</em>. Isso só é possível olhando o top-level direto. Daí o passo seguinte.</p>
+      </details>
+
+      <details>
+        <summary>Por que precisa montar o top-level?</summary>
+        <p>O top-level Btrfs (também chamado de <code>subvolid=5</code>) é o "pai" de todos os subvolumes. O <code>snapg</code> monta ele em <code>/run/snapgroup/&lt;uuid&gt;</code> só pelo tempo da operação, faz a troca, e desmonta.</p>
+        <p>Sem montar o top-level, você não conseguiria fazer <code>mv @ @_backup</code> e <code>mv @_novo @</code>.</p>
+      </details>
+
+      <details>
+        <summary>Por que o programa pede sudo?</summary>
+        <p>Criar snapshots, montar o top-level, renomear subvolumes e mexer em <code>/boot</code> exigem permissão de administrador. Por isso <code>src/sudo.rs</code> reexecuta o próprio binário com <code>sudo</code> quando você roda como usuário comum.</p>
+        <p>Olhe esse trecho de <code>src/sudo.rs</code>:</p>
+        <pre><code>let err = Command::new("sudo").args(&amp;args).exec();</code></pre>
+        <p>O <code>.exec()</code> <em>substitui</em> o processo atual em vez de criar um filho. Resultado: você só vê um processo, sem PID extra.</p>
+      </details>
+    </section>
+
+    <!-- =========== 3. RUST BÁSICO =========== -->
+    <section>
+      <h2 id="rust-basico">3. Rust Básico <span class="tag">para iniciantes</span></h2>
+      <p>Esta seção é um glossário. Cada item explica um conceito de Rust com a forma <strong>mais simples possível</strong>, e mostra onde ele aparece neste projeto. Volte aqui sempre que cruzar um conceito desconhecido.</p>
+
+      <details open>
+        <summary><code>fn</code> — função</summary>
+        <p>Uma função é um bloco de código com nome que faz uma tarefa. Você chama pelo nome e ela executa.</p>
+        <pre><code>fn epoch_now() -&gt; Result&lt;i64&gt; {
+    // ... gera um número baseado no tempo atual
+}</code></pre>
+        <p><code>fn</code> declara função. <code>epoch_now</code> é o nome. <code>-&gt; Result&lt;i64&gt;</code> diz "retorna um <code>Result</code> que, quando dá certo, tem um <code>i64</code> dentro".</p>
+      </details>
+
+      <details>
+        <summary><code>let</code> — variável</summary>
+        <p>Variável em Rust é criada com <code>let</code>. Por padrão, ela é <strong>imutável</strong> (não muda depois de criada).</p>
+        <pre><code>let id = epoch_now()?;         // imutável
+let mut buf = String::new();   // mutável (pode mudar)</code></pre>
+        <p>Para permitir modificação, você adiciona <code>mut</code>. Essa diferença força você a pensar antes em "isso vai mudar mesmo?".</p>
+      </details>
+
+      <details>
+        <summary><code>struct</code> — pacote de dados</summary>
+        <p>Uma <code>struct</code> agrupa dados relacionados. É como criar um tipo novo composto por campos.</p>
+        <pre><code>pub struct Group {
+    pub id: GroupId,
+    pub members: Vec&lt;Member&gt;,
+}</code></pre>
+        <p>Aqui um <code>Group</code> tem dois campos: um <code>id</code> e uma lista (<code>Vec</code>) de membros. <code>pub</code> significa "público" — outros módulos podem usar.</p>
+      </details>
+
+      <details>
+        <summary><code>enum</code> — uma escolha entre opções</summary>
+        <p>Um <code>enum</code> diz: "este valor é uma destas variantes". Em <code>src/cli.rs</code>:</p>
+        <pre><code>pub enum Command {
+    Save { description: Option&lt;String&gt; },
+    Restore,
+    List,
+    Delete { yes: bool },
+    BootClean,
+}</code></pre>
+        <p>Um <code>Command</code> é <em>exatamente um</em> desses cinco. Você não pode ter dois ao mesmo tempo. Cada variante pode carregar dados próprios — <code>Save</code> carrega uma descrição opcional, <code>Delete</code> carrega o flag <code>-y</code>.</p>
+      </details>
+
+      <details>
+        <summary><code>match</code> — escolha pelo formato do dado</summary>
+        <p>O <code>match</code> olha um valor e escolhe o que fazer pra cada variante. O compilador exige cobrir <strong>todas</strong> as possibilidades — se você esquecer uma, o código não compila.</p>
+        <pre><code>match cli.command {
+    Command::Save { description } =&gt; commands::save(description),
+    Command::Restore              =&gt; commands::restore(),
+    Command::List                 =&gt; commands::list(),
+    Command::Delete { yes }       =&gt; commands::delete(yes),
+    Command::BootClean            =&gt; commands::boot_clean(),
+}</code></pre>
+        <p>Essa exaustividade é uma das coisas que tornam Rust seguro: se amanhã você adicionar um comando novo no enum, o compilador apita em todos os <code>match</code> que ficaram incompletos.</p>
+      </details>
+
+      <details>
+        <summary><code>Option&lt;T&gt;</code> — pode ter valor, pode não ter</summary>
+        <p>Rust não tem <code>null</code>. Quando algo pode existir ou não, o tipo é <code>Option&lt;T&gt;</code>. Ele tem duas variantes:</p>
+        <ul>
+          <li><code>Some(valor)</code> — tem valor</li>
+          <li><code>None</code> — não tem</li>
+        </ul>
+        <pre><code>description: Option&lt;String&gt;</code></pre>
+        <p>Lê-se: "uma <code>String</code> que pode ou não estar presente". Pra usar, você precisa abrir com <code>match</code>, <code>if let Some(...)</code> ou <code>.unwrap_or(...)</code>.</p>
+      </details>
+
+      <details>
+        <summary><code>Result&lt;T, E&gt;</code> — pode dar certo, pode falhar</summary>
+        <p>Muitas funções aqui retornam <code>Result&lt;()&gt;</code> ou <code>Result&lt;Vec&lt;Group&gt;&gt;</code>. Significa: ou devolve o valor esperado (<code>Ok(...)</code>), ou devolve um erro (<code>Err(...)</code>).</p>
+        <pre><code>pub fn list_groups() -&gt; Result&lt;Vec&lt;Group&gt;&gt; {
+    // se tudo der certo: Ok(groups)
+    // se algo falhar:     Err(...)
+}</code></pre>
+        <p>O projeto usa o crate <code>anyhow</code>, que carrega mensagens de erro com contexto encadeado ("falhou em X: por causa de Y: por causa de Z").</p>
+      </details>
+
+      <details>
+        <summary><code>?</code> — propaga erro pra cima</summary>
+        <p>Quando você vê <code>algo()?</code>, leia assim: <strong>"execute <code>algo</code>; se falhar, pare esta função e devolva o erro pra quem me chamou"</strong>.</p>
+        <pre><code>let configs = snapper::list_configs()?;</code></pre>
+        <p>Se <code>list_configs()</code> retornar <code>Err</code>, a função atual também retorna <code>Err</code> imediatamente. Isso evita escrever <code>if/else</code> manual pra cada erro.</p>
+      </details>
+
+      <details>
+        <summary><code>Vec&lt;T&gt;</code> — lista dinâmica</summary>
+        <p><code>Vec</code> é uma lista que cresce. Equivalente ao <code>list</code> de Python ou <code>ArrayList</code> de Java.</p>
+        <pre><code>let mut created = Vec::new();      // lista vazia
+created.push((cfg.clone(), n));    // adiciona item
+for (cfg, n) in &amp;created { ... }   // itera</code></pre>
+      </details>
+
+      <details>
+        <summary><code>&amp;</code> e <code>&amp;mut</code> — referência (borrow)</summary>
+        <p>Quando você vê <code>&amp;configs</code> ou <code>&amp;mut buf</code>, isso é uma <em>referência</em> ao dado. Significa: "estou emprestando esse valor, não vou levar pra sempre".</p>
+        <pre><code>fn delete_existing_regrets(toplevel: &amp;Path, configs: &amp;[String]) -&gt; Result&lt;()&gt;</code></pre>
+        <p>O <code>&amp;Path</code> diz "empresta um path, só vou ler". O <code>&amp;[String]</code> diz "empresta uma fatia de Strings". Isso evita cópias desnecessárias e impede que duas partes do código mexam no mesmo dado ao mesmo tempo de forma confusa.</p>
+        <p><strong>Resumo iniciante:</strong> <code>&amp;</code> = "vou só olhar". <code>&amp;mut</code> = "vou olhar e modificar". Sem <code>&amp;</code> = "estou levando o dado comigo (move)".</p>
+      </details>
+
+      <details>
+        <summary><code>mod</code> — módulo</summary>
+        <p>Um módulo é uma forma de organizar código em arquivos/namespaces. No topo de <code>src/main.rs</code>:</p>
+        <pre><code>mod boot;
+mod btrfs;
+mod cli;
+mod commands;
+mod group;
+mod rollback;
+mod snapper;
+mod sudo;</code></pre>
+        <p>Cada <code>mod nome;</code> aqui diz "existe um arquivo <code>src/nome.rs</code> que faz parte deste programa". Daí em diante você usa funções com <code>nome::funcao()</code>.</p>
+      </details>
+
+      <details>
+        <summary><code>crate</code> — biblioteca externa (ou seu próprio projeto)</summary>
+        <p>Um <em>crate</em> é a unidade de compilação em Rust. Pode ser o seu projeto inteiro (binário ou lib) ou uma dependência externa. Este projeto usa estes crates externos:</p>
+        <ul>
+          <li><code>clap</code> — parser de argumentos de linha de comando</li>
+          <li><code>anyhow</code> — erros com contexto encadeado</li>
+          <li><code>serde</code> e <code>serde_json</code> — converter JSON do Snapper em structs Rust</li>
+          <li><code>dialoguer</code> e <code>console</code> — menus interativos no terminal (TUI)</li>
+        </ul>
+        <p>Você os declara em <code>Cargo.toml</code> e o <code>cargo</code> baixa.</p>
+      </details>
+
+      <details>
+        <summary>Comando externo (<code>Command::new</code>)</summary>
+        <p>O projeto não reimplementa Snapper nem Btrfs. Ele <strong>chama os comandos do sistema</strong> como se você os tivesse digitado no terminal:</p>
+        <pre><code>let out = Command::new("snapper")
+    .args(["--jsonout", "list-configs"])
+    .output()?;</code></pre>
+        <p>Isso cria um processo filho que roda <code>snapper --jsonout list-configs</code>, espera ele terminar, e te dá um <code>Output</code> com três coisas: o código de saída, o <strong>stdout</strong> e o <strong>stderr</strong>.</p>
+      </details>
+
+      <details>
+        <summary>stdout e stderr</summary>
+        <p>Todo programa Unix tem três fluxos:</p>
+        <ul>
+          <li><strong>stdin</strong> (entrada padrão) — o que você digita</li>
+          <li><strong>stdout</strong> (saída padrão) — texto normal de resultado. No projeto, é onde vai a saída útil: lista de configs, JSON, número do snapshot criado</li>
+          <li><strong>stderr</strong> (saída de erro padrão) — mensagens de erro e avisos</li>
+        </ul>
+        <p>Veja como o projeto separa os dois:</p>
+        <pre><code>if !out.status.success() {
+    bail!(
+        "snapper list-configs: {}",
+        String::from_utf8_lossy(&amp;out.stderr)   // erro do subprocesso → erro nosso
+    );
+}
+let parsed = serde_json::from_slice(&amp;out.stdout)?;  // saída útil → parse JSON</code></pre>
+        <p>Princípio: <code>println!</code> escreve em stdout, <code>eprintln!</code> escreve em stderr.</p>
+      </details>
+    </section>
+
+    <!-- =========== 4. ARQUITETURA =========== -->
+    <section>
+      <h2 id="arquitetura">4. Arquitetura do Projeto</h2>
+      <p>O programa segue uma cadeia linear simples. Toda chamada começa em <code>main</code> e desce:</p>
+      <pre><code>Terminal
+  ↓
+$ snapg save "antes de atualizar"
+  ↓
+src/main.rs         (parseia argumentos, garante sudo, despacha)
+  ↓
+src/cli.rs          (define quais comandos existem — usado por main)
+  ↓
+src/sudo.rs         (se não for root, reexecuta com sudo)
+  ↓
+src/commands.rs     (orquestra: aqui mora a lógica de alto nível)
+  ↓
+src/snapper.rs      ─┐
+src/group.rs         │  fazem o trabalho concreto
+src/btrfs.rs         │
+src/rollback.rs      │
+src/boot.rs         ─┘</code></pre>
+
+      <p>A camada <strong>commands</strong> é o coração. É ela que conhece todos os outros módulos e os encaixa em um fluxo. Os módulos mais baixos (<code>snapper</code>, <code>btrfs</code>, <code>boot</code>) <strong>não conhecem</strong> uns aos outros — só sabem chamar comandos externos.</p>
+    </section>
+
+    <!-- =========== 5. FLUXOS =========== -->
+    <section>
+      <h2 id="fluxos">5. Fluxo dos Comandos</h2>
+
+      <h3><code>snapg save "descrição"</code></h3>
+      <div class="flow">
+        <div class="step"><span class="badge">1</span><div><strong>Gera um ID.</strong><br>Em <code>commands::save</code>, a função <code>epoch_now()</code> devolve um número baseado no tempo Unix atual. Esse número vira o <code>snapgroup-id</code> do grupo.</div></div>
+        <div class="step"><span class="badge">2</span><div><strong>Lista configs Snapper.</strong><br><code>snapper::list_configs()</code> chama <code>snapper --jsonout list-configs</code> e devolve algo como <code>["root", "home"]</code>.</div></div>
+        <div class="step"><span class="badge">3</span><div><strong>Mata regret antigo (regra Highlander).</strong><br><code>kill_regrets()</code> monta o top-level e apaga qualquer <code>*_snapg_regret</code> que exista. Um novo save significa "estou aceitando a linha do tempo atual; não preciso mais voltar".</div></div>
+        <div class="step"><span class="badge">4</span><div><strong>Cria os snapshots.</strong><br>Para cada config, <code>snapper::create()</code> chama <code>snapper -c &lt;cfg&gt; create --userdata snapgroup-id=&lt;id&gt;</code>. Todos compartilham o mesmo ID.</div></div>
+      </div>
+
+      <h3><code>snapg list</code></h3>
+      <p>Lista os grupos existentes. O trabalho principal é em <code>group::list_groups()</code>: ele varre todos os snapshots de todas as configs, lê o <code>snapgroup-id</code> de cada um, e agrupa os que compartilham o mesmo ID em um <code>Group</code>. Ordena do mais recente pro mais antigo. Por fim, <code>commands::list</code> ainda chama <code>show_regret_status()</code> pra avisar se existe um regret ativo.</p>
+
+      <h3><code>snapg restore</code></h3>
+      <div class="flow">
+        <div class="step"><span class="badge">1</span><div><strong>Carrega checkpoints e monta top-level.</strong><br><code>group::list_groups()</code> + <code>btrfs::mount_toplevel()</code>.</div></div>
+        <div class="step"><span class="badge">2</span><div><strong>Procura regret.</strong><br><code>discover_regrets()</code> verifica se existe um <code>*_snapg_regret</code> no top-level. Se sim, vira a primeira opção do menu.</div></div>
+        <div class="step"><span class="badge">3</span><div><strong>Mostra menu TUI.</strong><br><code>dialoguer::Select</code> renderiza a lista. Use setas e <span class="kbd">Enter</span>.</div></div>
+        <div class="step"><span class="badge">4</span><div><strong>Executa.</strong><br>Se você escolheu checkpoint → <code>execute_restore_checkpoint()</code> chama <code>rollback::rollback_group()</code>. Se escolheu regret → <code>execute_restore_regret()</code> chama <code>rollback::revert_regret()</code>.</div></div>
+        <div class="step"><span class="badge">5</span><div><strong>Sincroniza /boot se for FAT32.</strong><br>Se <code>/boot</code> está em vfat (legado), <code>boot::sync_fat32()</code> copia o vmlinuz novo, regenera initramfs e atualiza hashes do Limine.</div></div>
+        <div class="step"><span class="badge">6</span><div><strong>Pergunta se quer reiniciar.</strong><br><code>prompt_reboot()</code> roda <code>systemctl reboot -i</code> (o <code>-i</code> ignora inhibitors da sessão gráfica).</div></div>
+      </div>
+
+      <h3><code>snapg delete</code></h3>
+      <p>Sem <code>-y</code>: usa <code>dialoguer::MultiSelect</code> pra você marcar quais checkpoints apagar (com <span class="kbd">Espaço</span>). Com <code>-y</code>: apaga só o mais recente, sem perguntar — mantido por compatibilidade com scripts.</p>
+
+      <h3><code>snapg boot-clean</code> <span class="tag">interno</span></h3>
+      <p>Comando escondido (<code>#[command(hide = true)]</code> em <code>cli.rs</code>). É invocado pelo <code>snapg-cleanup.service</code> no boot seguinte a uma restauração de regret. Ele:</p>
+      <ol>
+        <li>Monta o top-level.</li>
+        <li>Procura subvolumes com nome <code>*_snapg_discard_*</code> (sobras da restauração de regret — eram o sistema vivo antes do swap).</li>
+        <li>Apaga cada um.</li>
+        <li>Roda <code>systemctl disable snapg-cleanup.service</code> pra se desarmar.</li>
+      </ol>
+    </section>
+
+    <!-- =========== 6. RUST NO PROJETO =========== -->
+    <section>
+      <h2 id="rust-projeto">6. Rust no Projeto (em contexto)</h2>
+      <p>Vimos os conceitos isolados na seção 3. Aqui vamos ver os mesmos conceitos aparecendo <strong>juntos</strong>, no código real.</p>
+
+      <details open>
+        <summary>Como o argumento da linha de comando vira código</summary>
+        <p>O crate <code>clap</code> faz a tradução. Você descreve um <code>struct</code>/<code>enum</code> com <em>derive macros</em> e ele monta o parser:</p>
+        <pre><code>// src/cli.rs
+#[derive(Subcommand)]
+pub enum Command {
+    Save { description: Option&lt;String&gt; },
+    Restore,
+    List,
+    Delete { #[arg(short = 'y', long)] yes: bool },
+    #[command(hide = true)]
+    BootClean,
+}</code></pre>
+        <p>Depois, em <code>main.rs</code>:</p>
+        <pre><code>let cli = cli::Cli::parse();    // lê argv, devolve o enum preenchido
+match cli.command { ... }       // despacha por variante</code></pre>
+        <p>Tudo conectado por tipos: o que o usuário digita vira um <em>valor</em> de um <code>enum</code> tipado.</p>
+      </details>
+
+      <details>
+        <summary>Como JSON do Snapper vira struct</summary>
+        <p>Em <code>src/snapper.rs</code>:</p>
+        <pre><code>#[derive(Debug, Deserialize)]
+pub struct Snapshot {
+    pub number: u32,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub date: String,
+    pub user: String,
+    pub description: String,
+    pub cleanup: String,
+    pub userdata: Option&lt;serde_json::Value&gt;,
+}</code></pre>
+        <p>O <code>#[derive(Deserialize)]</code> diz ao <code>serde</code>: "ensine como ler isso de JSON". O <code>#[serde(rename = "type")]</code> resolve o conflito com a palavra reservada <code>type</code> em Rust.</p>
+        <p>O parse acontece em uma linha:</p>
+        <pre><code>let parsed: serde_json::Value = serde_json::from_slice(&amp;out.stdout)?;</code></pre>
+      </details>
+
+      <details>
+        <summary>Como o projeto chama um comando externo com segurança</summary>
+        <p>Padrão repetido em todo lugar:</p>
+        <pre><code>let out = Command::new("snapper")
+    .args(["-c", config, "create", "--description", description])
+    .output()
+    .context("snapper create falhou")?;       // erro de I/O? aborta com contexto
+
+if !out.status.success() {                    // saiu com código != 0?
+    bail!(
+        "snapper create -c {config}: {}",
+        String::from_utf8_lossy(&amp;out.stderr)
+    );
+}</code></pre>
+        <p>Três checagens em cada chamada: (1) o I/O da chamada não falhou? (2) o processo terminou com sucesso? (3) o stdout faz sentido pra parse?</p>
+      </details>
+
+      <details>
+        <summary>Como erros sobem de uma função fundo até a TUI</summary>
+        <p>Cadeia típica num <code>snapg save</code>:</p>
+        <pre><code>main()                       Result&lt;()&gt;
+  ↓
+commands::save()             Result&lt;()&gt;
+  ↓
+snapper::list_configs()?     Result&lt;Vec&lt;String&gt;&gt;
+  ↓
+Command::new("snapper").output()?</code></pre>
+        <p>Cada <code>?</code> é uma "tomada de saída". Se um nível abaixo der erro, a função atual sai com <code>Err</code> imediatamente. O <code>anyhow</code> mantém a corrente: você lê erros como "falhou ao criar snapshot em 'home': snapper create -c home: ENOSPC".</p>
+      </details>
+    </section>
+
+    <!-- =========== 7. ARQUIVO POR ARQUIVO =========== -->
+    <section>
+      <h2 id="arquivos">7. Arquivo por Arquivo</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Arquivo</th>
+            <th>Responsabilidade</th>
+            <th>Quem chama</th>
+            <th>Funções principais</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="file" data-label="Arquivo">main.rs</td>
+            <td data-label="Responsabilidade">Ponto de entrada. Parseia argumentos, garante root, despacha.</td>
+            <td data-label="Quem chama">kernel/shell</td>
+            <td data-label="Funções principais"><code>main()</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">cli.rs</td>
+            <td data-label="Responsabilidade">Define os comandos aceitos via <code>clap</code>.</td>
+            <td data-label="Quem chama">main</td>
+            <td data-label="Funções principais"><code>Cli</code>, <code>Command</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">sudo.rs</td>
+            <td data-label="Responsabilidade">Se não é root, reexecuta com <code>sudo</code>.</td>
+            <td data-label="Quem chama">main</td>
+            <td data-label="Funções principais"><code>ensure_root()</code>, <code>current_uid()</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">commands.rs</td>
+            <td data-label="Responsabilidade">Orquestra os comandos. É o "regente" que conhece todos os outros módulos.</td>
+            <td data-label="Quem chama">main</td>
+            <td data-label="Funções principais"><code>save</code>, <code>restore</code>, <code>list</code>, <code>delete</code>, <code>boot_clean</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">snapper.rs</td>
+            <td data-label="Responsabilidade">Ponte com o comando externo <code>snapper</code> (cria/lista/apaga snapshots, lê configs).</td>
+            <td data-label="Quem chama">commands, group</td>
+            <td data-label="Funções principais"><code>list_configs</code>, <code>list</code>, <code>create</code>, <code>delete</code>, <code>config_subvolume</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">group.rs</td>
+            <td data-label="Responsabilidade">Transforma snapshots soltos em grupos pelo <code>snapgroup-id</code>.</td>
+            <td data-label="Quem chama">commands</td>
+            <td data-label="Funções principais"><code>extract_id</code>, <code>list_groups</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">btrfs.rs</td>
+            <td data-label="Responsabilidade">Ponte com <code>btrfs</code>, <code>mount</code>, <code>findmnt</code>, <code>date</code>. Operações de subvolume.</td>
+            <td data-label="Quem chama">commands, rollback</td>
+            <td data-label="Funções principais"><code>mount_toplevel</code>, <code>create_snapshot</code>, <code>delete_subvolume</code>, <code>subvol_relative_path</code>, <code>fs_uuid</code>, <code>now_local_label</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">rollback.rs</td>
+            <td data-label="Responsabilidade">A parte mais delicada: prepara, troca e desfaz subvolumes em duas fases.</td>
+            <td data-label="Quem chama">commands</td>
+            <td data-label="Funções principais"><code>rollback_group</code>, <code>revert_partial</code>, <code>revert_regret</code>, <code>delete_existing_regrets</code>, <code>regret_name</code></td>
+          </tr>
+          <tr>
+            <td class="file" data-label="Arquivo">boot.rs</td>
+            <td data-label="Responsabilidade">Caso especial: <code>/boot</code> em FAT32. Copia kernel, regenera initramfs, atualiza hashes Limine.</td>
+            <td data-label="Quem chama">commands</td>
+            <td data-label="Funções principais"><code>is_fat32</code>, <code>sync_fat32</code>, <code>refresh_limine_boot_hashes</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>A conexão que importa</h3>
+      <pre><code>main.rs
+  chama cli.rs       (entender o que foi digitado)
+  chama sudo.rs      (virar root se preciso)
+  chama commands.rs  (executar)
+
+commands.rs
+  chama snapper.rs   (falar com Snapper)
+  chama group.rs     (juntar snapshots em checkpoints)
+  chama btrfs.rs     (montar top-level, mexer em subvolumes)
+  chama rollback.rs  (trocar subvolumes com segurança)
+  chama boot.rs      (sincronizar /boot FAT32, se for o caso)</code></pre>
+
+      <p>Veja que <code>rollback.rs</code> também chama <code>btrfs.rs</code> e <code>snapper.rs</code>, mas <strong>não</strong> chama <code>commands.rs</code>. A dependência só desce — nunca sobe. Isso é desenhado de propósito: módulos baixos não conhecem a UI, só fazem o trabalho.</p>
+    </section>
+
+    <!-- =========== 8. PERIGOS =========== -->
+    <section>
+      <h2 id="perigos">8. Pontos Perigosos</h2>
+
+      <div class="panel danger">
+        <h3>Este programa mexe em rollback do sistema</h3>
+        <p>Erros em <code>rollback.rs</code>, <code>btrfs.rs</code> ou <code>boot.rs</code> podem deixar o sistema exigindo recuperação manual via live USB. Qualquer mudança aqui deve ser testada em VM antes.</p>
+      </div>
+
+      <details open>
+        <summary><code>rollback.rs</code> é o centro de risco</summary>
+        <p>A função <code>rollback_group()</code> tem duas fases bem definidas:</p>
+        <p><strong>Fase 1 — Preparação.</strong> Cria cópias writable dos snapshots em nomes intermediários (<code>@.snapgroup_prep</code>, <code>@home.snapgroup_prep</code>). Operação cara (metadata copy), pode falhar por falta de espaço. <strong>Se falhar aqui, o sistema vivo ainda não foi tocado.</strong> O programa apaga os preps e aborta limpo.</p>
+        <p><strong>Fase 2 — Commit.</strong> Renomeia os subvolumes: <code>@</code> → <code>@_snapg_regret</code>, depois <code>@.snapgroup_prep</code> → <code>@</code>. Renames são <em>metadata-only</em> e atômicos por syscall. Quase nunca falham. Se falhar no meio de um grupo, o programa pergunta se você quer reverter automaticamente.</p>
+      </details>
+
+      <details>
+        <summary>Mount sobrevive ao rename — por quê?</summary>
+        <p>O kernel Linux referencia mounts por <em>inode</em>, não por path. Quando você faz <code>mv @ @_snapg_regret</code> com <code>@</code> montado como <code>/</code>, o mount continua válido — você ainda está rodando dentro do mesmo subvolume, ele só mudou de nome no top-level.</p>
+        <p>A troca real só vale no <strong>próximo boot</strong>, quando o fstab/initramfs vai procurar <code>@</code> e encontrar o subvolume novo. Daí o <code>prompt_reboot()</code> no fim.</p>
+      </details>
+
+      <details>
+        <summary><code>.snapshots</code> aninhado precisa ser preservado</summary>
+        <p>No layout padrão, <code>/.snapshots</code> e <code>/home/.snapshots</code> são <em>subvolumes filhos</em> dentro de <code>@</code> e <code>@home</code>. Quando você renomeia <code>@</code> pra <code>@_snapg_regret</code>, o <code>.snapshots</code> vai junto. O código então move <code>.snapshots</code> de volta pro novo <code>@</code> ativo. Veja <code>commit_prep()</code> em <code>rollback.rs</code>, etapa 3.</p>
+      </details>
+
+      <details>
+        <summary><code>/boot</code> em FAT32 é caso especial</summary>
+        <p>Se <code>/boot</code> está fora do Btrfs (FAT32 / vfat), ele <strong>não</strong> volta automaticamente com o snapshot. Kernel e initramfs no <code>/boot</code> podem corresponder a uma versão diferente do sistema que você acabou de restaurar.</p>
+        <p>Por isso <code>boot::sync_fat32()</code>:</p>
+        <ol>
+          <li>Descobre a versão do kernel dentro do snapshot restaurado (<code>/usr/lib/modules/&lt;kver&gt;/vmlinuz</code>).</li>
+          <li>Faz backup dos arquivos atuais de <code>/boot</code>.</li>
+          <li>Copia o <code>vmlinuz</code> do snapshot pra <code>/boot</code>.</li>
+          <li>Regenera o <code>initramfs</code> usando <code>mkinitcpio -r &lt;snapshot&gt; -c &lt;snapshot&gt;/etc/mkinitcpio.conf</code>.</li>
+          <li>Atualiza os hashes BLAKE2B no <code>/boot/limine.conf</code> pra refletir os arquivos novos.</li>
+        </ol>
+        <p>Se qualquer passo falhar, o backup de <code>/boot</code> é restaurado.</p>
+      </details>
+
+      <details>
+        <summary>"Regra Highlander": só existe um regret</summary>
+        <p>O regret é único por design. Toda vez que você faz um novo <code>save</code> ou <code>restore</code>, o regret anterior é deletado (<code>kill_regrets</code> / <code>delete_existing_regrets</code>).</p>
+        <p>Razão: regrets ocupam espaço (são cópias writable). Se acumulassem, o disco entupiria. E semanticamente, "estado anterior à última restauração" só faz sentido se for um único estado.</p>
+      </details>
+    </section>
+
+    <!-- =========== 9. ROTEIRO =========== -->
+    <section>
+      <h2 id="roteiro">9. Roteiro de Estudo</h2>
+      <p>Use esta ordem pra estudar sem se perder:</p>
+      <div class="flow">
+        <div class="step"><span class="badge">1</span><div><strong>Leia <code>src/main.rs</code>.</strong><br>É pequeno (23 linhas). Mostra a ideia central: parsear, garantir sudo, despachar via <code>match</code>.</div></div>
+        <div class="step"><span class="badge">2</span><div><strong>Leia <code>src/cli.rs</code>.</strong><br>Veja como o argumento de terminal vira um <code>enum</code>.</div></div>
+        <div class="step"><span class="badge">3</span><div><strong>Leia <code>src/snapper.rs</code>.</strong><br>O padrão "comando externo + parse de saída" se repete em todo lugar. Aqui ele aparece limpo.</div></div>
+        <div class="step"><span class="badge">4</span><div><strong>Leia <code>src/group.rs</code>.</strong><br>Curto e cristalino. Veja como o <code>snapgroup-id</code> transforma snapshots soltos em checkpoint.</div></div>
+        <div class="step"><span class="badge">5</span><div><strong>Leia <code>src/commands.rs::save</code>.</strong><br>Fluxo mais simples do commands: descobrir configs, matar regret, criar snapshots.</div></div>
+        <div class="step"><span class="badge">6</span><div><strong>Leia <code>src/btrfs.rs</code>.</strong><br>Mais comandos externos, agora envolvendo Btrfs. Funções pequenas e independentes.</div></div>
+        <div class="step"><span class="badge">7</span><div><strong>Só depois leia <code>src/rollback.rs</code>.</strong><br>Esse arquivo exige entender Btrfs, subvolumes e o motivo da troca por renomeação. Leia já com a ideia das duas fases na cabeça.</div></div>
+        <div class="step"><span class="badge">8</span><div><strong>Por último, <code>src/boot.rs</code>.</strong><br>Caso especial (FAT32). Pode ficar pra depois se você não tem <code>/boot</code> em vfat.</div></div>
+      </div>
+
+      <div class="panel note">
+        <h3>Exercício 1 — Siga o <code>snapg list</code> com o dedo</h3>
+        <p>Abra <code>src/main.rs</code> e siga o comando até o fim:</p>
+        <pre><code>main()
+  → match Command::List
+  → commands::list()
+  → group::list_groups()
+  → para cada config:
+      snapper::list_configs()
+      snapper::list(config)
+      group::extract_id(snapshot)
+  → agrupa por snapgroup-id
+  → ordena (mais recente primeiro)
+  → imprime
+  → show_regret_status() (monta toplevel, procura regret)</code></pre>
+        <p>Se você consegue explicar esse caminho em voz alta, já entendeu a espinha dorsal do projeto.</p>
+      </div>
+
+      <div class="panel note">
+        <h3>Exercício 2 — Identifique todos os comandos externos</h3>
+        <p>Procure por <code>Command::new(</code> no projeto (com <code>grep -rn 'Command::new(' src/</code>) e liste quais binários externos o <code>snapg</code> usa. Você deve achar pelo menos: <code>snapper</code>, <code>btrfs</code>, <code>mount</code>, <code>umount</code>, <code>findmnt</code>, <code>date</code>, <code>uname</code>, <code>mkinitcpio</code>, <code>b2sum</code>, <code>systemctl</code>, <code>sudo</code>.</p>
+        <p>O projeto inteiro é uma orquestração desses binários, com lógica Rust no meio.</p>
+      </div>
+
+      <div class="panel tip">
+        <h3>Exercício 3 — Quebre o <code>match</code></h3>
+        <p>Imagine que você adicionou uma variante nova no enum <code>Command</code>, ex: <code>Status</code>. O que o compilador vai reclamar? Onde? Por que isso é uma boa coisa?</p>
+        <p>Esse é o tipo de garantia que faz Rust não te deixar esquecer de tratar um caso. Aproveite.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Arquivo gerado pra estudo local do projeto <code>snapgroup</code>. Estático: pode ser enviado pro celular e aberto direto no navegador, sem servidor.</p>
+  </footer>
+</body>
+</html>

@@ -119,6 +119,34 @@ pub fn now_local_label() -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Extrai o campo `Creation time` da saída de `btrfs subvolume show`.
+/// Retorna a string bruta (ex: "2026-04-30 17:32:41 -0400").
+pub fn subvol_creation_time(path: &Path) -> Result<String> {
+    let out = Command::new("btrfs")
+        .args(["subvolume", "show"])
+        .arg(path)
+        .output()
+        .context("btrfs subvolume show falhou")?;
+    if !out.status.success() {
+        bail!(
+            "show {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    for line in s.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Creation time:") {
+            return Ok(rest.trim().to_string());
+        }
+    }
+    bail!(
+        "Creation time não encontrado em btrfs subvolume show {}",
+        path.display()
+    )
+}
+
 pub fn fs_uuid(mountpoint: &str) -> Result<String> {
     let out = Command::new("findmnt")
         .args(["-no", "UUID", mountpoint])
