@@ -688,7 +688,11 @@ fn abort_reboot_boot_desync(e: anyhow::Error, recovery: &str) -> Result<()> {
     eprintln!("  REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado.");
     eprintln!();
     eprintln!("  Recuperação: {recovery}");
-    Ok(())
+    // Erro explícito: o reboot foi bloqueado e a restauração não concluiu.
+    // Retornar Ok(()) aqui faria o processo sair com código 0 e mascarar a
+    // falha de qualquer chamador que cheque $?. A mensagem detalhada acima já
+    // foi impressa; o anyhow só acrescenta o resumo de uma linha.
+    bail!("restauração incompleta: /boot dessincronizado, reboot bloqueado")
 }
 
 fn prompt_reboot() -> Result<()> {
