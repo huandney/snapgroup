@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,38 +18,41 @@ pub fn is_fat32() -> bool {
         .unwrap_or(false)
 }
 
-/// Sincroniza o kernel e initramfs em /boot (FAT32) com o subvolume restaurado.
+/// Sincroniza kernel e initramfs em /boot (FAT32) com o subvolume restaurado.
 ///
-/// Fluxo:
-///  1. Descobre a versão do kernel no snapshot restaurado (via /usr/lib/modules/)
-///  2. Faz backup dos ficheiros atuais em /boot
-///  3. Copia o vmlinuz do snapshot para /boot
-///  4. Regenera o initramfs usando configuração/módulos do root restaurado
-///  5. Atualiza hashes BLAKE2B do Limine para os novos artefatos
+/// Para cada kernel ativo em /boot:
+///   - localiza /usr/lib/modules/<kver>/ no snapshot cujo `pkgbase` casa
+///   - copia o vmlinuz daquele kver para /boot
+///   - regenera o initramfs com `mkinitcpio -k <kver> -r <restored_root>`
 ///
-/// `restored_root` é o path absoluto do novo @ no toplevel (ex: /run/snapgroup/<uuid>/@).
+/// No final, recalcula hashes BLAKE2B em /boot/limine.conf. Sempre roda
+/// quando /boot é FAT32 — o running kernel reportado por `uname -r` é só
+/// o que carregou no boot atual, não reflete o estado escrito em /boot
+/// (um `pacman -Syu` sem reboot deixa kernel novo no FAT32 e antigo
+/// rodando; pular sync nesse caso quebra o boot seguinte).
 pub fn sync_fat32(restored_root: &Path) -> Result<()> {
     if !is_fat32() {
         return Ok(());
     }
 
-    let modules_dir = restored_root.join("usr/lib/modules");
-    let snap_kver = discover_kernel_version(&modules_dir)?;
-    let current_kver = current_kernel_version()?;
+    let groups = discover_kernel_groups()?;
+    if groups.is_empty() {
+        bail!("nenhum vmlinuz/initramfs ativo encontrado em /boot");
+    }
 
-    if snap_kver == current_kver {
-        println!("  boot sync: kernel idêntico ({snap_kver}), nada a fazer");
+    // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
+    // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
+    // de interrupção junto. O caminho pesado só roda quando o kernel difere.
+    if boot_matches_snapshot(restored_root, &groups)? {
+        println!("  boot sync: /boot já corresponde ao snapshot, nada a fazer");
         return Ok(());
     }
 
-    println!("  boot sync: kernel mudou {current_kver} → {snap_kver}");
+    let critical = critical_boot_files(&groups);
+    backup_boot_files(&critical)?;
 
-    let boot_files = discover_boot_files()?;
-
-    // 1. Backup dos ficheiros atuais
-    backup_boot_files(&boot_files)?;
-
-    let result = sync_fat32_inner(restored_root, &modules_dir, &snap_kver, &boot_files);
+    let result = sync_inner(restored_root, &groups)
+        .and_then(|()| verify_synced(restored_root, &groups));
     if let Err(e) = result {
         eprintln!("  boot sync: falhou, restaurando backup de /boot");
         if let Err(re) = restore_backup() {
@@ -58,59 +62,286 @@ pub fn sync_fat32(restored_root: &Path) -> Result<()> {
     }
 
     let _ = fs::remove_dir_all(boot_backup_dir());
-    println!("  boot sync: kernel e initramfs sincronizados para {snap_kver}");
+    println!("  boot sync: kernel, initramfs e limine.conf sincronizados");
     Ok(())
 }
 
-fn sync_fat32_inner(
-    restored_root: &Path,
-    modules_dir: &Path,
-    snap_kver: &str,
-    boot_files: &[BootFile],
-) -> Result<()> {
-    // 2. Copiar vmlinuz do snapshot para /boot
-    let snap_vmlinuz = modules_dir.join(snap_kver).join("vmlinuz");
-    if !snap_vmlinuz.exists() {
+fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+    let modules_root = restored_root.join("usr/lib/modules");
+    if !modules_root.exists() {
         bail!(
-            "vmlinuz não encontrado no snapshot: {}",
-            snap_vmlinuz.display()
+            "/usr/lib/modules não existe no snapshot: {}",
+            modules_root.display()
         );
     }
-    for bf in boot_files {
-        if !bf.is_vmlinuz {
-            continue;
-        }
-        fs::copy(&snap_vmlinuz, &bf.path).with_context(|| {
+    let config = restored_root.join("etc/mkinitcpio.conf");
+    if !config.exists() {
+        bail!("mkinitcpio.conf não encontrado em {}", config.display());
+    }
+    let pkgbase_map = read_pkgbase_map(&modules_root)?;
+
+    for group in groups {
+        let kver = pkgbase_map.get(&group.kernel_name).with_context(|| {
             format!(
-                "copiar vmlinuz {} → {}",
-                snap_vmlinuz.display(),
-                bf.path.display()
+                "snapshot não contém módulos para o kernel '{}' (procurado em {})",
+                group.kernel_name,
+                modules_root.display()
             )
         })?;
-        println!("  boot sync: vmlinuz copiado → {}", bf.path.display());
+        let snap_vmlinuz = modules_root.join(kver).join("vmlinuz");
+        if !snap_vmlinuz.exists() {
+            bail!(
+                "vmlinuz não encontrado para {kver}: {}",
+                snap_vmlinuz.display()
+            );
+        }
+
+        for dest in &group.vmlinuz_paths {
+            fs::copy(&snap_vmlinuz, dest).with_context(|| {
+                format!(
+                    "copiar vmlinuz {} → {}",
+                    snap_vmlinuz.display(),
+                    dest.display()
+                )
+            })?;
+            println!("  boot sync: vmlinuz ({kver}) → {}", dest.display());
+        }
+
+        for dest in &group.initramfs_paths {
+            regen_initramfs(&config, kver, restored_root, dest)?;
+            println!(
+                "  boot sync: initramfs regenerado ({kver}) → {}",
+                dest.display()
+            );
+        }
     }
 
-    // 3. Regenerar initramfs com os módulos/configuração do snapshot.
-    regen_initramfs(snap_kver, restored_root, boot_files)?;
-
-    // 4. Se o Limine tinha hashes para os artefatos antigos, eles não valem mais.
     refresh_limine_boot_hashes().context("atualizar hashes do limine.conf")?;
     Ok(())
 }
 
-/// Restaura os ficheiros de boot do backup (usado em caso de rollback do rollback).
-#[allow(dead_code)]
+/// True se cada vmlinuz ativo em /boot já é byte-idêntico ao vmlinuz do kver
+/// correspondente no snapshot restaurado — a pergunta "o /boot já casa com o
+/// root?". Serve a dois usos: gate de entrada (pular o sync quando nada mudou)
+/// e verificação pós-sync. O sinal certo é o snapshot, não `uname -r` (que só
+/// reflete o kernel que carregou no boot atual). `Err` só para falha real de
+/// leitura/mapeamento; um mismatch é `Ok(false)`, não erro.
+fn boot_matches_snapshot(restored_root: &Path, groups: &[KernelGroup]) -> Result<bool> {
+    let modules_root = restored_root.join("usr/lib/modules");
+    let pkgbase_map = read_pkgbase_map(&modules_root)?;
+    for group in groups {
+        let kver = pkgbase_map.get(&group.kernel_name).with_context(|| {
+            format!("snapshot não tem módulos para '{}'", group.kernel_name)
+        })?;
+        let snap_vmlinuz = modules_root.join(kver).join("vmlinuz");
+        let expected =
+            fs::read(&snap_vmlinuz).with_context(|| format!("ler {}", snap_vmlinuz.display()))?;
+        for dest in &group.vmlinuz_paths {
+            if !dest.exists() {
+                return Ok(false);
+            }
+            let got = fs::read(dest).with_context(|| format!("ler {}", dest.display()))?;
+            if got != expected {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Verificação pós-sync: se o /boot não casa com o snapshot depois de copiar
+/// kernel e regenerar initramfs, o sync não surtiu efeito (parcial/interrompido).
+/// Bootar nesse estado cai em emergency mode (kernel não acha seus módulos, ex:
+/// "unknown filesystem type vfat"), então vira erro explícito em vez de um
+/// reboot silencioso pra um sistema que não sobe.
+fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+    if boot_matches_snapshot(restored_root, groups)? {
+        return Ok(());
+    }
+    bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
+}
+
+fn regen_initramfs(config: &Path, kver: &str, restored_root: &Path, out: &Path) -> Result<()> {
+    let res = Command::new("mkinitcpio")
+        .args(["--nopost", "-c"])
+        .arg(config)
+        .args(["-k", kver, "-r"])
+        .arg(restored_root)
+        .arg("-g")
+        .arg(out)
+        .output()
+        .context("mkinitcpio falhou")?;
+    if !res.status.success() {
+        bail!(
+            "mkinitcpio {kver} → {}: {}",
+            out.display(),
+            String::from_utf8_lossy(&res.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Mapa pkgbase → kver. Lê /usr/lib/modules/<kver>/pkgbase do snapshot e
+/// inverte para "linux-cachyos" → "7.0.1-1-cachyos". O snapshot precisa
+/// ter `pkgbase` em cada dir de módulos (padrão Arch desde 2021); kver dirs
+/// sem pkgbase são ignorados.
+fn read_pkgbase_map(modules_root: &Path) -> Result<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    for entry in
+        fs::read_dir(modules_root).with_context(|| format!("ler {}", modules_root.display()))?
+    {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let pkgbase_file = entry.path().join("pkgbase");
+        if !pkgbase_file.exists() {
+            continue;
+        }
+        let pkgbase = fs::read_to_string(&pkgbase_file)
+            .with_context(|| format!("ler {}", pkgbase_file.display()))?
+            .trim()
+            .to_string();
+        let kver = entry.file_name().to_string_lossy().into_owned();
+        map.insert(pkgbase, kver);
+    }
+    Ok(map)
+}
+
+/// Grupo de artefatos em /boot pertencentes ao mesmo kernel.
+struct KernelGroup {
+    kernel_name: String,
+    vmlinuz_paths: Vec<PathBuf>,
+    initramfs_paths: Vec<PathBuf>,
+}
+
+/// Varre /boot recursivamente e agrupa vmlinuz-*/initramfs-* por kernel_name
+/// extraído do nome do arquivo (padrão Arch: vmlinuz-linux-cachyos,
+/// initramfs-linux-cachyos[.img]). Layouts BLS e flat saem agrupados juntos
+/// sob o mesmo kernel_name.
+fn discover_kernel_groups() -> Result<Vec<KernelGroup>> {
+    let mut by_name: HashMap<String, KernelGroup> = HashMap::new();
+    scan_boot_dir(Path::new("/boot"), &mut by_name)?;
+    let mut groups: Vec<KernelGroup> = by_name.into_values().collect();
+    groups.sort_by(|a, b| a.kernel_name.cmp(&b.kernel_name));
+    Ok(groups)
+}
+
+fn scan_boot_dir(dir: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
+    let walk = fs::read_dir(dir).with_context(|| format!("ler {}", dir.display()))?;
+    for entry in walk {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if path.is_dir() {
+            if is_ignored_boot_dir(&name) {
+                continue;
+            }
+            scan_boot_dir(&path, out)?;
+            continue;
+        }
+        let Some((kernel_name, is_vmlinuz)) = classify_boot_file(&name) else {
+            continue;
+        };
+        let group = out
+            .entry(kernel_name.to_string())
+            .or_insert_with(|| KernelGroup {
+                kernel_name: kernel_name.to_string(),
+                vmlinuz_paths: Vec::new(),
+                initramfs_paths: Vec::new(),
+            });
+        if is_vmlinuz {
+            group.vmlinuz_paths.push(path);
+        } else {
+            group.initramfs_paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_ignored_boot_dir(name: &str) -> bool {
+    matches!(name, "limine_history" | ".snapg_boot_backup")
+}
+
+/// Classifica um arquivo em /boot como `(kernel_name, is_vmlinuz)`.
+/// - `vmlinuz-linux-cachyos`       → `("linux-cachyos", true)`
+/// - `initramfs-linux-cachyos.img` → `("linux-cachyos", false)`
+///
+/// Fallback initramfs (`initramfs-*-fallback*`) é ignorado: sem preset não
+/// dá pra reconstruir um fallback corretamente, e o do backup vai cobrir a
+/// recuperação se algo falhar.
+fn classify_boot_file(name: &str) -> Option<(&str, bool)> {
+    if let Some(rest) = name.strip_prefix("vmlinuz-") {
+        return Some((strip_img_ext(rest), true));
+    }
+    if let Some(rest) = name.strip_prefix("initramfs-") {
+        let stripped = strip_img_ext(rest);
+        if stripped.contains("fallback") {
+            return None;
+        }
+        return Some((stripped, false));
+    }
+    None
+}
+
+fn strip_img_ext(s: &str) -> &str {
+    s.strip_suffix(".img").unwrap_or(s)
+}
+
+/// Conjunto de arquivos críticos para backup: vmlinuz/initramfs ativos de
+/// todos os kernels descobertos + limine.conf (e .old, se existir).
+fn critical_boot_files(groups: &[KernelGroup]) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for g in groups {
+        files.extend(g.vmlinuz_paths.iter().cloned());
+        files.extend(g.initramfs_paths.iter().cloned());
+    }
+    for extra in ["/boot/limine.conf", "/boot/limine.conf.old"] {
+        let p = Path::new(extra);
+        if p.exists() {
+            files.push(p.to_path_buf());
+        }
+    }
+    files
+}
+
+fn boot_backup_dir() -> PathBuf {
+    PathBuf::from("/boot/.snapg_boot_backup")
+}
+
+fn backup_boot_files(files: &[PathBuf]) -> Result<()> {
+    let backup = boot_backup_dir();
+    if backup.exists() {
+        let _ = fs::remove_dir_all(&backup);
+    }
+    fs::create_dir_all(&backup).context("criar diretório de backup do boot")?;
+
+    for src in files {
+        let rel = src
+            .strip_prefix("/boot")
+            .with_context(|| format!("{} não está dentro de /boot", src.display()))?;
+        let dest = backup.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("criar {}", parent.display()))?;
+        }
+        fs::copy(src, &dest)
+            .with_context(|| format!("backup {} → {}", src.display(), dest.display()))?;
+    }
+    println!("  boot sync: backup em {}", backup.display());
+    Ok(())
+}
+
+/// Restaura os ficheiros de boot do backup (recovery do próprio sync_fat32).
 pub fn restore_backup() -> Result<()> {
     if !is_fat32() {
         return Ok(());
     }
-    let backup_dir = boot_backup_dir();
-    if !backup_dir.exists() {
+    let backup = boot_backup_dir();
+    if !backup.exists() {
         return Ok(());
     }
-
-    restore_backup_dir(&backup_dir, Path::new("/boot"))?;
-    let _ = fs::remove_dir_all(&backup_dir);
+    restore_backup_dir(&backup, Path::new("/boot"))?;
+    let _ = fs::remove_dir_all(&backup);
     println!("  boot sync: ficheiros de boot restaurados do backup");
     Ok(())
 }
@@ -141,220 +372,15 @@ fn restore_backup_dir(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Descobre a versão do kernel dentro de /usr/lib/modules/ de um subvolume.
-/// Retorna a primeira diretoria que contém um ficheiro `vmlinuz`.
-fn discover_kernel_version(modules_dir: &Path) -> Result<String> {
-    if !modules_dir.exists() {
-        bail!("diretório de módulos não existe: {}", modules_dir.display());
-    }
-
-    let mut entries: Vec<_> = fs::read_dir(modules_dir)
-        .with_context(|| format!("ler {}", modules_dir.display()))?
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().map(|ft| ft.is_dir()).unwrap_or(false)
-                && e.path().join("vmlinuz").exists()
-        })
-        .collect();
-
-    if entries.is_empty() {
-        bail!(
-            "nenhuma versão de kernel encontrada em {}",
-            modules_dir.display()
-        );
-    }
-
-    // Se houver múltiplas versões, pegar a mais recente por mtime.
-    entries.sort_by(|a, b| {
-        let ma = a.metadata().and_then(|m| m.modified()).ok();
-        let mb = b.metadata().and_then(|m| m.modified()).ok();
-        mb.cmp(&ma)
-    });
-
-    Ok(entries[0].file_name().to_string_lossy().into_owned())
-}
-
-/// Versão do kernel atual (rodando).
-fn current_kernel_version() -> Result<String> {
-    let out = Command::new("uname")
-        .arg("-r")
-        .output()
-        .context("uname -r falhou")?;
-    if !out.status.success() {
-        bail!("uname -r: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-struct BootFile {
-    path: PathBuf,
-    is_vmlinuz: bool,
-}
-
-/// Descobre vmlinuz e initramfs em /boot (BLS ou flat layout).
-fn discover_boot_files() -> Result<Vec<BootFile>> {
-    let mut found = Vec::new();
-
-    // BLS layout: /boot/<machine-id>/<kernel-name>/{vmlinuz,initramfs}*
-    let machine_id = fs::read_to_string("/etc/machine-id")
-        .context("ler /etc/machine-id")?
-        .trim()
-        .to_string();
-
-    let bls_dir = Path::new("/boot").join(&machine_id);
-    if bls_dir.exists() {
-        scan_boot_dir(&bls_dir, &mut found)?;
-    }
-
-    // Flat layout: /boot/vmlinuz-*, /boot/initramfs-*
-    if found.is_empty() {
-        scan_boot_dir(Path::new("/boot"), &mut found)?;
-    }
-
-    if found.is_empty() {
-        bail!("nenhum vmlinuz ou initramfs encontrado em /boot");
-    }
-    Ok(found)
-}
-
-/// Varre diretoria à procura de vmlinuz-* e initramfs-* ativos.
-/// Diretórios de histórico/backup do bootloader nunca são destinos ativos.
-fn scan_boot_dir(dir: &Path, out: &mut Vec<BootFile>) -> Result<()> {
-    let walk = fs::read_dir(dir).with_context(|| format!("ler {}", dir.display()))?;
-    for entry in walk {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if path.is_dir() {
-            if is_ignored_boot_dir(&name) {
-                continue;
-            }
-            scan_boot_dir(&path, out)?;
-            continue;
-        }
-        if name.starts_with("vmlinuz") {
-            out.push(BootFile {
-                path,
-                is_vmlinuz: true,
-            });
-        } else if name.starts_with("initramfs") {
-            out.push(BootFile {
-                path,
-                is_vmlinuz: false,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn is_ignored_boot_dir(name: &str) -> bool {
-    matches!(name, "limine_history" | ".snapg_boot_backup")
-}
-
-fn boot_backup_dir() -> PathBuf {
-    PathBuf::from("/boot/.snapg_boot_backup")
-}
-
-fn backup_boot_files(files: &[BootFile]) -> Result<()> {
-    let backup = boot_backup_dir();
-    if backup.exists() {
-        let _ = fs::remove_dir_all(&backup);
-    }
-    fs::create_dir_all(&backup).context("criar diretório de backup do boot")?;
-
-    for bf in files {
-        let rel = bf
-            .path
-            .strip_prefix("/boot")
-            .with_context(|| format!("{} não está dentro de /boot", bf.path.display()))?;
-        let dest = backup.join(rel);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("criar {}", parent.display()))?;
-        }
-        fs::copy(&bf.path, &dest)
-            .with_context(|| format!("backup {} → {}", bf.path.display(), dest.display()))?;
-    }
-    println!(
-        "  boot sync: backup dos ficheiros atuais em {}",
-        backup.display()
-    );
-    Ok(())
-}
-
-/// Regenera o initramfs para a versão de kernel do snapshot.
-///
-/// Usa `-r <restored_root>` para buscar os módulos no snapshot restaurado e
-/// `-c <restored_root>/etc/mkinitcpio.conf` para evitar ler configuração do
-/// root vivo, que pode estar numa linha do tempo diferente.
-fn regen_initramfs(snap_kver: &str, restored_root: &Path, boot_files: &[BootFile]) -> Result<()> {
-    let preset = find_mkinitcpio_preset(restored_root)?;
-    let config = restored_root.join("etc/mkinitcpio.conf");
-    if !config.exists() {
-        bail!("mkinitcpio.conf não encontrado em {}", config.display());
-    }
-
-    let initramfs_files: Vec<_> = boot_files.iter().filter(|bf| !bf.is_vmlinuz).collect();
-    if initramfs_files.is_empty() {
-        bail!("nenhum initramfs ativo encontrado em /boot");
-    }
-
-    for bf in initramfs_files {
-        let out = Command::new("mkinitcpio")
-            .args(["--nopost", "-c"])
-            .arg(&config)
-            .args(["-k", snap_kver, "-r"])
-            .arg(restored_root)
-            .arg("-g")
-            .arg(&bf.path)
-            .output()
-            .context("mkinitcpio falhou")?;
-        if !out.status.success() {
-            bail!(
-                "mkinitcpio ({preset}) -> {}: {}",
-                bf.path.display(),
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        println!("  boot sync: initramfs regenerado → {}", bf.path.display());
-    }
-    Ok(())
-}
-
-/// Descobre o preset do mkinitcpio (ex: "linux-cachyos").
-fn find_mkinitcpio_preset(restored_root: &Path) -> Result<String> {
-    let preset_dir = restored_root.join("etc/mkinitcpio.d");
-    if !preset_dir.exists() {
-        bail!(
-            "diretório de presets não existe em {}",
-            preset_dir.display()
-        );
-    }
-    for entry in
-        fs::read_dir(&preset_dir).with_context(|| format!("ler {}", preset_dir.display()))?
-    {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some(preset) = name.strip_suffix(".preset") {
-            return Ok(preset.to_string());
-        }
-    }
-    bail!(
-        "nenhum preset .preset encontrado em {}",
-        preset_dir.display()
-    )
-}
-
 fn refresh_limine_boot_hashes() -> Result<()> {
     let path = Path::new("/boot/limine.conf");
     if !path.exists() {
         return Ok(());
     }
-
     let content = fs::read_to_string(path).context("ler /boot/limine.conf")?;
     let had_trailing_newline = content.ends_with('\n');
     let mut changed = false;
     let mut lines = Vec::new();
-
     for line in content.lines() {
         let refreshed = refresh_limine_hash_for_line(line)?;
         if refreshed != line {
@@ -362,11 +388,9 @@ fn refresh_limine_boot_hashes() -> Result<()> {
         }
         lines.push(refreshed);
     }
-
     if !changed {
         return Ok(());
     }
-
     let mut updated = lines.join("\n");
     if had_trailing_newline {
         updated.push('\n');
@@ -432,7 +456,7 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::limine_boot_path_from_line;
+    use super::{classify_boot_file, limine_boot_path_from_line};
     use std::path::Path;
 
     #[test]
@@ -457,5 +481,44 @@ mod tests {
     fn keeps_non_boot_path_lines_unchanged() {
         let line = "  cmdline: quiet rw rootflags=subvol=/@";
         assert_eq!(limine_boot_path_from_line(line), None);
+    }
+
+    #[test]
+    fn classifies_vmlinuz() {
+        assert_eq!(
+            classify_boot_file("vmlinuz-linux-cachyos"),
+            Some(("linux-cachyos", true))
+        );
+    }
+
+    #[test]
+    fn classifies_initramfs_plain() {
+        assert_eq!(
+            classify_boot_file("initramfs-linux-cachyos"),
+            Some(("linux-cachyos", false))
+        );
+    }
+
+    #[test]
+    fn classifies_initramfs_with_img_ext() {
+        assert_eq!(
+            classify_boot_file("initramfs-linux-cachyos.img"),
+            Some(("linux-cachyos", false))
+        );
+    }
+
+    #[test]
+    fn skips_fallback_initramfs() {
+        assert_eq!(
+            classify_boot_file("initramfs-linux-cachyos-fallback.img"),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_files() {
+        assert_eq!(classify_boot_file("intel-ucode.img"), None);
+        assert_eq!(classify_boot_file("limine.conf"), None);
+        assert_eq!(classify_boot_file("limine-splash.png"), None);
     }
 }

@@ -255,12 +255,17 @@ fn execute_restore_checkpoint(
             }
 
             // Sincroniza kernel/initramfs em /boot (FAT32) com o snapshot restaurado.
+            // Em FAT32, falha de sync = /boot descasado do root → reboot bricka o
+            // sistema. Bloqueia o reboot em vez de só avisar.
             if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
                 let restored_root = mount_path.join(&root.current_subvol);
                 if let Err(e) = boot::sync_fat32(&restored_root) {
-                    eprintln!("⚠ sincronização do boot falhou: {e:#}");
-                    eprintln!("  o rollback BTRFS foi aplicado, mas /boot pode estar dessincronizado.");
-                    eprintln!("  verifique manualmente antes de reiniciar.");
+                    return abort_reboot_boot_desync(
+                        e,
+                        "rode 'snapg restore' e selecione o Regret \
+                         (⟲ Estado Anterior à Restauração) para voltar ao \
+                         sistema bootável atual antes de qualquer reboot.",
+                    );
                 }
             }
 
@@ -306,8 +311,12 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
         let restored_root_path = mount_path.join(&root_member.current_subvol);
 
         if let Err(e) = boot::sync_fat32(&restored_root_path) {
-            eprintln!("⚠ sincronização do boot falhou: {e:#}");
-            eprintln!("  verifique manualmente antes de reiniciar.");
+            return abort_reboot_boot_desync(
+                e,
+                "verifique /boot manualmente (vmlinuz/initramfs vs \
+                 /usr/lib/modules do root) antes de reiniciar; não reinicie \
+                 enquanto não corresponderem.",
+            );
         }
 
         // Arma o cleanup no rootfs RESTAURADO (o que vai bootar).
@@ -666,6 +675,20 @@ fn confirm(prompt: &str) -> Result<bool> {
         buf.trim().to_lowercase().as_str(),
         "s" | "sim" | "y" | "yes"
     ))
+}
+
+/// /boot (FAT32) ficou dessincronizado do root restaurado. Bootar agora cai
+/// em emergency mode (kernel não acha seus módulos). Bloqueia o reboot e
+/// instrui a recuperação específica do caminho que falhou.
+fn abort_reboot_boot_desync(e: anyhow::Error, recovery: &str) -> Result<()> {
+    eprintln!();
+    eprintln!("✗ sincronização do /boot (FAT32) falhou: {e:#}");
+    eprintln!("  O rollback BTRFS foi aplicado, mas o kernel/initramfs em /boot");
+    eprintln!("  NÃO corresponde aos módulos do snapshot restaurado.");
+    eprintln!("  REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado.");
+    eprintln!();
+    eprintln!("  Recuperação: {recovery}");
+    Ok(())
 }
 
 fn prompt_reboot() -> Result<()> {

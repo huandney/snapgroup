@@ -155,14 +155,20 @@ futuro, não bloqueante.
 
 | Fix | Local | Validado em campo? |
 |---|---|---|
-| 1 — Hash BLAKE2B do Limine | `boot.rs:347` `refresh_limine_boot_hashes` + testes unitários do parser em `boot.rs:434` | **Não** |
-| 2 — Skip de `limine_history` | `boot.rs:250` `is_ignored_boot_dir` | **Não** |
-| 3 — `mkinitcpio` lendo do `restored_root` | `boot.rs:324` `find_mkinitcpio_preset` + `boot.rs:289` `regen_initramfs` (passa `-r`) | **Não** |
+| 1 — Hash BLAKE2B do Limine | `boot.rs` `refresh_limine_boot_hashes` + testes unitários do parser | **Sim** (2026-05-28) |
+| 2 — Skip de `limine_history` | `boot.rs` `is_ignored_boot_dir` | **Sim** (indireto — sem corrupção no run de 28/05) |
+| 3 — `mkinitcpio` lendo do `restored_root` | `boot.rs` `regen_initramfs` (passa `-r`/`-c` do restored_root) | **Sim** (2026-05-28) |
 
-**Pendente:** reexecutar um `snapg restore` real num cenário com kernel
-mismatch entre snapshot e estado atual, com `/boot` em FAT32 + Limine,
-e confirmar boot bem-sucedido. Até isso acontecer, os fixes são
-arquiteturalmente corretos mas não comprovados na prática.
+**Validado (2026-05-28):** um `snapg restore` real com kernel mismatch
+(snapshot 7.0.3 vs sistema 7.0.10), `/boot` em FAT32 + Limine, **bootou
+limpo** em 7.0.3 até `Graphical Interface` — sem panic de hash BLAKE2B
+(Fix 1), com initramfs regenerado a partir do `restored_root` (Fix 3), e
+sem corromper `limine_history/` (Fix 2). Detalhes e evidência em
+`docs/incidents/2026-05-28-fat32-restore-emergency/postmortem.md` §5.
+
+> Nota: as referências de linha originais (`boot.rs:347`, `:250`, etc.)
+> ficaram defasadas após os fixes posteriores da branch
+> `fix/boot-sync-recovery`; os nomes de função permanecem válidos.
 
 ## 6. Lições
 
