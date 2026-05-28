@@ -43,7 +43,8 @@ pub fn sync_fat32(restored_root: &Path) -> Result<()> {
     let critical = critical_boot_files(&groups);
     backup_boot_files(&critical)?;
 
-    let result = sync_inner(restored_root, &groups);
+    let result = sync_inner(restored_root, &groups)
+        .and_then(|()| verify_synced(restored_root, &groups));
     if let Err(e) = result {
         eprintln!("  boot sync: falhou, restaurando backup de /boot");
         if let Err(re) = restore_backup() {
@@ -108,6 +109,39 @@ fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
     }
 
     refresh_limine_boot_hashes().context("atualizar hashes do limine.conf")?;
+    Ok(())
+}
+
+/// Gate de segurança pós-sync: confirma que cada vmlinuz ativo em /boot é
+/// byte-idêntico ao vmlinuz do kver correspondente no snapshot restaurado.
+/// Se divergir, o /boot ficou descasado dos módulos do root — bootar nesse
+/// estado cai em emergency mode (kernel não acha seus próprios módulos, ex:
+/// "unknown filesystem type vfat"). Falar isso aqui transforma um sync
+/// interrompido/parcial num erro explícito em vez de um reboot silencioso
+/// pra um sistema que não sobe.
+fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+    let modules_root = restored_root.join("usr/lib/modules");
+    let pkgbase_map = read_pkgbase_map(&modules_root)?;
+    for group in groups {
+        let kver = pkgbase_map.get(&group.kernel_name).with_context(|| {
+            format!(
+                "verificação: snapshot não tem módulos para '{}'",
+                group.kernel_name
+            )
+        })?;
+        let snap_vmlinuz = modules_root.join(kver).join("vmlinuz");
+        let expected =
+            fs::read(&snap_vmlinuz).with_context(|| format!("ler {}", snap_vmlinuz.display()))?;
+        for dest in &group.vmlinuz_paths {
+            let got = fs::read(dest).with_context(|| format!("ler {}", dest.display()))?;
+            if got != expected {
+                bail!(
+                    "/boot dessincronizado: {} não corresponde ao kernel {kver} do snapshot",
+                    dest.display()
+                );
+            }
+        }
+    }
     Ok(())
 }
 
