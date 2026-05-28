@@ -99,6 +99,13 @@ encolhe a quase nada. Manter B2.1 só enquanto a migração não acontecer
 (com o fail-safe da branch atual). B2.2 só se Secure Boot / compat
 obrigarem a manter FAT32.
 
+> **B2.1 validado em campo (2026-05-28):** com os fixes da branch
+> `fix/boot-sync-recovery`, um `snapg restore` cross-version real (7.0.3 vs
+> 7.0.10, FAT32 + Limine) bootou limpo até `Graphical Interface`, sem
+> Emergency Mode. B2.1 está hoje *funcional e seguro* no caminho feliz — a
+> recomendação por B2.3 é por **atomicidade**, não por B2.1 estar quebrado.
+> Ver `docs/incidents/2026-05-28-fat32-restore-emergency/postmortem.md` §5.
+
 ---
 
 ## Eixo 1 — Gestão de snapshot

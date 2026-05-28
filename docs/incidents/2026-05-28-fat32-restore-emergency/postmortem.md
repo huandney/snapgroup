@@ -119,14 +119,25 @@ o Regret traz o root de volta ao estado atual, que casa com esse `/boot`).
 
 | Fix | Local | Validado em campo? |
 |---|---|---|
-| 1 — Gate `verify_synced` | `boot.rs` `verify_synced` + `sync_fat32` | **Não** |
-| 2 — Bloqueio de reboot em falha de sync | `commands.rs` `abort_reboot_boot_desync` + ambos os caminhos de restore | **Não** |
+| 1 — Gate `verify_synced` | `boot.rs` `verify_synced` + `sync_fat32` | **Sim** (2026-05-28) |
+| 2 — Bloqueio de reboot em falha de sync | `commands.rs` `abort_reboot_boot_desync` + ambos os caminhos de restore | Parcial — caminho feliz validado; ramo de falha não exercitado |
+| 3 — Skip quando `/boot` já casa | `boot.rs` `boot_matches_snapshot` + gate em `sync_fat32` | **Sim** (não exercitado: era troca de versão) |
 
-`cargo build`, `cargo clippy` e `cargo test` (8 testes) passam. **Pendente:**
-reexecutar um `snapg restore` real para um checkpoint com kernel mais antigo
-que o instalado, com `/boot` em FAT32, e confirmar que (a) o sync completo
-deixa o boot coerente, e (b) um sync falho/interrompido bloqueia o reboot em
-vez de brickar.
+`cargo build`, `cargo clippy` e `cargo test` (8 testes) passam.
+
+**Validação de campo (2026-05-28 15:08):** com o binário corrigido instalado,
+um `snapg restore` real para o checkpoint `1777814741` (snapshot root #401,
+kernel 7.0.3-1-cachyos) a partir de um sistema em 7.0.10, com `/boot` em
+FAT32 + Limine, **bootou limpo**: boot −1 rodou `Linux version
+7.0.3-1-cachyos` e alcançou `Reached target Graphical Interface`, sem
+`unknown filesystem type vfat` nem Emergency Mode. O retorno ao estado atual
+(via Regret) também funcionou, com o serviço fantasma de cleanup pós-redo
+executando no boot seguinte. O sync completo deixou o boot coerente (Fix 1
+ok).
+
+**Ainda não exercitado:** o ramo de falha do Fix 2 — um sync que falha/é
+interrompido bloqueando o reboot — não foi reproduzido em campo. Os fixes
+estão corretos por construção e o caminho feliz está provado.
 
 ## 6. Lições
 
