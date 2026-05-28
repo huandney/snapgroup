@@ -64,7 +64,10 @@ Se o usuário selecionar a opção `[ ] Estado Anterior à Restauração (Regret
 *   O subvolume atual é movido para um nome temporário de descarte (ex: `_snapg_discard_lixo`).
 *   Um serviço do systemd (`snapg-cleanup.service`), já validado, cuida de varrer e deletar automaticamente os `discards` no próximo boot, antes mesmo do usuário perceber.
 
-## 4. Plano de Implementação
+## 4. Plano de Implementação (histórico — concluído)
+
+Plano original, registrado para referência. Todos os itens foram concluídos
+nos commits `e1bd095`, `22e5451`, `8ee0bcd` da branch `feature/restore-highlander`.
 
 1.  **Dependências:** Adicionar um crate para TUI (como `dialoguer` ou `inquire`) para desenhar as listas de seleção e capturar teclas interativas.
 2.  **Limpeza de Código:**
@@ -73,3 +76,82 @@ Se o usuário selecionar a opção `[ ] Estado Anterior à Restauração (Regret
 3.  **Refatoração de Ciclo de Vida:**
     *   Atualizar o `save` para deletar `_snapg_regret`.
     *   Modificar o motor de rollback para suportar o fluxo "Regret Highlander" e a restauração parcial através do input do usuário.
+
+## 5. Detalhes de Implementação
+
+### 5.1. `.snapshots` aninhadas (CachyOS / openSUSE)
+
+Em CachyOS e openSUSE, `/.snapshots` e `/home/.snapshots` são subvolumes
+**aninhados** dentro de `@` e `@home`. A implementação inicial do
+rename-swap mandava `.snapshots` junto com o subvolume arquivado — o novo
+subvolume ativo ficava só com um placeholder vazio, e o Snapper perdia
+todo o histórico visível.
+
+**Solução em `src/rollback.rs`:**
+
+- Após o rename-swap, se `backup/.snapshots` é subvolume,
+  `fs::rename(backup/.snapshots → new_current/.snapshots)`. Rename de
+  subvolume entre subvolumes irmãos no mesmo filesystem é metadata-only,
+  atômico.
+- `revert_done` faz o simétrico: move `.snapshots` de volta para o backup
+  antes do swap reverso, evitando que `.snapshots` caia no `discard` e
+  seja deletado pelo GC do "fantasma do mount".
+- Helper novo em `src/btrfs.rs`: `is_subvolume()` (check via exit code de
+  `btrfs subvolume show`).
+
+### 5.2. Naming alinhado com `btrfs-assistant`
+
+Subvolumes de backup usam timestamp local `YYYY-MM-DD_HH:MM:SS` em vez de
+epoch, alinhando com o padrão visual do `btrfs-assistant`:
+
+```
+@_backup_<YYYY-MM-DD_HH:MM:SS>
+@home_backup_<YYYY-MM-DD_HH:MM:SS>
+```
+
+Helper `now_local_label()` em `btrfs.rs` faz shell-out para
+`date +%Y-%m-%d_%H:%M:%S` — evita acrescentar dependência de `chrono`.
+
+## 6. Limitações Conhecidas
+
+### 6.1. Multi-disk BTRFS
+
+Em `commands.rs::undo`, monta o toplevel apenas do filesystem de `/`:
+
+```rust
+let uuid = btrfs::fs_uuid("/")?;
+btrfs::mount_toplevel(&uuid, &mount_path)?;
+```
+
+**Premissa:** todas as configs do Snapper vivem no mesmo filesystem BTRFS
+(mesmo UUID). Caso de quebra: SSD BTRFS para `/` + HDD BTRFS separado
+para `/home`, ambos com config Snapper. O subvolume `@home` não estaria
+no mount toplevel do `/` → `undo` falha.
+
+Cenários que **não quebram** (auto-resolvem):
+
+- `/home` em ext4/xfs (Snapper não tem config → snapg nem tenta).
+- Disco único particionado (mesmo BTRFS).
+- Pool BTRFS multi-device (vira um filesystem só para o kernel).
+
+**Fix futuro:** agrupar membros por UUID em `undo`, montar/desmontar
+toplevel por UUID. ~30 linhas mecânicas em `commands.rs`. Adia até
+aparecer demanda real.
+
+### 6.2. `/root` como subvolume separado
+
+O snapg auto-descobre configs via `snapper list-configs`. Para incluir
+`/root` (que no CachyOS é o subvolume `@root` separado):
+
+```bash
+sudo snapper -c root_home create-config /root
+# opcional: reduzir retenção timeline (root muda pouco)
+sudo snapper -c root_home set-config TIMELINE_CREATE=no
+```
+
+A partir daí, o próximo `snap save` agrupa os 3 (root + home + root_home)
+sem mudança no código.
+
+Em distros que põem `/root` dentro de `@` (sem subvolume próprio),
+`create-config /root` falha — precisa converter primeiro. Não é o caso
+do CachyOS.
