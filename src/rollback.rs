@@ -1,7 +1,7 @@
 use crate::btrfs;
 use crate::group::{Group, Member};
 use crate::snapper;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -38,6 +38,32 @@ fn prep_intermediate_name(current_subvol: &str) -> String {
     format!("{current_subvol}.snapgroup_prep")
 }
 
+/// Preflight: toda config Snapper precisa viver no mesmo filesystem BTRFS que
+/// `/`. O snapg monta só o top-level do FS de `/` e opera nos subvolumes por
+/// path relativo sob esse top-level. Uma config em outro BTRFS não existiria
+/// ali — ou, pior, um subvol homônimo de outro layout seria deletado/renomeado
+/// por engano. Aborta antes de montar ou tocar qualquer coisa.
+///
+/// Suporte multi-filesystem é trabalho futuro (agrupar configs por UUID e
+/// montar um top-level por FS); até lá, fail fast é a única opção segura.
+pub fn ensure_single_filesystem(configs: &[String]) -> Result<()> {
+    let root_uuid = btrfs::fs_uuid("/")?;
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        let uuid = btrfs::fs_uuid(&mp)
+            .with_context(|| format!("descobrir UUID do filesystem de '{cfg}' ({mp})"))?;
+        if uuid != root_uuid {
+            bail!(
+                "config snapper '{cfg}' (montada em {mp}) vive no filesystem {uuid}, \
+                 diferente do filesystem de / ({root_uuid}).\n  \
+                 O snapg ainda não suporta configs em múltiplos filesystems BTRFS.\n  \
+                 Operação abortada antes de qualquer alteração."
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Deleta regrets existentes de todas as configs no toplevel.
 /// Idempotente: se não existir regret, é no-op silencioso.
 pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()> {
@@ -55,6 +81,93 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
         println!("  regret anterior deletado: {rname}");
     }
     Ok(())
+}
+
+/// Nome do aside temporário pro regret anterior durante um restore checkpoint.
+/// Sufixo distinto de `_snapg_regret`, `.snapgroup_prep` e `_snapg_discard_*`
+/// pra não colidir com nada que rollback_group/revert criem.
+/// Ex: "@" → "@.snapgroup_regret_aside"
+fn regret_aside_name(current_subvol: &str) -> String {
+    format!("{current_subvol}.snapgroup_regret_aside")
+}
+
+/// Regret anterior movido pro lado durante um restore checkpoint, à espera do
+/// resultado do rollback.
+pub struct AsidedRegret {
+    pub config: String,
+    pub regret_subvol: String, // nome canônico: "@_snapg_regret"
+    pub aside_subvol: String,  // "@.snapgroup_regret_aside"
+}
+
+/// Move os regrets existentes pra um nome aside, em vez de deletá-los.
+/// Diferente de `delete_existing_regrets`: preserva o "botão de arrependimento"
+/// anterior até o novo rollback commitar. Se o rollback falhar e o sistema
+/// voltar a um estado limpo, o caller restaura o aside (`restore_asides`); em
+/// estado ambíguo, preserva. Idempotente quanto a regrets ausentes.
+pub fn aside_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<Vec<AsidedRegret>> {
+    let mut asides = Vec::new();
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        let current = btrfs::subvol_relative_path(Path::new(&mp))
+            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
+        let rname = regret_name(&current);
+        let regret_path = toplevel.join(&rname);
+        if !regret_path.exists() {
+            continue;
+        }
+        let aname = regret_aside_name(&current);
+        let aside_path = toplevel.join(&aname);
+        // Aside órfão = restou de uma tentativa anterior abortada. Estado
+        // inesperado: não sobrescrever (perderia o regret antigo). Para.
+        if aside_path.exists() {
+            bail!(
+                "aside órfão encontrado em {} — provável tentativa anterior \
+                 interrompida. Resolva manualmente antes de novo restore.",
+                aside_path.display()
+            );
+        }
+        fs::rename(&regret_path, &aside_path)
+            .with_context(|| format!("mover regret {rname} pra aside {aname}"))?;
+        asides.push(AsidedRegret {
+            config: cfg.clone(),
+            regret_subvol: rname,
+            aside_subvol: aname,
+        });
+    }
+    Ok(asides)
+}
+
+/// Restaura os asides de volta ao nome canônico de regret. Usar SOMENTE quando
+/// o sistema vivo está num estado limpo conhecido (slots `_snapg_regret`
+/// livres): rollback falhou na Fase 1, ou `revert_partial` concluiu.
+pub fn restore_asides(asides: &[AsidedRegret], toplevel: &Path) -> Result<()> {
+    for a in asides {
+        let aside_path = toplevel.join(&a.aside_subvol);
+        let regret_path = toplevel.join(&a.regret_subvol);
+        fs::rename(&aside_path, &regret_path).with_context(|| {
+            format!("restaurar aside {} → {}", a.aside_subvol, a.regret_subvol)
+        })?;
+    }
+    Ok(())
+}
+
+/// Deleta os asides obsoletos após um rollback bem-sucedido (o regret anterior
+/// foi substituído pelo novo). Best-effort: o rollback já commitou, então um
+/// subvol-lixo remanescente não deve abortar a operação — só avisa.
+pub fn delete_asides(asides: &[AsidedRegret], toplevel: &Path) {
+    for a in asides {
+        let aside_path = toplevel.join(&a.aside_subvol);
+        if let Err(e) = btrfs::delete_subvolume(&aside_path) {
+            eprintln!(
+                "⚠ regret anterior (aside {}) não foi deletado: {e:#}",
+                a.aside_subvol
+            );
+            eprintln!(
+                "   limpe manualmente: sudo btrfs subvolume delete {}",
+                aside_path.display()
+            );
+        }
+    }
 }
 
 /// Two-phase rollback de um grupo.
