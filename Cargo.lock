@@ -392,6 +392,7 @@ dependencies = [
  "clap",
  "console",
  "dialoguer",
+ "libc",
  "serde",
  "serde_json",
 ]
