@@ -34,6 +34,9 @@ pub fn save(description: Option<String>) -> Result<()> {
         );
     }
 
+    // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
+    rollback::ensure_single_filesystem(&configs)?;
+
     // Highlander: save mata regret existente.
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
     kill_regrets(&configs)?;
@@ -71,6 +74,9 @@ pub fn restore() -> Result<()> {
     }
 
     let groups = group::list_groups()?;
+
+    // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
+    rollback::ensure_single_filesystem(&configs)?;
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
@@ -237,11 +243,15 @@ fn execute_restore_checkpoint(
         return Ok(());
     }
 
-    // Highlander: deleta regret existente antes de criar o novo.
-    rollback::delete_existing_regrets(mount_path, configs)?;
+    // Move o regret anterior pra aside (não deleta): preserva o botão de
+    // arrependimento até o novo rollback commitar. Em falha que volte a um
+    // estado limpo, o aside é restaurado; em estado ambíguo, é preservado.
+    let asides = rollback::aside_existing_regrets(mount_path, configs)?;
 
     match rollback::rollback_group(group, mount_path) {
         Ok(done) => {
+            // Rollback commitou: o regret anterior virou obsoleto. Best-effort.
+            rollback::delete_asides(&asides, mount_path);
             println!(
                 "✓ rollback completo do grupo {} ({} membros)",
                 group.id,
@@ -271,7 +281,21 @@ fn execute_restore_checkpoint(
 
             prompt_reboot()
         }
-        Err(rerr) => handle_partial(group, rerr, mount_path),
+        Err(rerr) => {
+            match handle_partial(group, rerr, mount_path)? {
+                // Estado limpo conhecido: slots de regret canônicos livres.
+                PartialOutcome::Clean => {
+                    rollback::restore_asides(&asides, mount_path)
+                        .context("restaurar regret anterior após reversão limpa")?;
+                    if !asides.is_empty() {
+                        eprintln!("  regret anterior restaurado");
+                    }
+                }
+                // Estado ambíguo: preserva o aside e instrui recuperação manual.
+                PartialOutcome::Indeterminate => print_preserved_asides(&asides, mount_path),
+            }
+            bail!("rollback do grupo {} não concluído", group.id)
+        }
     }
 }
 
@@ -334,7 +358,18 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     prompt_reboot()
 }
 
-fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
+/// Veredito do estado do sistema vivo após uma falha de rollback. Decide se o
+/// regret anterior (aside) pode voltar automaticamente ao nome canônico.
+enum PartialOutcome {
+    /// Estado limpo conhecido: slots `_snapg_regret` canônicos livres.
+    /// Fase 1 falhou (nada tocado), ou `revert_partial` concluiu.
+    Clean,
+    /// Estado ambíguo: recuperação manual escolhida, ou `revert_partial`
+    /// falhou no meio. O slot canônico pode estar ocupado — não mexer.
+    Indeterminate,
+}
+
+fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<PartialOutcome> {
     eprintln!();
     eprintln!("⚠ FALHA PARCIAL no rollback do grupo {}", g.id);
     if rerr.done.is_empty() {
@@ -350,8 +385,9 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
     eprintln!("⚠ NÃO REINICIE até decidir.");
     eprintln!();
 
+    // Fase 1 falhou: sistema vivo 100% intocado, nenhum regret novo criado.
     if rerr.done.is_empty() {
-        return Err(rerr.error);
+        return Ok(PartialOutcome::Clean);
     }
 
     let prompt = format!(
@@ -360,7 +396,7 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
     );
     if !confirm(&prompt)? {
         print_manual_recovery(&rerr.done, mount_path);
-        return Err(rerr.error);
+        return Ok(PartialOutcome::Indeterminate);
     }
 
     if let Err(re) = rollback::revert_partial(&rerr.done, mount_path) {
@@ -374,12 +410,38 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
             "  resolva manualmente lá e depois: sudo umount {}",
             mount_path.display()
         );
-        return Err(rerr.error);
+        return Ok(PartialOutcome::Indeterminate);
     }
 
     println!();
     println!("✓ rollback parcial revertido — sistema voltou ao estado pré-restore");
-    Err(rerr.error)
+    Ok(PartialOutcome::Clean)
+}
+
+/// Imprime onde cada regret anterior ficou preservado (estado ambíguo) e o
+/// comando de reativação por config. O usuário está em recuperação manual:
+/// só deve renomear de volta após confirmar que o slot canônico está livre.
+fn print_preserved_asides(asides: &[rollback::AsidedRegret], mount_path: &Path) {
+    if asides.is_empty() {
+        return;
+    }
+    eprintln!();
+    eprintln!("regret anterior preservado (não restaurado: estado ambíguo):");
+    for a in asides {
+        eprintln!(
+            "  {}: {}",
+            a.config,
+            mount_path.join(&a.aside_subvol).display()
+        );
+    }
+    eprintln!("  reative só após confirmar que {{subvol}}_snapg_regret está livre:");
+    for a in asides {
+        eprintln!(
+            "  sudo mv {} {}",
+            mount_path.join(&a.aside_subvol).display(),
+            mount_path.join(&a.regret_subvol).display()
+        );
+    }
 }
 
 fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
