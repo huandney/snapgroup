@@ -34,6 +34,9 @@ pub fn save(description: Option<String>) -> Result<()> {
         );
     }
 
+    // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
+    rollback::ensure_single_filesystem(&configs)?;
+
     // Highlander: save mata regret existente.
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
     kill_regrets(&configs)?;
@@ -71,6 +74,9 @@ pub fn restore() -> Result<()> {
     }
 
     let groups = group::list_groups()?;
+
+    // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
+    rollback::ensure_single_filesystem(&configs)?;
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);

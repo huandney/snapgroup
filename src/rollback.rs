@@ -1,7 +1,7 @@
 use crate::btrfs;
 use crate::group::{Group, Member};
 use crate::snapper;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +36,32 @@ pub fn regret_name(current_subvol: &str) -> String {
 
 fn prep_intermediate_name(current_subvol: &str) -> String {
     format!("{current_subvol}.snapgroup_prep")
+}
+
+/// Preflight: toda config Snapper precisa viver no mesmo filesystem BTRFS que
+/// `/`. O snapg monta só o top-level do FS de `/` e opera nos subvolumes por
+/// path relativo sob esse top-level. Uma config em outro BTRFS não existiria
+/// ali — ou, pior, um subvol homônimo de outro layout seria deletado/renomeado
+/// por engano. Aborta antes de montar ou tocar qualquer coisa.
+///
+/// Suporte multi-filesystem é trabalho futuro (agrupar configs por UUID e
+/// montar um top-level por FS); até lá, fail fast é a única opção segura.
+pub fn ensure_single_filesystem(configs: &[String]) -> Result<()> {
+    let root_uuid = btrfs::fs_uuid("/")?;
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        let uuid = btrfs::fs_uuid(&mp)
+            .with_context(|| format!("descobrir UUID do filesystem de '{cfg}' ({mp})"))?;
+        if uuid != root_uuid {
+            bail!(
+                "config snapper '{cfg}' (montada em {mp}) vive no filesystem {uuid}, \
+                 diferente do filesystem de / ({root_uuid}).\n  \
+                 O snapg ainda não suporta configs em múltiplos filesystems BTRFS.\n  \
+                 Operação abortada antes de qualquer alteração."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Deleta regrets existentes de todas as configs no toplevel.
