@@ -765,8 +765,12 @@ fn prompt_reboot() -> Result<()> {
     // -i ignora inhibitors (ex: sessão GNOME bloqueando reboot).
     // Sem isso, o reboot falha silenciosamente e o utilizador fica
     // rodando no subvolume antigo sem saber.
-    std::process::Command::new("systemctl")
+    let status = std::process::Command::new("systemctl")
         .args(["reboot", "-i"])
-        .status()?;
+        .status()
+        .context("invocar systemctl reboot -i")?;
+    if !status.success() {
+        bail!("systemctl reboot -i falhou com status {status}");
+    }
     Ok(())
 }

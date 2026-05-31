@@ -262,11 +262,18 @@ fn scan_boot_dir(dir: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<(
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             if is_ignored_boot_dir(&name) {
                 continue;
             }
             scan_boot_dir(&path, out)?;
+            continue;
+        }
+        if !file_type.is_file() {
             continue;
         }
         let Some((kernel_name, is_vmlinuz)) = classify_boot_file(&name) else {
