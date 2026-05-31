@@ -2,6 +2,7 @@ mod boot;
 mod btrfs;
 mod cli;
 mod commands;
+mod doctor;
 mod group;
 mod lock;
 mod rollback;
@@ -15,8 +16,8 @@ fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     sudo::ensure_root()?;
     match cli.command {
-        // Comandos mutantes: lock global exclusivo enquanto rodam. List é
-        // read-only e boot-clean é pós-boot (tratado depois com regra própria).
+        // Comandos mutantes usam lock global. List é read-only; boot-clean
+        // pula limpo se houver contenção e tenta de novo no próximo boot.
         cli::Command::Save { description } => {
             let _lock = lock::acquire()?;
             commands::save(description)
@@ -30,6 +31,13 @@ fn main() -> Result<()> {
             commands::delete(yes)
         }
         cli::Command::List => commands::list(),
-        cli::Command::BootClean => commands::boot_clean(),
+        cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
+        cli::Command::BootClean => match lock::try_acquire()? {
+            Some(_lock) => commands::boot_clean(),
+            None => {
+                println!("snapg boot-clean: outro snapg está rodando; cleanup adiado para o próximo boot");
+                Ok(())
+            }
+        },
     }
 }
