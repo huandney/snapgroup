@@ -90,24 +90,28 @@ Opções consideradas:
 - criar lock próprio para cleanup pós-boot;
 - manter fora do lock e documentar o motivo.
 
-Decisão: **lock próprio para o cleanup pós-boot.** É a única opção que satisfaz
-as duas restrições simultâneas:
+Decisão revisada: **usar o lock global com skip limpo em contenção.**
 
-- o lock global travaria `boot-clean` se um `restore`/`delete` interativo
-  ficasse pendurado segurando o lock — inaceitável no caminho de boot;
-- ficar totalmente sem lock permitiria `boot-clean` apagar subvolumes enquanto
-  outro comando manipula o mesmo top-level.
+Motivo:
 
-Um lock dedicado (ex: `/run/snapgroup-boot-clean.lock`) protege contra duas
-execuções de cleanup concorrentes sem acoplar ao lock interativo. Falta validar
-se cleanup e `restore`/`delete` podem coexistir no mesmo top-level com locks
-separados, ou se ainda assim precisam serializar.
+- `/run` é `tmpfs`, então um lock segurado antes do reboot não atravessa o
+  boot que dispara `snapg-cleanup.service`;
+- o lock global é `LOCK_NB`, então `boot-clean` não bloqueia o boot: se outro
+  `snapg` estiver rodando no mesmo boot, o cleanup apenas pula;
+- manter o lock global preserva a exclusão mútua entre `boot-clean` e comandos
+  que manipulam os mesmos subvolumes no top-level.
+
+Regra:
+
+- `save`/`restore`/`delete` tratam contenção como erro de usuário;
+- `boot-clean` trata contenção como adiamento benigno, sai `0` e deixa a unit
+  armada para tentar novamente no próximo boot.
 
 Verificação:
 
-- simular segunda instância segurando o lock;
-- garantir que a escolha não deixa `boot-clean` apagar subvolumes enquanto
-  outro comando manipula o mesmo top-level.
+- simular segunda instância segurando o lock global;
+- garantir que `boot-clean` não roda nem desarma a unit quando não adquire o
+  lock.
 
 ## Ciclo seguinte: initramfs fingerprint
 
