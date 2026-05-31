@@ -6,16 +6,35 @@ use std::process::Command;
 
 /// True se /boot está montado em FAT32 (vfat).
 pub fn is_fat32() -> bool {
-    Command::new("findmnt")
-        .args(["-no", "FSTYPE", "/boot"])
-        .output()
-        .map(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout)
-                    .trim()
-                    .eq_ignore_ascii_case("vfat")
-        })
+    is_fat32_path(Path::new("/boot"))
+}
+
+pub fn is_fat32_path(boot: &Path) -> bool {
+    boot_fstype(boot)
+        .map(|fstype| fstype.eq_ignore_ascii_case("vfat"))
         .unwrap_or(false)
+}
+
+pub fn boot_fstype(boot: &Path) -> Result<String> {
+    Command::new("findmnt")
+        .args(["-no", "FSTYPE", "--target"])
+        .arg(boot)
+        .output()
+        .context("findmnt falhou")
+        .and_then(|out| {
+            if !out.status.success() {
+                bail!(
+                    "findmnt FSTYPE {}: {}",
+                    boot.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+            let fstype = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if fstype.is_empty() {
+                bail!("FSTYPE vazio para {}", boot.display());
+            }
+            Ok(fstype)
+        })
 }
 
 /// Sincroniza kernel e initramfs em /boot (FAT32) com o subvolume restaurado.
@@ -31,13 +50,17 @@ pub fn is_fat32() -> bool {
 /// (um `pacman -Syu` sem reboot deixa kernel novo no FAT32 e antigo
 /// rodando; pular sync nesse caso quebra o boot seguinte).
 pub fn sync_fat32(restored_root: &Path) -> Result<()> {
-    if !is_fat32() {
+    sync_fat32_paths(restored_root, Path::new("/boot"))
+}
+
+pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
+    if !is_fat32_path(boot) {
         return Ok(());
     }
 
-    let groups = discover_kernel_groups()?;
+    let groups = discover_kernel_groups(boot)?;
     if groups.is_empty() {
-        bail!("nenhum vmlinuz/initramfs ativo encontrado em /boot");
+        bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
     }
 
     // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
@@ -48,25 +71,25 @@ pub fn sync_fat32(restored_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let critical = critical_boot_files(&groups);
-    backup_boot_files(&critical)?;
+    let critical = critical_boot_files(boot, &groups);
+    backup_boot_files(boot, &critical)?;
 
-    let result = sync_inner(restored_root, &groups)
+    let result = sync_inner(restored_root, boot, &groups)
         .and_then(|()| verify_synced(restored_root, &groups));
     if let Err(e) = result {
         eprintln!("  boot sync: falhou, restaurando backup de /boot");
-        if let Err(re) = restore_backup() {
+        if let Err(re) = restore_backup_path(boot) {
             eprintln!("  boot sync: restauração do backup falhou: {re:#}");
         }
         return Err(e);
     }
 
-    let _ = fs::remove_dir_all(boot_backup_dir());
+    let _ = fs::remove_dir_all(boot_backup_dir(boot));
     println!("  boot sync: kernel, initramfs e limine.conf sincronizados");
     Ok(())
 }
 
-fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
+fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Result<()> {
     let modules_root = restored_root.join("usr/lib/modules");
     if !modules_root.exists() {
         bail!(
@@ -116,8 +139,61 @@ fn sync_inner(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
         }
     }
 
-    refresh_limine_boot_hashes().context("atualizar hashes do limine.conf")?;
+    refresh_limine_boot_hashes(boot).context("atualizar hashes do limine.conf")?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootHealth {
+    NativeBoot,
+    Synced,
+    NeedsSync,
+}
+
+#[derive(Debug, Clone)]
+pub struct BootDiagnosis {
+    pub fstype: String,
+    pub kernel_groups: usize,
+    pub initramfs_files: usize,
+    pub health: BootHealth,
+}
+
+pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
+    let fstype = boot_fstype(boot)?;
+    if !fstype.eq_ignore_ascii_case("vfat") {
+        if !fstype.eq_ignore_ascii_case("btrfs") {
+            bail!(
+                "{} usa filesystem de boot '{fstype}', não suportado pelo doctor",
+                boot.display()
+            );
+        }
+        return Ok(BootDiagnosis {
+            fstype,
+            kernel_groups: 0,
+            initramfs_files: 0,
+            health: BootHealth::NativeBoot,
+        });
+    }
+
+    let groups = discover_kernel_groups(boot)?;
+    if groups.is_empty() {
+        bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
+    }
+    let initramfs_files = groups
+        .iter()
+        .map(|group| group.initramfs_paths.len())
+        .sum();
+    let health = if boot_matches_snapshot(root, &groups)? {
+        BootHealth::Synced
+    } else {
+        BootHealth::NeedsSync
+    };
+    Ok(BootDiagnosis {
+        fstype,
+        kernel_groups: groups.len(),
+        initramfs_files,
+        health,
+    })
 }
 
 /// True se cada vmlinuz ativo em /boot já é byte-idêntico ao vmlinuz do kver
@@ -248,9 +324,9 @@ struct KernelGroup {
 /// extraído do nome do arquivo (padrão Arch: vmlinuz-linux-cachyos,
 /// initramfs-linux-cachyos[.img]). Layouts BLS e flat saem agrupados juntos
 /// sob o mesmo kernel_name.
-fn discover_kernel_groups() -> Result<Vec<KernelGroup>> {
+fn discover_kernel_groups(boot: &Path) -> Result<Vec<KernelGroup>> {
     let mut by_name: HashMap<String, KernelGroup> = HashMap::new();
-    scan_boot_dir(Path::new("/boot"), &mut by_name)?;
+    scan_boot_dir(boot, &mut by_name)?;
     let mut groups: Vec<KernelGroup> = by_name.into_values().collect();
     groups.sort_by(|a, b| a.kernel_name.cmp(&b.kernel_name));
     Ok(groups)
@@ -326,27 +402,27 @@ fn strip_img_ext(s: &str) -> &str {
 
 /// Conjunto de arquivos críticos para backup: vmlinuz/initramfs ativos de
 /// todos os kernels descobertos + limine.conf (e .old, se existir).
-fn critical_boot_files(groups: &[KernelGroup]) -> Vec<PathBuf> {
+fn critical_boot_files(boot: &Path, groups: &[KernelGroup]) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for g in groups {
         files.extend(g.vmlinuz_paths.iter().cloned());
         files.extend(g.initramfs_paths.iter().cloned());
     }
-    for extra in ["/boot/limine.conf", "/boot/limine.conf.old"] {
-        let p = Path::new(extra);
+    for extra in ["limine.conf", "limine.conf.old"] {
+        let p = boot.join(extra);
         if p.exists() {
-            files.push(p.to_path_buf());
+            files.push(p);
         }
     }
     files
 }
 
-fn boot_backup_dir() -> PathBuf {
-    PathBuf::from("/boot/.snapg_boot_backup")
+fn boot_backup_dir(boot: &Path) -> PathBuf {
+    boot.join(".snapg_boot_backup")
 }
 
-fn backup_boot_files(files: &[PathBuf]) -> Result<()> {
-    let backup = boot_backup_dir();
+fn backup_boot_files(boot: &Path, files: &[PathBuf]) -> Result<()> {
+    let backup = boot_backup_dir(boot);
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
@@ -354,8 +430,8 @@ fn backup_boot_files(files: &[PathBuf]) -> Result<()> {
 
     for src in files {
         let rel = src
-            .strip_prefix("/boot")
-            .with_context(|| format!("{} não está dentro de /boot", src.display()))?;
+            .strip_prefix(boot)
+            .with_context(|| format!("{} não está dentro de {}", src.display(), boot.display()))?;
         let dest = backup.join(rel);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).with_context(|| format!("criar {}", parent.display()))?;
@@ -367,16 +443,15 @@ fn backup_boot_files(files: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// Restaura os ficheiros de boot do backup (recovery do próprio sync_fat32).
-pub fn restore_backup() -> Result<()> {
-    if !is_fat32() {
+pub fn restore_backup_path(boot: &Path) -> Result<()> {
+    if !is_fat32_path(boot) {
         return Ok(());
     }
-    let backup = boot_backup_dir();
+    let backup = boot_backup_dir(boot);
     if !backup.exists() {
         return Ok(());
     }
-    restore_backup_dir(&backup, Path::new("/boot"))?;
+    restore_backup_dir(&backup, boot)?;
     let _ = fs::remove_dir_all(&backup);
     println!("  boot sync: ficheiros de boot restaurados do backup");
     Ok(())
@@ -408,17 +483,17 @@ fn restore_backup_dir(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-fn refresh_limine_boot_hashes() -> Result<()> {
-    let path = Path::new("/boot/limine.conf");
+fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
+    let path = boot.join("limine.conf");
     if !path.exists() {
         return Ok(());
     }
-    let content = fs::read_to_string(path).context("ler /boot/limine.conf")?;
+    let content = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
     let had_trailing_newline = content.ends_with('\n');
     let mut changed = false;
     let mut lines = Vec::new();
     for line in content.lines() {
-        let refreshed = refresh_limine_hash_for_line(line)?;
+        let refreshed = refresh_limine_hash_for_line(boot, line)?;
         if refreshed != line {
             changed = true;
         }
@@ -433,13 +508,13 @@ fn refresh_limine_boot_hashes() -> Result<()> {
     }
     let tmp = path.with_extension("conf.snapg_tmp");
     fs::write(&tmp, updated).context("escrever limine.conf temporário")?;
-    fs::rename(&tmp, path).context("substituir /boot/limine.conf com hashes atualizados")?;
+    fs::rename(&tmp, &path).with_context(|| format!("substituir {}", path.display()))?;
     println!("  boot sync: hashes BLAKE2B atualizados em /boot/limine.conf");
     Ok(())
 }
 
-fn refresh_limine_hash_for_line(line: &str) -> Result<String> {
-    let Some(boot_path) = limine_boot_path_from_line(line) else {
+fn refresh_limine_hash_for_line(boot: &Path, line: &str) -> Result<String> {
+    let Some(boot_path) = limine_boot_path_from_line(boot, line) else {
         return Ok(line.to_string());
     };
     if !boot_path.exists() {
@@ -453,7 +528,7 @@ fn refresh_limine_hash_for_line(line: &str) -> Result<String> {
     Ok(format!("{}#{hash}", line[..hash_pos].trim_end()))
 }
 
-fn limine_boot_path_from_line(line: &str) -> Option<PathBuf> {
+fn limine_boot_path_from_line(boot: &Path, line: &str) -> Option<PathBuf> {
     let trimmed = line.trim_start();
     let (key, value) = trimmed.split_once(':')?;
     let key = key.trim();
@@ -467,7 +542,7 @@ fn limine_boot_path_from_line(line: &str) -> Option<PathBuf> {
     if boot_relative.contains(char::is_whitespace) {
         return None;
     }
-    Some(Path::new("/boot").join(boot_relative))
+    Some(boot.join(boot_relative))
 }
 
 fn blake2b_hex(path: &Path) -> Result<String> {
@@ -499,7 +574,7 @@ mod tests {
     fn parses_limine_kernel_path() {
         let line = "  path: boot():/linux-cachyos/vmlinuz-linux-cachyos#deadbeef";
         assert_eq!(
-            limine_boot_path_from_line(line).as_deref(),
+            limine_boot_path_from_line(Path::new("/boot"), line).as_deref(),
             Some(Path::new("/boot/linux-cachyos/vmlinuz-linux-cachyos"))
         );
     }
@@ -508,7 +583,7 @@ mod tests {
     fn parses_limine_module_path() {
         let line = "  module_path: boot():/linux-cachyos/initramfs-linux-cachyos#cafebabe";
         assert_eq!(
-            limine_boot_path_from_line(line).as_deref(),
+            limine_boot_path_from_line(Path::new("/boot"), line).as_deref(),
             Some(Path::new("/boot/linux-cachyos/initramfs-linux-cachyos"))
         );
     }
@@ -516,7 +591,7 @@ mod tests {
     #[test]
     fn keeps_non_boot_path_lines_unchanged() {
         let line = "  cmdline: quiet rw rootflags=subvol=/@";
-        assert_eq!(limine_boot_path_from_line(line), None);
+        assert_eq!(limine_boot_path_from_line(Path::new("/boot"), line), None);
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod boot;
 mod btrfs;
 mod cli;
 mod commands;
+mod doctor;
 mod group;
 mod lock;
 mod rollback;
@@ -30,6 +31,7 @@ fn main() -> Result<()> {
             commands::delete(yes)
         }
         cli::Command::List => commands::list(),
+        cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
         cli::Command::BootClean => commands::boot_clean(),
     }
 }
