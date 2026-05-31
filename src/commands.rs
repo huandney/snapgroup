@@ -1,5 +1,6 @@
 use crate::boot;
 use crate::btrfs;
+use crate::doctor;
 use crate::group::{self, Group, GroupId};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
@@ -271,6 +272,7 @@ fn execute_restore_checkpoint(
                 let restored_root = mount_path.join(&root.current_subvol);
                 if let Err(e) = boot::sync_fat32(&restored_root) {
                     return abort_reboot_boot_desync(
+                        &restored_root,
                         e,
                         "rode 'snapg restore' e selecione o Regret \
                          (⟲ Estado Anterior à Restauração) para voltar ao \
@@ -336,6 +338,7 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
 
         if let Err(e) = boot::sync_fat32(&restored_root_path) {
             return abort_reboot_boot_desync(
+                &restored_root_path,
                 e,
                 "verifique /boot manualmente (vmlinuz/initramfs vs \
                  /usr/lib/modules do root) antes de reiniciar; não reinicie \
@@ -742,19 +745,8 @@ fn confirm(prompt: &str) -> Result<bool> {
 /// /boot (FAT32) ficou dessincronizado do root restaurado. Bootar agora cai
 /// em emergency mode (kernel não acha seus módulos). Bloqueia o reboot e
 /// instrui a recuperação específica do caminho que falhou.
-fn abort_reboot_boot_desync(e: anyhow::Error, recovery: &str) -> Result<()> {
-    eprintln!();
-    eprintln!("✗ sincronização do /boot (FAT32) falhou: {e:#}");
-    eprintln!("  O rollback BTRFS foi aplicado, mas o kernel/initramfs em /boot");
-    eprintln!("  NÃO corresponde aos módulos do snapshot restaurado.");
-    eprintln!("  REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado.");
-    eprintln!();
-    eprintln!("  Recuperação: {recovery}");
-    // Erro explícito: o reboot foi bloqueado e a restauração não concluiu.
-    // Retornar Ok(()) aqui faria o processo sair com código 0 e mascarar a
-    // falha de qualquer chamador que cheque $?. A mensagem detalhada acima já
-    // foi impressa; o anyhow só acrescenta o resumo de uma linha.
-    bail!("restauração incompleta: /boot dessincronizado, reboot bloqueado")
+fn abort_reboot_boot_desync(restored_root: &Path, e: anyhow::Error, recovery: &str) -> Result<()> {
+    doctor::handle_boot_sync_failure(restored_root, Path::new("/boot"), e, recovery)
 }
 
 fn prompt_reboot() -> Result<()> {
