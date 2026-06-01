@@ -1,6 +1,7 @@
 use crate::boot::{self, BootHealth};
+use crate::ui::doctor as doctor_ui;
+use crate::ui::term::confirm;
 use anyhow::{bail, Context, Result};
-use dialoguer::{Confirm, Select};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -15,23 +16,11 @@ pub fn handle_boot_sync_failure(
     error: anyhow::Error,
     recovery: &str,
 ) -> Result<()> {
-    eprintln!();
-    eprintln!("✗ sincronização do /boot (FAT32) falhou: {error:#}");
-    eprintln!("  O rollback BTRFS foi aplicado, mas o kernel/initramfs em /boot");
-    eprintln!("  NÃO corresponde aos módulos do snapshot restaurado.");
-    eprintln!("  REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado.");
-    eprintln!();
-    eprintln!("  Recuperação alternativa: {recovery}");
-    eprintln!();
+    doctor_ui::print_boot_sync_failure(&error, recovery);
 
     print_diagnosis(root, boot)?;
 
-    if !Confirm::new()
-        .with_prompt("Tentar sincronizar /boot novamente agora?")
-        .default(false)
-        .interact()
-        .context("ler confirmação")?
-    {
+    if !confirm("Tentar sincronizar /boot novamente agora?")? {
         bail!("restauração incompleta: /boot dessincronizado, reboot bloqueado");
     }
 
@@ -70,13 +59,7 @@ fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<DoctorT
         );
     }
 
-    let labels: Vec<String> = targets.iter().map(|target| target.label.clone()).collect();
-    let idx = Select::new()
-        .with_prompt("Escolha o sistema para diagnosticar")
-        .items(&labels)
-        .default(0)
-        .interact()
-        .context("selecionar sistema")?;
+    let idx = doctor_ui::select_target(&targets)?;
     Ok(targets.into_iter().nth(idx).expect("índice selecionado existe"))
 }
 
@@ -102,32 +85,23 @@ fn current_system_target() -> Result<Option<DoctorTarget>> {
 }
 
 fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
-    println!("Alvo: {}", target.label);
-    println!("  root: {}", target.root.display());
-    println!("  boot: {}", target.boot.display());
-    println!();
+    doctor_ui::print_target(target);
 
     let needs_sync = print_diagnosis(&target.root, &target.boot)?;
     if !needs_sync {
-        println!("Nenhuma ação necessária.");
+        doctor_ui::print_no_action_needed();
         return Ok(());
     }
 
-    println!();
-    println!("Ação sugerida: sincronizar {} com {}", target.boot.display(), target.root.display());
-    let should_apply = apply
-        || Confirm::new()
-            .with_prompt("Aplicar correção agora?")
-            .default(false)
-            .interact()
-            .context("ler confirmação")?;
+    doctor_ui::print_suggested_sync(target);
+    let should_apply = apply || confirm("Aplicar correção agora?")?;
     if !should_apply {
-        println!("Correção não aplicada.");
+        doctor_ui::print_correction_skipped();
         return Ok(());
     }
 
     boot::sync_fat32_paths(&target.root, &target.boot)?;
-    println!();
+    doctor_ui::print_spacer();
     print_diagnosis(&target.root, &target.boot)?;
     Ok(())
 }
@@ -135,35 +109,9 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
 fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
     validate_target(root, boot_path)?;
     let diagnosis = boot::diagnose_boot(root, boot_path)?;
-    println!("Diagnóstico de boot:");
-    println!("  filesystem de boot: {}", diagnosis.fstype);
-    match diagnosis.health {
-        BootHealth::NativeBoot => {
-            println!("  ✓ /boot não é FAT32 separado; nenhuma sincronização é necessária");
-            if root != Path::new("/") {
-                println!(
-                    "  nota: se este sistema usa /boot FAT32 separado, monte-o em {} \
-                     ou rode com --boot explícito",
-                    root.join("boot").display()
-                );
-            }
-            Ok(false)
-        }
-        BootHealth::Synced => {
-            println!(
-                "  ✓ /boot está coerente com o root alvo ({} kernel groups, {} initramfs)",
-                diagnosis.kernel_groups, diagnosis.initramfs_files
-            );
-            Ok(false)
-        }
-        BootHealth::NeedsSync => {
-            println!(
-                "  ✗ /boot está dessincronizado com o root alvo ({} kernel groups, {} initramfs)",
-                diagnosis.kernel_groups, diagnosis.initramfs_files
-            );
-            Ok(true)
-        }
-    }
+    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync);
+    doctor_ui::print_diagnosis(root, &diagnosis);
+    Ok(needs_sync)
 }
 
 fn validate_target(root: &Path, boot: &Path) -> Result<()> {
@@ -179,10 +127,10 @@ fn validate_target(root: &Path, boot: &Path) -> Result<()> {
     Ok(())
 }
 
-struct DoctorTarget {
-    label: String,
-    root: PathBuf,
-    boot: PathBuf,
+pub(crate) struct DoctorTarget {
+    pub(crate) label: String,
+    pub(crate) root: PathBuf,
+    pub(crate) boot: PathBuf,
 }
 
 impl DoctorTarget {

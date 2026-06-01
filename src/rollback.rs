@@ -78,7 +78,7 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
         }
         btrfs::delete_subvolume(&regret_path)
             .with_context(|| format!("deletar regret {rname}"))?;
-        println!("  regret anterior deletado: {rname}");
+        crate::ui::rollback::print_deleted_regret(&rname);
     }
     Ok(())
 }
@@ -158,14 +158,7 @@ pub fn delete_asides(asides: &[AsidedRegret], toplevel: &Path) {
     for a in asides {
         let aside_path = toplevel.join(&a.aside_subvol);
         if let Err(e) = btrfs::delete_subvolume(&aside_path) {
-            eprintln!(
-                "⚠ regret anterior (aside {}) não foi deletado: {e:#}",
-                a.aside_subvol
-            );
-            eprintln!(
-                "   limpe manualmente: sudo btrfs subvolume delete {}",
-                aside_path.display()
-            );
+            crate::ui::rollback::print_aside_delete_failed(&a.aside_subvol, &aside_path, &e);
         }
     }
 }
@@ -357,14 +350,7 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
 
         // 3. Apaga o subvol revertido (SEGURO aqui — nunca foi montado).
         if let Err(e) = btrfs::delete_subvolume(&discard) {
-            eprintln!(
-                "⚠ revert {}: backup restaurado mas subvol descartado não foi deletado: {e:#}",
-                d.config
-            );
-            eprintln!(
-                "   limpe manualmente: sudo btrfs subvolume delete {}",
-                discard.display()
-            );
+            crate::ui::rollback::print_discard_delete_failed(&d.config, &discard, &e);
         }
     }
     Ok(())
