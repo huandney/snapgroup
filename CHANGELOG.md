@@ -5,10 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0-beta] - 2026-06-01
+> Commits: `c7d2d73`, `97b7072`, `d883c41`
 
 ### Restore / TUI
 - **Feature**: Rework `snapg restore` into a staged flow: choose a checkpoint or Regret, select the members to restore, review a summary, then continue, go back, or abort. Checkpoint and Regret restores now support partial member selection while keeping rollback/asides scoped to the selected members.
+- **Feature**: Unify the interactive UI across `list`/`save`/`delete`/`restore`/`doctor`: arrow-key navigation everywhere with Esc to step back, a consistent tree layout (branch connectors, dot separators, arrows), colored status glyphs, screen-clearing between steps, and minute-precision timestamps.
 
 ## [0.3.0-beta] - 2026-05-31
 > Commits: `5301695`, `ddb79e9`, `09fd379`
