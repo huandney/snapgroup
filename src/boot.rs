@@ -67,7 +67,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
     // de interrupção junto. O caminho pesado só roda quando o kernel difere.
     if boot_matches_snapshot(restored_root, &groups)? {
-        println!("  boot sync: /boot já corresponde ao snapshot, nada a fazer");
+        crate::ui::boot_sync::print_already_synced();
         return Ok(());
     }
 
@@ -77,15 +77,15 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     let result = sync_inner(restored_root, boot, &groups)
         .and_then(|()| verify_synced(restored_root, &groups));
     if let Err(e) = result {
-        eprintln!("  boot sync: falhou, restaurando backup de /boot");
+        crate::ui::boot_sync::print_restore_backup_after_failure();
         if let Err(re) = restore_backup_path(boot) {
-            eprintln!("  boot sync: restauração do backup falhou: {re:#}");
+            crate::ui::boot_sync::print_backup_restore_failed(&re);
         }
         return Err(e);
     }
 
     let _ = fs::remove_dir_all(boot_backup_dir(boot));
-    println!("  boot sync: kernel, initramfs e limine.conf sincronizados");
+    crate::ui::boot_sync::print_synced();
     Ok(())
 }
 
@@ -127,15 +127,12 @@ fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Resu
                     dest.display()
                 )
             })?;
-            println!("  boot sync: vmlinuz ({kver}) → {}", dest.display());
+            crate::ui::boot_sync::print_vmlinuz_copied(kver, dest);
         }
 
         for dest in &group.initramfs_paths {
             regen_initramfs(&config, kver, restored_root, dest)?;
-            println!(
-                "  boot sync: initramfs regenerado ({kver}) → {}",
-                dest.display()
-            );
+            crate::ui::boot_sync::print_initramfs_regenerated(kver, dest);
         }
     }
 
@@ -439,7 +436,7 @@ fn backup_boot_files(boot: &Path, files: &[PathBuf]) -> Result<()> {
         fs::copy(src, &dest)
             .with_context(|| format!("backup {} → {}", src.display(), dest.display()))?;
     }
-    println!("  boot sync: backup em {}", backup.display());
+    crate::ui::boot_sync::print_backup_created(&backup);
     Ok(())
 }
 
@@ -453,7 +450,7 @@ pub fn restore_backup_path(boot: &Path) -> Result<()> {
     }
     restore_backup_dir(&backup, boot)?;
     let _ = fs::remove_dir_all(&backup);
-    println!("  boot sync: ficheiros de boot restaurados do backup");
+    crate::ui::boot_sync::print_backup_restored();
     Ok(())
 }
 
@@ -509,7 +506,7 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     let tmp = path.with_extension("conf.snapg_tmp");
     fs::write(&tmp, updated).context("escrever limine.conf temporário")?;
     fs::rename(&tmp, &path).with_context(|| format!("substituir {}", path.display()))?;
-    println!("  boot sync: hashes BLAKE2B atualizados em /boot/limine.conf");
+    crate::ui::boot_sync::print_hashes_updated();
     Ok(())
 }
 

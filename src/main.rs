@@ -8,6 +8,7 @@ mod lock;
 mod rollback;
 mod snapper;
 mod sudo;
+mod ui;
 
 use anyhow::Result;
 use clap::Parser;
@@ -35,7 +36,7 @@ fn main() -> Result<()> {
         cli::Command::BootClean => match lock::try_acquire()? {
             Some(_lock) => commands::boot_clean(),
             None => {
-                println!("snapg boot-clean: outro snapg está rodando; cleanup adiado para o próximo boot");
+                ui::boot_clean::print_cleanup_deferred();
                 Ok(())
             }
         },

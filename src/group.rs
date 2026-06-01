@@ -6,14 +6,35 @@ pub type GroupId = i64;
 
 const USERDATA_KEY: &str = "snapgroup-id";
 
+#[derive(Clone)]
 pub struct Member {
     pub config: String,
     pub snapshot: Snapshot,
 }
 
+#[derive(Clone)]
 pub struct Group {
     pub id: GroupId,
     pub members: Vec<Member>,
+}
+
+/// Data do grupo: todos os membros compartilham o instante do save, então o
+/// primeiro membro representa o grupo. Fallback só dispara em grupo sem membros.
+pub fn date(group: &Group) -> &str {
+    group
+        .members
+        .first()
+        .map(|m| m.snapshot.date.as_str())
+        .unwrap_or("data desconhecida")
+}
+
+/// Descrição do grupo (do primeiro membro). Vazio é um valor legítimo.
+pub fn description(group: &Group) -> &str {
+    group
+        .members
+        .first()
+        .map(|m| m.snapshot.description.as_str())
+        .unwrap_or("")
 }
 
 pub fn extract_id(s: &Snapshot) -> Option<GroupId> {
