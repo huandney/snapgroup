@@ -1,7 +1,8 @@
 use crate::group::{self, Group};
 use crate::snapper;
 use crate::ui::term::{
-    THEME, branch, clear_screen, confirm, short_datetime, stem, truncate_for_terminal,
+    AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
+    stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -19,14 +20,33 @@ pub(crate) fn print_save_created(id: i64, desc: &str, created: &[(String, u32)])
     }
 }
 
-pub(crate) fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+/// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
+/// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
+/// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
+pub(crate) fn select_delete_plan(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+    let _alt = AltScreen::enter();
+    loop {
+        let Some(indices) = select_delete_targets(groups)? else {
+            return Ok(None);
+        };
+        let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
+        match confirm_delete_targets(&targets)? {
+            DeleteFlow::Proceed => return Ok(Some(indices)),
+            DeleteFlow::Back => continue,
+            DeleteFlow::Cancel => return Ok(None),
+        }
+    }
+}
+
+fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     loop {
         clear_screen();
+        header("Apagar checkpoints");
         let action = dialoguer::Select::with_theme(&THEME)
-            .with_prompt("Apagar checkpoints")
             .items(&["Selecionar", "Apagar todos"])
             .default(0)
             .clear(true)
+            .report(false)
             .interact_opt()
             .context("seleção cancelada")?;
 
@@ -57,10 +77,12 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     }
 
     clear_screen();
+    header("Apagar checkpoints");
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt("Selecione checkpoints para apagar (Espaço=marcar, Enter=confirmar)")
+        .with_prompt(format!("Selecione os checkpoints para apagar  {HINT_MULTI}"))
         .items(&items)
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -77,6 +99,7 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
 
 fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     clear_screen();
+    header("Apagar checkpoints");
     if !confirm("Apagar TODOS os checkpoints?")? {
         return Ok(None);
     }
@@ -85,15 +108,15 @@ fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
 
 /// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
 /// um passo); `Cancel` = "Cancelar" explícito (encerra).
-pub(crate) enum DeleteFlow {
+enum DeleteFlow {
     Proceed,
     Back,
     Cancel,
 }
 
-pub(crate) fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
+fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
     clear_screen();
-    println!("{}", style("Apagar checkpoints").bold());
+    header("Apagar checkpoints");
     let total = targets.len();
     for (i, g) in targets.iter().enumerate() {
         println!(
@@ -109,10 +132,11 @@ pub(crate) fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
     }
 
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Apagar estes checkpoints?  (esc volta)")
+        .with_prompt(format!("Apagar estes checkpoints?  {HINT_BACK}"))
         .items(&["Confirmar", "Cancelar"])
         .default(1)
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -142,7 +166,7 @@ pub(crate) fn print_no_groups() {
 }
 
 pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
-    println!("{}", style("Checkpoints").bold());
+    header("Checkpoints");
     let gtotal = groups.len();
     for (gi, g) in groups.iter().enumerate() {
         let glast = gi + 1 == gtotal;

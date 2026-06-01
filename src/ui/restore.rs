@@ -4,7 +4,8 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
-    THEME, branch, clear_screen, confirm, short_datetime, stem, truncate_for_terminal,
+    AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
+    stem, title, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -39,6 +40,58 @@ pub(crate) enum RestoreAction {
     Abort,
 }
 
+/// Plano de restauração escolhido pelo wizard, pronto pra executar no terminal
+/// normal (já fora do alternate screen).
+pub(crate) enum RestorePlan {
+    Checkpoint(Group),
+    Regret(RegretInfo),
+}
+
+/// Roda o wizard interativo inteiro (pontos → membros → revisão) dentro do
+/// alternate screen e devolve o plano escolhido, ou `None` se cancelado/abortado.
+/// Esc nos membros volta pros pontos; Esc/Abortar na revisão volta pros membros.
+pub(crate) fn select_restore_plan(
+    groups: &[Group],
+    regret: Option<&RegretInfo>,
+) -> Result<Option<RestorePlan>> {
+    let _alt = AltScreen::enter();
+    loop {
+        match select_restore_action(groups, regret)? {
+            RestoreAction::Checkpoint(group_id) => {
+                let group = groups.iter().find(|g| g.id == group_id).unwrap();
+                loop {
+                    let Some(selected) = select_checkpoint_members(group)? else {
+                        break;
+                    };
+                    match review_checkpoint_restore(group, &selected)? {
+                        RestoreFlow::Continue => {
+                            return Ok(Some(RestorePlan::Checkpoint(selected)));
+                        }
+                        RestoreFlow::Back => continue,
+                        RestoreFlow::Abort => return Ok(None),
+                    }
+                }
+            }
+            RestoreAction::Regret => {
+                let info = regret.unwrap();
+                loop {
+                    let Some(selected) = select_regret_members(info)? else {
+                        break;
+                    };
+                    match review_regret_restore(info, &selected)? {
+                        RestoreFlow::Continue => {
+                            return Ok(Some(RestorePlan::Regret(selected)));
+                        }
+                        RestoreFlow::Back => continue,
+                        RestoreFlow::Abort => return Ok(None),
+                    }
+                }
+            }
+            RestoreAction::Abort => return Ok(None),
+        }
+    }
+}
+
 pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
@@ -50,8 +103,7 @@ pub(crate) fn select_restore_action(
     let prefix_len = 4;
 
     clear_screen();
-    println!("{}", style("Pontos de restauração").bold());
-    println!();
+    header("Pontos de restauração");
 
     if let Some(r) = regret {
         let text = format!(
@@ -76,10 +128,10 @@ pub(crate) fn select_restore_action(
     }
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Selecione o ponto de restauração")
         .items(&items)
         .default(0)
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -165,20 +217,20 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     clear_screen();
     println!(
         "{} {}  {}  {}  {}  {}",
-        style("Checkpoint").bold(),
+        title("Checkpoint"),
         style(group.id).dim(),
         style("·").dim(),
         short_datetime(group::date(group)),
         style("·").dim(),
         group::description(group)
     );
-    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt("Selecione os membros para restaurar  (espaço marca · enter confirma · esc volta)")
+        .with_prompt(format!("Selecione os membros para restaurar  {HINT_MULTI}"))
         .items(&items)
         .defaults(&vec![true; group.members.len()])
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -214,18 +266,18 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     clear_screen();
     println!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
-        style("Regret").bold(),
+        title("Regret"),
         style("·").dim(),
         style("·").dim(),
         short_datetime(&regret.creation_time)
     );
-    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt("Selecione os membros do Regret para restaurar  (espaço marca · enter confirma · esc volta)")
+        .with_prompt(format!("Selecione os membros do Regret para restaurar  {HINT_MULTI}"))
         .items(&items)
         .defaults(&vec![true; regret.entries.len()])
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -262,7 +314,7 @@ pub(crate) fn review_checkpoint_restore(
     clear_screen();
     println!(
         "{} {} checkpoint {}  {}  {}/{} membros",
-        style("Restauração").bold(),
+        title("Restauração"),
         style("·").dim(),
         style(original.id).dim(),
         style("·").dim(),
@@ -305,7 +357,7 @@ pub(crate) fn review_regret_restore(
     clear_screen();
     println!(
         "{} {} regret  {}  {}/{} membros",
-        style("Restauração").bold(),
+        title("Restauração"),
         style("·").dim(),
         style("·").dim(),
         selected.entries.len(),
@@ -433,10 +485,11 @@ fn read_restore_flow() -> Result<RestoreFlow> {
     println!();
     let flows = [RestoreFlow::Continue, RestoreFlow::Abort];
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Confirma a restauração?  (esc volta)")
+        .with_prompt(format!("Confirma a restauração?  {HINT_BACK}"))
         .items(&["Continuar", "Abortar"])
         .default(0)
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {

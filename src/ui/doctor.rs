@@ -1,17 +1,20 @@
 use crate::boot::{BootDiagnosis, BootHealth};
 use crate::doctor::DoctorTarget;
-use crate::ui::term::{THEME, branch, stem};
+use crate::ui::term::{THEME, branch, clear_screen, header, stem, title};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
 
 pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
+    clear_screen();
+    header("Diagnóstico de boot");
     dialoguer::Select::with_theme(&THEME)
         .with_prompt("Escolha o sistema para diagnosticar")
         .items(&labels)
         .default(0)
         .clear(true)
+        .report(false)
         .interact()
         .context("selecionar sistema")
 }
@@ -33,7 +36,7 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
 pub(crate) fn print_target(target: &DoctorTarget) {
     println!(
         "{} {} {}",
-        style("Alvo").bold(),
+        title("Alvo"),
         style("·").dim(),
         target.label
     );
@@ -64,7 +67,7 @@ pub(crate) fn print_spacer() {
 }
 
 pub(crate) fn print_diagnosis(root: &Path, diagnosis: &BootDiagnosis) {
-    println!("{}", style("Diagnóstico de boot").bold());
+    header("Diagnóstico de boot");
     println!("{} filesystem  {}", branch(false), diagnosis.fstype);
     match diagnosis.health {
         BootHealth::NativeBoot => {

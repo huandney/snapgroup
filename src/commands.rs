@@ -3,10 +3,7 @@ use crate::btrfs;
 use crate::doctor;
 use crate::group::{self, Group};
 use crate::rollback::{self, RollbackError};
-use crate::ui::restore::{
-    RegretEntry, RegretInfo, RestoreAction, RestoreFlow, review_checkpoint_restore,
-    review_regret_restore, select_checkpoint_members, select_regret_members, select_restore_action,
-};
+use crate::ui::restore::{RegretEntry, RegretInfo, RestorePlan, select_restore_plan};
 use crate::snapper;
 use crate::ui::snapshots;
 use anyhow::{Context, Result, bail};
@@ -110,58 +107,22 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
 
 fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
-    let has_regret = regret.is_some();
 
-    if groups.is_empty() && !has_regret {
+    if groups.is_empty() && regret.is_none() {
         crate::ui::restore::print_no_restore_points();
         return Ok(());
     }
 
-    loop {
-        let action = select_restore_action(groups, regret.as_ref())?;
-        match action {
-            RestoreAction::Checkpoint(group_id) => {
-                let group = groups.iter().find(|g| g.id == group_id).unwrap();
-                // Loop interno: Back no review volta pra cá (seleção de membros),
-                // um passo só. Esc nos membros quebra pro menu de pontos.
-                loop {
-                    let Some(selected) = select_checkpoint_members(group)? else {
-                        break;
-                    };
-                    match review_checkpoint_restore(group, &selected)? {
-                        RestoreFlow::Continue => {
-                            return execute_restore_checkpoint(&selected, mount_path);
-                        }
-                        RestoreFlow::Back => continue,
-                        RestoreFlow::Abort => {
-                            crate::ui::restore::print_cancelled();
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            RestoreAction::Regret => {
-                loop {
-                    let Some(selected) = select_regret_members(regret.as_ref().unwrap())? else {
-                        break;
-                    };
-                    match review_regret_restore(regret.as_ref().unwrap(), &selected)? {
-                        RestoreFlow::Continue => {
-                            return execute_restore_regret(selected, mount_path);
-                        }
-                        RestoreFlow::Back => continue,
-                        RestoreFlow::Abort => {
-                            crate::ui::restore::print_cancelled();
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            RestoreAction::Abort => {
-                crate::ui::restore::print_cancelled();
-                return Ok(());
-            }
+    // Wizard interativo no alternate screen; ao sair, executa no terminal normal.
+    match select_restore_plan(groups, regret.as_ref())? {
+        None => {
+            crate::ui::restore::print_cancelled();
+            Ok(())
         }
+        Some(RestorePlan::Checkpoint(selected)) => {
+            execute_restore_checkpoint(&selected, mount_path)
+        }
+        Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
 }
 
@@ -343,27 +304,16 @@ pub fn delete(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Loop: Esc na confirmação volta pra seleção (um passo); Esc na seleção sai.
-    loop {
-        let Some(target_indices) = snapshots::select_delete_targets(&groups)? else {
-            return Ok(());
-        };
-        let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
+    // Wizard interativo no alternate screen; a exclusão roda fora, no normal.
+    let Some(target_indices) = snapshots::select_delete_plan(&groups)? else {
+        snapshots::print_delete_cancelled();
+        return Ok(());
+    };
 
-        match snapshots::confirm_delete_targets(&targets)? {
-            snapshots::DeleteFlow::Proceed => {
-                for g in &targets {
-                    delete_group(g)?;
-                }
-                return Ok(());
-            }
-            snapshots::DeleteFlow::Back => continue,
-            snapshots::DeleteFlow::Cancel => {
-                snapshots::print_delete_cancelled();
-                return Ok(());
-            }
-        }
+    for i in target_indices {
+        delete_group(&groups[i])?;
     }
+    Ok(())
 }
 
 fn delete_group(g: &Group) -> Result<()> {
