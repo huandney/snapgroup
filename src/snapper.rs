@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::fs;
 use std::process::Command;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)] // alguns campos só serão consumidos na lista fzf
 pub struct Snapshot {
     pub number: u32,
