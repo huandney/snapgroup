@@ -343,20 +343,27 @@ pub fn delete(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    let Some(target_indices) = snapshots::select_delete_targets(&groups)? else {
-        return Ok(());
-    };
-    let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
+    // Loop: Esc na confirmação volta pra seleção (um passo); Esc na seleção sai.
+    loop {
+        let Some(target_indices) = snapshots::select_delete_targets(&groups)? else {
+            return Ok(());
+        };
+        let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
 
-    if !snapshots::confirm_delete_targets(&targets)? {
-        snapshots::print_delete_cancelled();
-        return Ok(());
+        match snapshots::confirm_delete_targets(&targets)? {
+            snapshots::DeleteFlow::Proceed => {
+                for g in &targets {
+                    delete_group(g)?;
+                }
+                return Ok(());
+            }
+            snapshots::DeleteFlow::Back => continue,
+            snapshots::DeleteFlow::Cancel => {
+                snapshots::print_delete_cancelled();
+                return Ok(());
+            }
+        }
     }
-
-    for g in &targets {
-        delete_group(g)?;
-    }
-    Ok(())
 }
 
 fn delete_group(g: &Group) -> Result<()> {

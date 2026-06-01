@@ -3,7 +3,9 @@ use crate::group::{self, Group, GroupId};
 use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
-use crate::ui::term::{THEME, branch, clear_screen, confirm, stem, truncate_for_terminal};
+use crate::ui::term::{
+    THEME, branch, clear_screen, confirm, short_datetime, stem, truncate_for_terminal,
+};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
@@ -54,7 +56,7 @@ pub(crate) fn select_restore_action(
     if let Some(r) = regret {
         let text = format!(
             "⟲ regret  ·  {}  ·  {} membros  ·  estado anterior",
-            r.creation_time,
+            short_datetime(&r.creation_time),
             r.entries.len()
         );
         items.push(truncate_for_terminal(&text, prefix_len));
@@ -62,14 +64,12 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
-        let date = group::date(g);
-        let desc = group::description(g);
         let text = format!(
             "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
             g.id,
-            date,
+            short_datetime(group::date(g)),
             g.members.len(),
-            desc
+            group::description(g)
         );
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
@@ -157,7 +157,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
             m.config,
             mountpoint,
             m.snapshot.number,
-            m.snapshot.date
+            short_datetime(&m.snapshot.date)
         );
         items.push(truncate_for_terminal(&text, 6));
     }
@@ -166,9 +166,9 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     println!(
         "{} {}  {}  {}  {}  {}",
         style("Checkpoint").bold(),
-        group.id,
+        style(group.id).dim(),
         style("·").dim(),
-        group::date(group),
+        short_datetime(group::date(group)),
         style("·").dim(),
         group::description(group)
     );
@@ -217,7 +217,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
         style("Regret").bold(),
         style("·").dim(),
         style("·").dim(),
-        regret.creation_time
+        short_datetime(&regret.creation_time)
     );
     println!();
 
@@ -264,7 +264,7 @@ pub(crate) fn review_checkpoint_restore(
         "{} {} checkpoint {}  {}  {}/{} membros",
         style("Restauração").bold(),
         style("·").dim(),
-        original.id,
+        style(original.id).dim(),
         style("·").dim(),
         selected.members.len(),
         original.members.len()

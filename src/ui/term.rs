@@ -27,6 +27,21 @@ pub fn stem(last: bool) -> &'static str {
     if last { "   " } else { "│  " }
 }
 
+/// Encurta um timestamp pra `YYYY-MM-DD HH:MM`, descartando segundos e timezone.
+/// Robusto a formatos diferentes (snapper, `btrfs subvolume show`) e a fallbacks
+/// não-data: se os dois primeiros tokens não parecerem data+hora, devolve igual.
+pub fn short_datetime(s: &str) -> String {
+    let mut it = s.split_whitespace();
+    let (Some(date), Some(time)) = (it.next(), it.next()) else {
+        return s.to_string();
+    };
+    if !date.contains('-') || !time.contains(':') {
+        return s.to_string();
+    }
+    let hm: String = time.chars().take(5).collect();
+    format!("{date} {hm}")
+}
+
 /// Trunca texto pra caber na largura do terminal.
 /// Previne wrapping que causa bug visual no dialoguer (linhas "comendo" o conteúdo acima).
 pub fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {

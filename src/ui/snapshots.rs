@@ -1,6 +1,8 @@
 use crate::group::{self, Group};
 use crate::snapper;
-use crate::ui::term::{THEME, branch, clear_screen, confirm, stem, truncate_for_terminal};
+use crate::ui::term::{
+    THEME, branch, clear_screen, confirm, short_datetime, stem, truncate_for_terminal,
+};
 use anyhow::{Context, Result};
 use console::style;
 
@@ -44,14 +46,12 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     let prefix_len = 6;
     let mut items: Vec<String> = Vec::new();
     for g in groups {
-        let date = group::date(g);
-        let desc = group::description(g);
         let text = format!(
             "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
             g.id,
-            date,
+            short_datetime(group::date(g)),
             g.members.len(),
-            desc
+            group::description(g)
         );
         items.push(truncate_for_terminal(&text, prefix_len));
     }
@@ -83,21 +83,45 @@ fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     Ok(Some((0..groups.len()).collect()))
 }
 
-pub(crate) fn confirm_delete_targets(targets: &[&Group]) -> Result<bool> {
+/// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
+/// um passo); `Cancel` = "Cancelar" explícito (encerra).
+pub(crate) enum DeleteFlow {
+    Proceed,
+    Back,
+    Cancel,
+}
+
+pub(crate) fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
     clear_screen();
     println!("{}", style("Apagar checkpoints").bold());
     let total = targets.len();
     for (i, g) in targets.iter().enumerate() {
         println!(
-            "{} {}  {}  {} membros",
+            "{} {}  {}  {}  {}  {}  {} membros",
             branch(i + 1 == total),
-            g.id,
+            style(g.id).dim(),
             style("·").dim(),
+            short_datetime(group::date(g)),
+            style("·").dim(),
+            group::description(g),
             g.members.len()
         );
     }
 
-    confirm("Confirmar exclusão?")
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Apagar estes checkpoints?  (esc volta)")
+        .items(&["Confirmar", "Cancelar"])
+        .default(1)
+        .clear(true)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(DeleteFlow::Back);
+    };
+    Ok(match choice {
+        0 => DeleteFlow::Proceed,
+        _ => DeleteFlow::Cancel,
+    })
 }
 
 pub(crate) fn print_delete_cancelled() {
@@ -125,9 +149,9 @@ pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
         println!(
             "{} {}  {}  {}  {}  {}  {}  {} membros",
             branch(glast),
-            g.id,
+            style(g.id).dim(),
             style("·").dim(),
-            group::date(g),
+            short_datetime(group::date(g)),
             style("·").dim(),
             group::description(g),
             style("·").dim(),
@@ -152,7 +176,8 @@ pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
 pub(crate) fn print_regret_status(creation_time: &str) {
     println!();
     println!(
-        "{} Regret ativo ({creation_time}) — use 'snapg restore' para restaurar",
-        style("⚠").yellow().bold()
+        "{} Regret ativo ({}) — use 'snapg restore' para restaurar",
+        style("⚠").yellow().bold(),
+        short_datetime(creation_time)
     );
 }
