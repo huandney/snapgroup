@@ -6,6 +6,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<()> {
+    // Caminho implícito (sem --root/--boot): se `/` é um snapshot de resgate, e
+    // não o subvol que boota por padrão, sincronizar `/boot` daqui miraria o
+    // root errado. Recusa e instrui. Args explícitos fazem bypass: quem passa
+    // --root sabe o alvo.
+    if root.is_none()
+        && boot.is_none()
+        && let Some(ctx) = boot::detect_rescue_boot()?
+    {
+        doctor_ui::print_rescue_boot(&ctx);
+        return Ok(());
+    }
     let target = select_target(root, boot)?;
     diagnose_and_apply(&target, apply)
 }

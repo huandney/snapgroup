@@ -1,4 +1,4 @@
-use crate::boot::{BootDiagnosis, BootHealth, BootIssue};
+use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{THEME, clear_screen, header, line, title, tree_branch, tree_stem};
 use anyhow::{Context, Result};
@@ -31,6 +31,41 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
     eprintln!("  Recuperação alternativa: {recovery}");
     eprintln!();
+}
+
+pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} você está num snapshot de resgate",
+        style("!").yellow().bold()
+    ));
+    println!("{} {:<COL$} {}", tree_branch(false), "montado em /", ctx.current_subvol);
+    println!(
+        "{} {:<COL$} {} (conforme fstab)",
+        tree_branch(false),
+        "boota",
+        ctx.default_subvol
+    );
+    println!(
+        "{} {:<COL$} sincronizar /boot daqui miraria o root errado",
+        tree_branch(true),
+        "risco"
+    );
+    println!();
+    println!("  monte o root padrão e rode o doctor contra ele:");
+    println!(
+        "    {}",
+        style(format!(
+            "mount -o subvol=/{} {} /mnt/at",
+            ctx.default_subvol, ctx.device
+        ))
+        .bold()
+    );
+    println!(
+        "    {}",
+        style("snapg doctor --root /mnt/at --boot /boot --apply").bold()
+    );
 }
 
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {

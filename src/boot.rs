@@ -278,6 +278,95 @@ fn boot_mountpoint_in(root: &Path, boot: &Path) -> String {
     }
 }
 
+/// Contexto de um boot de resgate: `/` está montado de um subvolume diferente
+/// do que o fstab declara como `/`. Quem deve receber o sync de `/boot` é o
+/// subvol padrão (o que boota), não o snapshot de resgate montado agora.
+#[derive(Debug, Clone)]
+pub struct RescueContext {
+    pub current_subvol: String,
+    pub default_subvol: String,
+    pub device: String,
+}
+
+/// Detecta boot de resgate: compara o subvol montado em `/` (`findmnt FSROOT`)
+/// com o subvol que o fstab declara para `/`. `None` quando casam (boot normal)
+/// ou quando não dá para determinar (sem `subvol=` no fstab — ex.: root direto
+/// em partição). É o mesmo princípio do gate de FAT32 (fstab como verdade),
+/// aplicado ao root: impede o doctor de sincronizar `/boot` para o ambiente de
+/// resgate em vez do `/@` que vai bootar.
+pub fn detect_rescue_boot() -> Result<Option<RescueContext>> {
+    let Some(default) = fstab_root_subvol() else {
+        return Ok(None);
+    };
+    let current = findmnt_field("FSROOT", Path::new("/"))?;
+    if !subvols_diverge(&current, &default) {
+        return Ok(None);
+    }
+    let source = findmnt_field("SOURCE", Path::new("/"))?;
+    let device = source.split('[').next().unwrap_or(&source).trim().to_string();
+    Ok(Some(RescueContext {
+        current_subvol: normalize_subvol(&current),
+        default_subvol: normalize_subvol(&default),
+        device,
+    }))
+}
+
+fn findmnt_field(field: &str, target: &Path) -> Result<String> {
+    let out = Command::new("findmnt")
+        .args(["-no", field, "--target"])
+        .arg(target)
+        .output()
+        .context("findmnt falhou")?;
+    if !out.status.success() {
+        bail!(
+            "findmnt {field} {}: {}",
+            target.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if val.is_empty() {
+        bail!("findmnt {field} vazio para {}", target.display());
+    }
+    Ok(val)
+}
+
+fn fstab_root_subvol() -> Option<String> {
+    let content = fs::read_to_string("/etc/fstab").ok()?;
+    parse_fstab_root_subvol(&content)
+}
+
+/// Extrai o `subvol=` da entrada `/` do fstab. Pura, para teste.
+fn parse_fstab_root_subvol(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (_spec, mp, _fstype, opts) =
+            (fields.next(), fields.next(), fields.next(), fields.next());
+        if mp != Some("/") {
+            continue;
+        }
+        for opt in opts?.split(',') {
+            if let Some(v) = opt.strip_prefix("subvol=") {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Subvol sem a `/` inicial, para comparar fstab ("/@") e FSROOT ("/@/...").
+fn normalize_subvol(s: &str) -> String {
+    s.trim().trim_start_matches('/').to_string()
+}
+
+fn subvols_diverge(current: &str, default: &str) -> bool {
+    normalize_subvol(current) != normalize_subvol(default)
+}
+
 pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     let fstype = boot_fstype(boot)?;
     if !fstype.eq_ignore_ascii_case("vfat") {
@@ -705,9 +794,34 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
-        limine_boot_path_from_line, should_skip_sync,
+        limine_boot_path_from_line, parse_fstab_root_subvol, should_skip_sync, subvols_diverge,
     };
     use std::path::Path;
+
+    #[test]
+    fn parses_fstab_root_subvol() {
+        let fstab = "# /etc/fstab\n\
+             UUID=aaa\t/\tbtrfs\tsubvol=/@,defaults,noatime,compress=zstd:1\t0 0\n\
+             UUID=bbb /boot vfat defaults 0 2\n";
+        assert_eq!(parse_fstab_root_subvol(fstab).as_deref(), Some("/@"));
+        // entrada "/" sem subvol= (root direto em partição) → None
+        assert_eq!(parse_fstab_root_subvol("UUID=aaa / btrfs defaults 0 0\n"), None);
+        // sem entrada "/" → None (não confundir com /home)
+        assert_eq!(
+            parse_fstab_root_subvol("UUID=bbb /home btrfs subvol=/@home 0 0\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_subvol_divergence() {
+        // boot normal: / é o subvol padrão
+        assert!(!subvols_diverge("/@", "/@"));
+        // resgate: snapshot montado em /
+        assert!(subvols_diverge("/@/.snapshots/660/snapshot", "/@"));
+        // normalização tolera a "/" inicial divergente
+        assert!(!subvols_diverge("@", "/@"));
+    }
 
     #[test]
     fn boot_mountpoint_relative_to_root() {
