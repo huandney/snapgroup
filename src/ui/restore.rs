@@ -142,6 +142,50 @@ pub(crate) fn select_restore_action(
     Ok(actions.remove(selection))
 }
 
+/// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
+/// anotado para o usuário escolher o que casa com o `/boot`.
+pub(crate) struct RootSnapshotRow {
+    pub(crate) id: GroupId,
+    pub(crate) date: String,
+    pub(crate) description: String,
+    pub(crate) kernel: String,
+}
+
+/// Picker para "restaurar só o /": lista os snapshots com membro `root`,
+/// anotados com o kernel. Retorna o `GroupId` escolhido, ou `None` no ESC.
+pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<GroupId>> {
+    let mut items: Vec<String> = Vec::new();
+    let prefix_len = 4;
+
+    clear_screen();
+    header("Restaurar só o \"/\"");
+
+    for r in rows {
+        let text = format!(
+            "snapshot {}  ·  {}  ·  kernel {}  ·  {}",
+            r.id,
+            short_datetime(&r.date),
+            r.kernel,
+            r.description
+        );
+        items.push(truncate_for_terminal(&text, prefix_len));
+    }
+
+    let Some(selection) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Escolha o kernel/snapshot para o \"/\"")
+        .items(&items)
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(rows[selection].id))
+}
+
 pub(crate) fn print_no_restore_points() {
     println!("nenhum checkpoint ou regret encontrado — nada pra restaurar");
 }

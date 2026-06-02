@@ -72,8 +72,8 @@ pub(crate) fn select_rescue_action(
         format!(
             "Manter o root atual (kernel {default_kernel}) — ajusta o \"/boot\"   [só \"/boot\"; mantém root e home]"
         ),
-        "Mudar o que boota — abrir o restore (outro instantâneo ou desfazer o último)"
-            .to_string(),
+        "Restaurar só o \"/\" (escolher kernel) — mantém home e root".to_string(),
+        "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
     ];
     dialoguer::Select::with_theme(&THEME)
         .with_prompt("Como resolver?")

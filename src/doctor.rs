@@ -57,8 +57,17 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                 );
                 return diagnose_and_apply(&target, apply);
             }
-            // Outras: desmonta o /@ (o restore monta o toplevel) e abre o picker
-            // do restore. Ao voltar — concluído ou cancelado com ESC — o loop
+            // C: ajusta a outra ponta — restaura SÓ o membro root para um
+            // snapshot escolhido (kernel anotado), mantendo home e root_home.
+            1 => {
+                drop(mount);
+                {
+                    let _lock = crate::lock::acquire()?;
+                    crate::commands::restore_root_only()?;
+                }
+            }
+            // Outras: restore completo. Desmonta o /@ (o restore monta o toplevel)
+            // e abre o picker. Ao voltar — concluído ou cancelado com ESC — o loop
             // reexibe o menu, então ESC no restore não encerra o doctor.
             _ => {
                 drop(mount);

@@ -74,6 +74,58 @@ pub fn restore() -> Result<()> {
     result
 }
 
+/// Restaura só o membro `root` (`/`): o doctor usa isto para "manter o kernel do
+/// `/boot`" ajustando a outra ponta (o `/`) sem tocar `home`/`root_home`. Monta
+/// o toplevel, mostra o picker anotado com o kernel de cada snapshot e reverte
+/// só o `root` do grupo escolhido.
+pub fn restore_root_only() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        bail!("nenhuma config snapper encontrada");
+    }
+
+    let groups = group::list_groups()?;
+    rollback::ensure_single_filesystem(&configs)?;
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = restore_root_only_inner(&groups, &mount_path);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+fn restore_root_only_inner(groups: &[Group], mount_path: &Path) -> Result<()> {
+    let mut rows = Vec::new();
+    let mut by_id = std::collections::HashMap::new();
+    for g in groups {
+        let Some(root) = root_member(g)? else {
+            continue; // grupo sem membro root: não dá para restaurar só o /
+        };
+        let snap_path = rollback::member_snapshot_path(root, mount_path)?;
+        rows.push(crate::ui::restore::RootSnapshotRow {
+            id: g.id,
+            date: group::date(g).to_string(),
+            description: group::description(g).to_string(),
+            kernel: boot::kernel_label(&snap_path),
+        });
+        by_id.insert(g.id, g.clone());
+    }
+
+    if rows.is_empty() {
+        crate::ui::restore::print_no_restore_points();
+        return Ok(());
+    }
+
+    let Some(id) = crate::ui::restore::select_root_snapshot(&rows)? else {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    };
+    let group = by_id.get(&id).expect("id selecionado veio das rows");
+    execute_restore_root_only(group, mount_path)
+}
+
 /// Descobre regrets existentes no toplevel.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
@@ -153,8 +205,6 @@ fn scope_group_to_config(group: &Group, config: &str) -> Option<Group> {
 /// sync de `/boot` e regret já ficam escopados a esse único membro. O sync
 /// pós-rollback garante consistência: no-op se o `/boot` já casa com o snapshot
 /// escolhido, senão reescreve o `/boot` para casar.
-// Opção C (Parte 2): caller (picker + menu do doctor) entra no C3.
-#[allow(dead_code)]
 fn execute_restore_root_only(group: &Group, mount_path: &Path) -> Result<()> {
     let Some(root) = root_member(group)? else {
         bail!("grupo {} não tem membro root (/) para restaurar", group.id);
