@@ -503,21 +503,94 @@ kernel que está em `/boot`. Se não → aviso alto + bloqueio. Hoje o
 realmente boota. Esse cinto teria pego o estado do incidente (boot 7.0.10-2 vs
 `/@` 7.0.3-1) em qualquer caminho.
 
+## Fase 2 — menu unificado: doctor como resolvedor
+
+A Fase 1 detecta o resgate e recusa+instrui (piso seguro). A Fase 2 fecha o
+ciclo: o doctor deixa de só apontar o comando e passa a **resolver na hora**,
+oferecendo as saídas num menu. A intenção é o doctor ser um resolvedor único —
+o usuário em crise decide tudo num lugar só.
+
+### A assimetria que o menu precisa respeitar
+
+As duas saídas **não são a mesma operação**, e confundi-las recria o bug:
+
+- **A — tornar bootável o sistema configurado (`/@`):** é um **sync de `/boot`**.
+  Escreve `/boot` para casar com o kernel do `/@`. Não toca no root.
+- **B — adotar outro sistema (snapshot bootado ou desfazer restore):** é um
+  **rollback do `/@`** (restore). Mudar só o `/boot` para o kernel do snapshot
+  de resgate deixaria o `/@` descasado → Emergency de novo. Para "ir ao kernel
+  novo", o `/@` precisa mudar — território do `restore`, não do sync de `/boot`.
+
+Por isso B nunca é "sincronizar `/boot` para o snapshot montado". B é sempre um
+rollback do root.
+
+### Estrutura do menu (default A)
+
+```text
+ ▪ Diagnóstico de boot
+   ! você está num snapshot de resgate
+   ├─ montado em /   @/.snapshots/660/snapshot   kernel 7.0.10-2
+   ├─ boota          @                            kernel 7.0.3-1
+   └─ /boot          kernel 7.0.10-2  (descasado do que boota)
+
+   Como resolver?
+ > Tornar o sistema padrão (@) bootável — sincroniza /boot p/ 7.0.3-1   [recomendado]
+   Mudar o que boota — restaurar outro snapshot ou desfazer a última restauração
+```
+
+- **Default = A**, porque é **não-destrutiva** e **honra o restore que o usuário
+  já fez** (faz o sistema bootar o que ele já está configurado para bootar). B
+  descarta esse restore e exige escolha ativa.
+- A linha mostra a **transição de kernel** (montado vs boota), tornando a
+  escolha informada — sem isso o usuário não vê que é um downgrade/upgrade.
+
+### Opção A — sync contra o `/@` (auto-mount)
+
+O doctor monta o subvol padrão **read-only** num temp (lê módulos/vmlinuz/
+mkinitcpio.conf de lá; `/boot` já está montado e é o único alvo de escrita),
+roda o sync e desmonta com cleanup garantido. Read-only é a segurança: não há
+como corromper o `/@`. É a Opção 2 da seção anterior, agora acionada pelo menu.
+
+### Opção B — handoff para o `restore` (inclui o "cancelar restauração")
+
+B delega ao fluxo de `snapg restore`, que **já** lista:
+
+- os checkpoints (promover qualquer snapshot a sistema padrão), e
+- o **Regret** (`RestorePlan::Regret` → `execute_restore_regret`): desfazer a
+  última restauração, voltando ao estado exato anterior.
+
+Ou seja, a ideia de "ao restaurar, ter opção de cancelar a restauração" **já
+existe** como o Regret e é alcançada por B sem mecanismo novo no doctor. B =
+"mudar o que boota" abre o picker do restore, e o Regret é um dos itens.
+
+Promover o snapshot de resgate e desfazer o último restore são **paths
+distintos** com resultados às vezes parecidos: o Regret volta ao estado exato
+pré-restore (preciso, depende do regret existir); promover snapshot é um
+rollback geral para o snapshot escolhido (não depende de regret).
+
+### Nota de contrato
+
+B expande o escopo do `doctor` (que era diagnóstico+reparo de `/boot`) para
+incluir rollback de root. Isso é deliberado: a meta é o doctor resolver tudo. O
+rollback continua executado pelo código do `restore` (regret/aside, asides
+preservados), o doctor só roteia — sem duplicar a máquina de segurança.
+
 ## Plano incremental
 
 ```text
-Fase 1 -> verify: testes de detecção
-  - helpers: fsroot atual, subvol do fstab, normalização/comparação
-  - current_system_target detecta divergência e retorna estado de resgate
-  - UI imprime contexto + comando (Opção 1)
-  - --root/--boot explícitos fazem bypass
-  - testes puros: igual->ok, divergente->resgate, parsing do subvol do fstab
+Fase 1 (feita) -> detectar + recusar + instruir
+  - FSROOT de / vs subvol do fstab; divergência = resgate
+  - caminho implícito recusa e instrui; --root/--boot explícitos fazem bypass
+  - helpers puros com testes
 
-Fase 2 -> verify: invariante em teste + manual
-  - checagem "subvol padrão casa com /boot" antes de prompt_reboot()
-  - bloqueio + mensagem quando falha
+Fase 2 -> verify: manual no resgate + testes do menu
+  - menu unificado com default A (sync contra /@)
+  - Opção A: auto-mount ro do /@ e sync de /boot
+  - Opção B: handoff para o picker do restore (promover snapshot | Regret)
 
-Fase 3 (opcional) -> auto-mount ro do subvol padrão (Opção 2)
+Fase 3 -> verify: invariante em teste + manual
+  - antes de prompt_reboot(): subvol padrão casa com /boot
+  - bloqueio + mensagem quando falha (backstop universal)
 ```
 
 ## Prompt para validação externa
@@ -561,15 +634,28 @@ Proposta:
   com cleanup garantido.
 - Backstop: antes de oferecer reboot, verificar que o subvol que boota por
   padrão tem /usr/lib/modules/<kver> para o kernel em /boot.
+- Fase 2 (menu unificado, doctor como resolvedor): em vez de só instruir, o
+  doctor oferece um menu com default na opção não-destrutiva:
+  - A (default): tornar bootável o sistema configurado (/@) — sync de /boot
+    contra /@ (auto-mount read-only). Não toca no root.
+  - B: mudar o que boota — handoff para o picker do restore, que já lista
+    promover outro snapshot e desfazer a última restauração (Regret).
+  Ponto crítico: B é sempre um rollback do root, nunca "sincronizar /boot para
+  o snapshot montado" (isso recriaria o descasamento). Default é A porque é
+  não-destrutiva e honra o restore que o usuário já fez.
 
 Pergunta:
 Comparar FSROOT de / contra o subvol do fstab é o sinal certo e robusto para
 detectar "estou num snapshot de resgate"? Há caso em que fstab e cmdline do
 bootloader discordam sobre o subvol padrão, e qual deveria vencer? A Opção 1
 (recusar+instruir) é suficiente como primeira versão, ou a Opção 2 (auto-mount
-read-only) é necessária para um tool de recuperação? O invariante "subvol
-padrão casa com /boot" antes do reboot é o backstop certo, ou há um sinal
-melhor? Existe abordagem mais simples ou mais robusta?
+read-only) é necessária para um tool de recuperação? No menu unificado da Fase
+2, o default deve mesmo ser a opção não-destrutiva A (sync para o root que já
+boota), ou há argumento para o default ser B (adotar o snapshot bootado)?
+Expandir o doctor para também fazer rollback (via handoff ao restore) é um bom
+contrato, ou o doctor deveria ficar restrito a /boot e só apontar o restore? O
+invariante "subvol padrão casa com /boot" antes do reboot é o backstop certo,
+ou há um sinal melhor? Existe abordagem mais simples ou mais robusta?
 
 Responda como revisão técnica: achados primeiro, riscos, recomendação e plano
 incremental de implementação.
