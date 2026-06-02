@@ -524,56 +524,90 @@ As duas saídas **não são a mesma operação**, e confundi-las recria o bug:
 Por isso B nunca é "sincronizar `/boot` para o snapshot montado". B é sempre um
 rollback do root.
 
-### Estrutura do menu (default A)
+### As duas pontas, e onde mora o kernel
+
+Configs do snapper (membros possíveis de um grupo): `root` = `/`, `home` =
+`/home`, `root_home` = `/root`. O **kernel/módulos vivem só no membro `root`
+(`/`)** — `/usr/lib/modules/<kver>`. `/home` e `/root` não têm kernel. E `/boot`
+é uma partição vfat à parte, fora de todo snapshot.
+
+Logo a dessincronização de boot tem **exatamente duas pontas**:
+
+1. **`/boot`** (vfat) → `vmlinuz`/`initramfs` que o bootloader carrega.
+2. **`/` (membro `root`, subvol `@`)** → `/usr/lib/modules/<kver>`.
+
+Restaurar `home`/`root_home` não toca nenhuma das duas — por isso não afeta o
+boot. Resolver o desync é fazer **uma das pontas** casar com a outra.
+
+### Estrutura do menu — "qual kernel manter" (default A)
 
 ```text
  ▪ Diagnóstico de boot
-   ! você está num snapshot de resgate
-   ├─ montado em /   @/.snapshots/660/snapshot   kernel 7.0.10-2
-   ├─ boota          @                            kernel 7.0.3-1
-   └─ /boot          kernel 7.0.10-2  (descasado do que boota)
+   ! /boot e o root que boota estão dessincronizados
+   ├─ /boot       kernel 7.0.10-2
+   └─ / (@)       kernel 7.0.3-1   (boota por padrão)
 
-   Como resolver?
- > Tornar o sistema padrão (@) bootável — sincroniza /boot p/ 7.0.3-1   [recomendado]
-   Mudar o que boota — restaurar outro snapshot ou desfazer a última restauração
+   Qual kernel manter?
+ > 7.0.3-1 (do sistema atual) — ajusta o /boot          [só /boot; mantém root e home]
+   7.0.10-2 (do /boot)        — restaura só o / p/ esse kernel  [só o membro /; mantém home]
+   Outras opções (restore) — escolher outro instantâneo ou desfazer o último
 ```
 
-- **Default = A**, porque é **não-destrutiva** e **honra o restore que o usuário
-  já fez** (faz o sistema bootar o que ele já está configurado para bootar). B
-  descarta esse restore e exige escolha ativa.
-- A linha mostra a **transição de kernel** (montado vs boota), tornando a
-  escolha informada — sem isso o usuário não vê que é um downgrade/upgrade.
+- **Default = primeira (A)**, por ser a mais conservadora: muda **só o `/boot`**,
+  mantém root e home como estão.
+- Cada item diz **o que vai mexer** entre colchetes — transparência: A toca só
+  `/boot`; a segunda toca só o membro `/`; a terceira abre o `restore`.
 
-### Opção A — sync contra o `/@` (auto-mount)
+### A — manter o kernel do root: sincronizar o `/boot`
 
-O doctor monta o subvol padrão **read-only** num temp (lê módulos/vmlinuz/
-mkinitcpio.conf de lá; `/boot` já está montado e é o único alvo de escrita),
-roda o sync e desmonta com cleanup garantido. Read-only é a segurança: não há
-como corromper o `/@`. É a Opção 2 da seção anterior, agora acionada pelo menu.
+Ajusta a ponta 1. O doctor monta o subvol padrão **read-only** e sincroniza o
+`/boot` para o kernel do `/@`. Não toca root nem home. (auto-mount da seção
+anterior.)
 
-### Opção B — handoff para o `restore` (inclui o "cancelar restauração")
+### C — manter o kernel do `/boot`: restaurar **só o membro `root`**
 
-B delega ao fluxo de `snapg restore`, que **já** lista:
+Ajusta a ponta 2, do jeito cirúrgico que o desync permite: como `/home` e
+`/root` não têm kernel, esta opção restaura **apenas o membro `root` (`/`)** para
+um instantâneo cujo kernel casa com o `/boot` (7.0.10-2). Resultado: o `/` passa
+a ter os módulos certos, o `/boot` fica como está (sync vira no-op), e **`/home`
+e `/root` ficam intactos**. É um restore **escopado a um membro**, não do grupo
+inteiro — por isso não mexe no home.
 
-- os checkpoints (promover qualquer snapshot a sistema padrão), e
-- o **Regret** (`RestorePlan::Regret` → `execute_restore_regret`): desfazer a
-  última restauração, voltando ao estado exato anterior.
+Abre o picker do `restore` já filtrado aos instantâneos cujo `root` tem o kernel
+do `/boot`, restaurando só esse membro.
 
-Ou seja, a ideia de "ao restaurar, ter opção de cancelar a restauração" **já
-existe** como o Regret e é alcançada por B sem mecanismo novo no doctor. B =
-"mudar o que boota" abre o picker do restore, e o Regret é um dos itens.
+### Outras opções — `restore` completo (inclui "desfazer")
 
-Promover o snapshot de resgate e desfazer o último restore são **paths
-distintos** com resultados às vezes parecidos: o Regret volta ao estado exato
-pré-restore (preciso, depende do regret existir); promover snapshot é um
-rollback geral para o snapshot escolhido (não depende de regret).
+A terceira entrada abre o fluxo de `snapg restore` por inteiro: escolher outro
+instantâneo (qualquer membro/grupo) ou o **Regret** (`RestorePlan::Regret`):
+desfazer a última restauração, voltando ao estado exato anterior. A redação diz
+explicitamente que isso **usa o restore**, para o usuário saber que está saindo
+do reparo de `/boot` e entrando em rollback de subvolume.
+
+### Navegação: ESC volta ao doctor, não sai
+
+Quando o usuário entra no `restore` a partir do doctor (opções C ou "outras") e
+aperta **ESC**, deve **voltar ao menu do doctor**, não encerrar o programa. Hoje
+o `restore` lançado pelo doctor sai no ESC. Implicação: `resolve_rescue` vira um
+**loop** — ao cancelar o restore (picker retornou `None`), reexibe o menu de
+resolução em vez de retornar de `run`.
+
+### Feature relacionada (fluxo de restore): "Desfazer" sem reboot
+
+Distinta do doctor, vive no `restore`. Ao restaurar, junto de "Reiniciar agora?",
+oferecer **"Desfazer"**: enquanto **não houve reboot**, o `/` vivo ainda é o
+subvol que virou `_snapg_regret` (o swap só pega no próximo boot), então desfazer
+é só **renomear de volta** — instantâneo, sem reiniciar, como se o restore não
+tivesse acontecido. Depois do reboot, desfazer volta a exigir reboot (aí é o
+Regret normal). Detecção: o `/` vivo ainda é o subvol arquivado pelo último
+restore.
 
 ### Nota de contrato
 
-B expande o escopo do `doctor` (que era diagnóstico+reparo de `/boot`) para
-incluir rollback de root. Isso é deliberado: a meta é o doctor resolver tudo. O
-rollback continua executado pelo código do `restore` (regret/aside, asides
-preservados), o doctor só roteia — sem duplicar a máquina de segurança.
+C e "outras opções" expandem o escopo do `doctor` (era reparo de `/boot`) para
+restore de subvolume. Deliberado: a meta é o doctor resolver tudo. O rollback
+continua executado pelo código do `restore` (regret/aside preservados), o doctor
+só roteia — sem duplicar a máquina de segurança.
 
 ## Plano incremental
 
@@ -583,10 +617,20 @@ Fase 1 (feita) -> detectar + recusar + instruir
   - caminho implícito recusa e instrui; --root/--boot explícitos fazem bypass
   - helpers puros com testes
 
-Fase 2 -> verify: manual no resgate + testes do menu
-  - menu unificado com default A (sync contra /@)
-  - Opção A: auto-mount ro do /@ e sync de /boot
-  - Opção B: handoff para o picker do restore (promover snapshot | Regret)
+Fase 2a (feita) -> menu base no resgate
+  - menu com default A (sync contra /@, auto-mount ro)
+  - "outras opções": handoff para o picker do restore (instantâneo | Regret)
+
+Fase 2b -> verify: manual no resgate + testes do menu
+  - reorganizar como "qual kernel manter" com a transição /boot vs /
+  - A: ajusta /boot (mantém root e home)
+  - C: restaura SÓ o membro root p/ snapshot com o kernel do /boot (mantém home)
+  - redação transparente do que cada item mexe
+  - ESC no restore lançado pelo doctor volta ao menu (resolve_rescue vira loop)
+
+Fase 2c (no fluxo de restore) -> "Desfazer" sem reboot
+  - detectar restore pendente de reboot (/ vivo ainda é o _snapg_regret)
+  - "Desfazer" renomeia de volta, sem reiniciar
 
 Fase 3 -> verify: invariante em teste + manual
   - antes de prompt_reboot(): subvol padrão casa com /boot
