@@ -140,6 +140,26 @@ fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Resu
     Ok(())
 }
 
+/// True se /boot já casa com o kernel de `candidate_root` — i.e. o sync
+/// pós-rollback seria no-op. Permite ao caller suprimir o aviso de FAT32
+/// antes do rollback, usando o mesmo sinal byte-a-byte que o gate do sync.
+/// /boot não-FAT32 → `Ok(true)` (nada a sincronizar/avisar). `Err` só em
+/// falha real de leitura; o caller trata isso como fail-safe (mantém o aviso).
+pub fn boot_already_synced(candidate_root: &Path) -> Result<bool> {
+    boot_already_synced_paths(candidate_root, Path::new("/boot"))
+}
+
+pub fn boot_already_synced_paths(candidate_root: &Path, boot: &Path) -> Result<bool> {
+    if !is_fat32_path(boot) {
+        return Ok(true);
+    }
+    let groups = discover_kernel_groups(boot)?;
+    if groups.is_empty() {
+        bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
+    }
+    boot_matches_snapshot(candidate_root, &groups)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootHealth {
     NativeBoot,
