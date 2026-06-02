@@ -33,46 +33,46 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
 }
 
-/// Menu de resolução no resgate. Mostra a transição de kernel (montado vs
-/// boota) e oferece A (default, não-destrutivo) ou B. Retorna o índice (0=A).
+/// Menu de resolução no resgate. As duas pontas do desync são `"/boot"` e `"/"`.
+/// Cada item diz o que mexe. ESC retorna `None` (volta/sai). Índice 0 = ajustar
+/// `"/boot"`; demais = abrir o restore.
 pub(crate) fn select_rescue_action(
     ctx: &RescueContext,
     current_kernel: &str,
     default_kernel: &str,
-) -> Result<usize> {
+) -> Result<Option<usize>> {
     clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
-        "{} você está num snapshot de resgate",
+        "{} \"/boot\" e \"/\" (o root que boota) estão dessincronizados",
         style("!").yellow().bold()
     ));
     println!(
-        "{} {:<COL$} {}  kernel {}",
+        "{} {:<COL$} {}  kernel {}  (resgate)",
         tree_branch(false),
-        "montado em /",
+        "montado em \"/\"",
         ctx.current_subvol,
         current_kernel
     );
     println!(
-        "{} {:<COL$} {}  kernel {} (boota por padrão)",
+        "{} {:<COL$} {}  kernel {}",
         tree_branch(false),
-        "padrão",
+        "boota \"/\"",
         ctx.default_subvol,
         default_kernel
     );
     println!(
-        "{} {:<COL$} {} descasado do que boota",
+        "{} {:<COL$} {} não casa com o root que boota",
         tree_branch(true),
-        "/boot",
+        "\"/boot\"",
         style("✗").red().bold()
     );
     println!();
     let items = [
         format!(
-            "Tornar o sistema padrão (/{}) bootável — sincroniza /boot p/ {}",
-            ctx.default_subvol, default_kernel
+            "Manter o root atual (kernel {default_kernel}) — ajusta o \"/boot\"   [só \"/boot\"; mantém root e home]"
         ),
-        "Mudar o que boota — restaurar outro snapshot ou desfazer a última restauração"
+        "Mudar o que boota — abrir o restore (outro instantâneo ou desfazer o último)"
             .to_string(),
     ];
     dialoguer::Select::with_theme(&THEME)
@@ -81,8 +81,8 @@ pub(crate) fn select_rescue_action(
         .default(0)
         .clear(true)
         .report(true)
-        .interact()
-        .context("selecionar ação de recuperação")
+        .interact_opt()
+        .context("seleção cancelada")
 }
 
 pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {

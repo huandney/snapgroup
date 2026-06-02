@@ -25,46 +25,50 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
 /// default; (B) mudar o que boota, via handoff para o `restore` (que carrega o
 /// Regret). Se o mount falhar, cai no piso da Fase 1: instruir o comando manual.
 fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
-    let mount = match mount_default_subvol_ro(&ctx) {
-        Ok(m) => m,
-        Err(e) => {
-            doctor_ui::print_rescue_mount_failed(&e);
-            doctor_ui::print_rescue_boot(&ctx);
-            return Ok(());
-        }
-    };
+    // Loop para que ESC dentro do restore (opção "outras") volte a este menu em
+    // vez de encerrar o doctor. ESC no próprio menu (None) é que sai.
+    loop {
+        let mount = match mount_default_subvol_ro(&ctx) {
+            Ok(m) => m,
+            Err(e) => {
+                doctor_ui::print_rescue_mount_failed(&e);
+                doctor_ui::print_rescue_boot(&ctx);
+                return Ok(());
+            }
+        };
 
-    let current_kernel = boot::kernel_label(Path::new("/"));
-    let default_kernel = boot::kernel_label(&mount.path);
+        let current_kernel = boot::kernel_label(Path::new("/"));
+        let default_kernel = boot::kernel_label(&mount.path);
 
-    let action = match doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel)? {
-        0 => RescueAction::SyncDefault,
-        _ => RescueAction::ChangeBoot,
-    };
-    match action {
-        // A: tornar bootável o sistema configurado — sync de /boot contra o /@
-        // montado. O `apply` original ainda governa o confirm final.
-        RescueAction::SyncDefault => {
-            let target = DoctorTarget::new(
-                format!("root padrão (subvol /{})", ctx.default_subvol),
-                mount.path.clone(),
-                PathBuf::from("/boot"),
-            );
-            diagnose_and_apply(&target, apply)
-        }
-        // B: mudar o que boota — desmonta o /@ (o restore monta o toplevel) e
-        // delega ao picker do restore, que lista checkpoints e o Regret.
-        RescueAction::ChangeBoot => {
-            drop(mount);
-            let _lock = crate::lock::acquire()?;
-            crate::commands::restore()
+        let Some(choice) =
+            doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel)?
+        else {
+            return Ok(()); // ESC no menu do doctor: sai
+        };
+
+        match choice {
+            // A: ajusta o "/boot" contra o /@ montado. Terminal — o `apply`
+            // original ainda governa o confirm final.
+            0 => {
+                let target = DoctorTarget::new(
+                    format!("root padrão (subvol /{})", ctx.default_subvol),
+                    mount.path.clone(),
+                    PathBuf::from("/boot"),
+                );
+                return diagnose_and_apply(&target, apply);
+            }
+            // Outras: desmonta o /@ (o restore monta o toplevel) e abre o picker
+            // do restore. Ao voltar — concluído ou cancelado com ESC — o loop
+            // reexibe o menu, então ESC no restore não encerra o doctor.
+            _ => {
+                drop(mount);
+                {
+                    let _lock = crate::lock::acquire()?;
+                    crate::commands::restore()?;
+                }
+            }
         }
     }
-}
-
-enum RescueAction {
-    SyncDefault,
-    ChangeBoot,
 }
 
 /// Mount read-only do subvol padrão num temp efêmero. Read-only é a segurança:
@@ -75,7 +79,16 @@ struct RescueMount {
 
 impl Drop for RescueMount {
     fn drop(&mut self) {
-        let _ = Command::new("umount").arg(&self.path).status();
+        let unmounted = Command::new("umount")
+            .arg(&self.path)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        // EBUSY transitório logo após o uso deixaria o /@ montado. Detach lazy
+        // garante a limpeza — recovery tool não pode vazar mount do root.
+        if !unmounted {
+            let _ = Command::new("umount").arg("-l").arg(&self.path).status();
+        }
         let _ = std::fs::remove_dir(&self.path);
     }
 }
