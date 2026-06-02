@@ -137,6 +137,33 @@ fn root_member(group: &Group) -> Result<Option<&Member>> {
     Ok(None)
 }
 
+/// Sub-grupo com só o membro de config `config` (None se ausente). Base do
+/// restore escopado: `rollback_group` itera os membros, então um grupo de um
+/// membro reverte só ele. Puro.
+fn scope_group_to_config(group: &Group, config: &str) -> Option<Group> {
+    let member = group.members.iter().find(|m| m.config == config)?;
+    Some(Group {
+        id: group.id,
+        members: vec![member.clone()],
+    })
+}
+
+/// Restaura SÓ o membro `root` (`/`) do grupo, preservando `home` e `root_home`.
+/// Reusa `execute_restore_checkpoint` com um grupo de um membro: aside, rollback,
+/// sync de `/boot` e regret já ficam escopados a esse único membro. O sync
+/// pós-rollback garante consistência: no-op se o `/boot` já casa com o snapshot
+/// escolhido, senão reescreve o `/boot` para casar.
+// Opção C (Parte 2): caller (picker + menu do doctor) entra no C3.
+#[allow(dead_code)]
+fn execute_restore_root_only(group: &Group, mount_path: &Path) -> Result<()> {
+    let Some(root) = root_member(group)? else {
+        bail!("grupo {} não tem membro root (/) para restaurar", group.id);
+    };
+    let scoped = scope_group_to_config(group, &root.config)
+        .expect("membro root recém-localizado existe no grupo");
+    execute_restore_checkpoint(&scoped, mount_path)
+}
+
 /// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
 /// quando o sync vai de fato mexer no /boot legado: kernel idêntico ao do
 /// snapshot → sync no-op → não incomoda. Qualquer falha de detecção cai no
@@ -503,4 +530,40 @@ fn prompt_reboot() -> Result<()> {
         bail!("systemctl reboot -i falhou com status {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scope_group_to_config;
+    use crate::group::{Group, Member};
+    use crate::snapper::Snapshot;
+
+    fn member(config: &str) -> Member {
+        Member {
+            config: config.to_string(),
+            snapshot: Snapshot {
+                number: 1,
+                kind: "single".to_string(),
+                date: String::new(),
+                user: String::new(),
+                description: String::new(),
+                cleanup: String::new(),
+                userdata: None,
+            },
+        }
+    }
+
+    #[test]
+    fn scopes_group_to_single_member() {
+        let group = Group {
+            id: 42,
+            members: vec![member("home"), member("root"), member("root_home")],
+        };
+        let scoped = scope_group_to_config(&group, "root").expect("grupo tem root");
+        assert_eq!(scoped.id, 42);
+        assert_eq!(scoped.members.len(), 1);
+        assert_eq!(scoped.members[0].config, "root");
+        // home e root_home não entram
+        assert!(scope_group_to_config(&group, "ausente").is_none());
+    }
 }
