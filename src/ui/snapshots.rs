@@ -133,7 +133,7 @@ fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
 
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
         .with_prompt(format!("Apagar estes checkpoints?  {HINT_BACK}"))
-        .items(&["Confirmar", "Cancelar"])
+        .items(&["Sim", "Não"])
         .default(1)
         .clear(true)
         .report(false)

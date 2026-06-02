@@ -184,7 +184,7 @@ fn execute_restore_checkpoint(
                         &restored_root,
                         e,
                         "rode 'snapg restore' e selecione o Regret \
-                         (⟲ Estado Anterior à Restauração) para voltar ao \
+                         (↺ Regret — Estado Anterior à Restauração) para voltar ao \
                          sistema bootável atual antes de qualquer reboot.",
                     );
                 }

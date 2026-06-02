@@ -486,8 +486,8 @@ fn read_restore_flow() -> Result<RestoreFlow> {
     let flows = [RestoreFlow::Continue, RestoreFlow::Abort];
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
         .with_prompt(format!("Confirma a restauração?  {HINT_BACK}"))
-        .items(&["Continuar", "Abortar"])
-        .default(0)
+        .items(&["Sim", "Não"])
+        .default(1)
         .clear(true)
         .report(false)
         .interact_opt()
