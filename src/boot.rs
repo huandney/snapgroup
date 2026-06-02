@@ -67,19 +67,32 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
     // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
     // de interrupção junto. O caminho pesado só roda quando o kernel difere.
-    if boot_matches_snapshot(restored_root, &groups)? {
+    //
+    // Exceção: backup remanescente = sync anterior interrompido. Aí o gate é
+    // pulado mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho
+    // na janela entre copiar o vmlinuz e regenerá-lo. O resync completo o refaz.
+    let interrupted = boot_backup_remnant(boot);
+    if should_skip_sync(interrupted, boot_matches_snapshot(restored_root, &groups)?) {
         panel.already_synced();
         return Ok(());
     }
 
     let critical = critical_boot_files(boot, &groups);
     let backup = boot_backup_dir(boot);
-    panel.start_backup(boot, &backup);
-    if let Err(e) = backup_boot_files(boot, &critical) {
-        panel.fail_current("backup falhou");
-        return Err(e);
+    // No resync de interrupção NÃO recriar o backup: o remanescente é o último
+    // estado bom conhecido de /boot (pré-primeira tentativa). `backup_boot_files`
+    // apaga e recria, então sobrescrevê-lo com o /boot meio-sincronizado atual
+    // destruiria o único rollback existente se esta passada também cair.
+    if !interrupted {
+        panel.start_backup(boot, &backup);
+        if let Err(e) = backup_boot_files(boot, &critical) {
+            panel.fail_current("backup falhou");
+            return Err(e);
+        }
+        panel.finish_backup();
+    } else {
+        panel.reuse_backup(&backup);
     }
-    panel.finish_backup();
 
     let result = sync_inner(restored_root, boot, &groups, &mut panel)
         .and_then(|()| {
@@ -95,9 +108,31 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         return Err(e);
     }
 
-    let _ = fs::remove_dir_all(boot_backup_dir(boot));
+    // Sync verificado: /boot está bootável. Remover o backup é só limpeza —
+    // falha aqui não invalida o sync nem pode bloquear o reboot (o caller trata
+    // Err como desync), só avisa. Um backup que sobra vira NeedsSync no próximo
+    // doctor, que reroda este mesmo caminho seguro.
+    if let Err(e) = fs::remove_dir_all(boot_backup_dir(boot)) {
+        crate::ui::boot_sync::print_backup_cleanup_failed(&e);
+    }
     panel.finish_synced();
     Ok(())
+}
+
+/// True se há um backup de boot remanescente. O backup só é removido após o
+/// `verify_synced`, então sua presença significa que um sync começou e não
+/// fechou limpo (queda de energia / interrupção) — o sinal durável que
+/// sobrevive a um reboot, ao contrário de qualquer estado em memória.
+fn boot_backup_remnant(boot: &Path) -> bool {
+    boot_backup_dir(boot).exists()
+}
+
+/// Decide se o sync pode ser pulado. Só quando nada foi interrompido E o
+/// vmlinuz já casa com o snapshot. Backup remanescente força o caminho completo
+/// mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho na janela
+/// entre copiar o vmlinuz e regenerá-lo.
+fn should_skip_sync(interrupted: bool, vmlinuz_matches: bool) -> bool {
+    !interrupted && vmlinuz_matches
 }
 
 fn sync_inner(
@@ -180,11 +215,21 @@ pub fn boot_already_synced_paths(candidate_root: &Path, boot: &Path) -> Result<b
     boot_matches_snapshot(candidate_root, &groups)
 }
 
+/// Motivo de um `/boot` FAT32 estar dessincronizado, para a UI explicar a ação.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootIssue {
+    /// Backup de boot remanescente: um sync anterior começou e não fechou limpo
+    /// (queda de energia / interrupção). O initramfs pode ter ficado velho.
+    InterruptedSync,
+    /// O vmlinuz em /boot diverge do kernel do root alvo.
+    KernelMismatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootHealth {
     NativeBoot,
     Synced,
-    NeedsSync,
+    NeedsSync(BootIssue),
 }
 
 #[derive(Debug, Clone)]
@@ -220,10 +265,16 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
         .iter()
         .map(|group| group.initramfs_paths.len())
         .sum();
-    let health = if boot_matches_snapshot(root, &groups)? {
+    // Backup remanescente denuncia um sync interrompido antes da comparação de
+    // vmlinuz: na janela entre copiar o vmlinuz e regenerar o initramfs, o
+    // vmlinuz pode já casar enquanto o initramfs segue velho. Tratar como
+    // problema corrigível em vez de confiar no vmlinuz isolado.
+    let health = if boot_backup_remnant(boot) {
+        BootHealth::NeedsSync(BootIssue::InterruptedSync)
+    } else if boot_matches_snapshot(root, &groups)? {
         BootHealth::Synced
     } else {
-        BootHealth::NeedsSync
+        BootHealth::NeedsSync(BootIssue::KernelMismatch)
     };
     Ok(BootDiagnosis {
         fstype,
@@ -602,8 +653,33 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_boot_file, limine_boot_path_from_line};
+    use super::{boot_backup_remnant, classify_boot_file, limine_boot_path_from_line, should_skip_sync};
     use std::path::Path;
+
+    #[test]
+    fn skips_sync_only_when_clean_and_matching() {
+        // Limpo e vmlinuz casa: nada a fazer, pula o caminho pesado.
+        assert!(should_skip_sync(false, true));
+        // Interrompido nunca pula, mesmo com vmlinuz casando — o initramfs pode
+        // ter ficado velho na janela entre copiar o vmlinuz e regenerá-lo.
+        assert!(!should_skip_sync(true, true));
+        assert!(!should_skip_sync(true, false));
+        // Mismatch de kernel: precisa sincronizar.
+        assert!(!should_skip_sync(false, false));
+    }
+
+    #[test]
+    fn backup_remnant_reflects_dir_presence() {
+        let base = std::env::temp_dir().join(format!("snapg_test_boot_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        assert!(!boot_backup_remnant(&base));
+        std::fs::create_dir_all(base.join(".snapg_boot_backup")).unwrap();
+        assert!(boot_backup_remnant(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn parses_limine_kernel_path() {

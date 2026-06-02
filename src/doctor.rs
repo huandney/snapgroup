@@ -86,7 +86,7 @@ fn current_system_target() -> Result<Option<DoctorTarget>> {
 
 fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
-    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync);
+    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync(_));
     doctor_ui::print_report(target, &diagnosis);
     if !needs_sync {
         doctor_ui::print_no_action_needed();
@@ -109,7 +109,7 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
 
 fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
     let diagnosis = diagnosis_for(root, boot_path)?;
-    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync);
+    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync(_));
     doctor_ui::print_diagnosis(root, &diagnosis);
     Ok(needs_sync)
 }

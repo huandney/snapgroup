@@ -1,4 +1,4 @@
-use crate::boot::{BootDiagnosis, BootHealth};
+use crate::boot::{BootDiagnosis, BootHealth, BootIssue};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{THEME, clear_screen, header, line, title, tree_branch, tree_stem};
 use anyhow::{Context, Result};
@@ -107,9 +107,17 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
                 "estado"
             );
         }
-        BootHealth::NeedsSync => {
+        BootHealth::NeedsSync(BootIssue::KernelMismatch) => {
             println!(
                 "{} {:<COL$} {} dessincronizado com o root alvo",
+                tree_branch(true),
+                "estado",
+                style("✗").red().bold()
+            );
+        }
+        BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
+            println!(
+                "{} {:<COL$} {} sincronização incompleta (backup de boot remanescente)",
                 tree_branch(true),
                 "estado",
                 style("✗").red().bold()

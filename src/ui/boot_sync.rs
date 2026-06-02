@@ -60,6 +60,17 @@ impl BootSyncPanel {
         self.finish(0, "backup criado");
     }
 
+    /// Resync de interrupção: o backup remanescente é preservado como rollback,
+    /// não recriado. Marca a etapa como concluída sem refazer o backup.
+    pub(crate) fn reuse_backup(&mut self, backup: &Path) {
+        self.start(
+            0,
+            "reusando backup existente",
+            format!("backup preservado em {}", backup.display()),
+        );
+        self.finish(0, "backup preservado");
+    }
+
     pub(crate) fn start_vmlinuz(&mut self, kver: &str, dest: &Path) {
         self.start(
             1,
@@ -199,6 +210,14 @@ pub(crate) fn print_backup_restore_failed(error: &anyhow::Error) {
 
 pub(crate) fn print_backup_restored() {
     println!("  ficheiros de boot restaurados do backup");
+}
+
+pub(crate) fn print_backup_cleanup_failed(error: &std::io::Error) {
+    eprintln!(
+        "  {} /boot sincronizado, mas a limpeza do backup falhou: {error}",
+        style("!").yellow().bold()
+    );
+    eprintln!("  o sistema está bootável; rode 'snapg doctor' para remover o backup");
 }
 
 fn short_path(path: &Path) -> String {
