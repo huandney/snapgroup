@@ -14,11 +14,92 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
         && boot.is_none()
         && let Some(ctx) = boot::detect_rescue_boot()?
     {
-        doctor_ui::print_rescue_boot(&ctx);
-        return Ok(());
+        return resolve_rescue(ctx, apply);
     }
     let target = select_target(root, boot)?;
     diagnose_and_apply(&target, apply)
+}
+
+/// Resolve um boot de resgate. Monta o subvol padrão (`/@`) read-only e oferece
+/// o menu: (A) sincronizar `/boot` para o `/@` que boota — não-destrutivo,
+/// default; (B) mudar o que boota, via handoff para o `restore` (que carrega o
+/// Regret). Se o mount falhar, cai no piso da Fase 1: instruir o comando manual.
+fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
+    let mount = match mount_default_subvol_ro(&ctx) {
+        Ok(m) => m,
+        Err(e) => {
+            doctor_ui::print_rescue_mount_failed(&e);
+            doctor_ui::print_rescue_boot(&ctx);
+            return Ok(());
+        }
+    };
+
+    let current_kernel = boot::kernel_label(Path::new("/"));
+    let default_kernel = boot::kernel_label(&mount.path);
+
+    let action = match doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel)? {
+        0 => RescueAction::SyncDefault,
+        _ => RescueAction::ChangeBoot,
+    };
+    match action {
+        // A: tornar bootável o sistema configurado — sync de /boot contra o /@
+        // montado. O `apply` original ainda governa o confirm final.
+        RescueAction::SyncDefault => {
+            let target = DoctorTarget::new(
+                format!("root padrão (subvol /{})", ctx.default_subvol),
+                mount.path.clone(),
+                PathBuf::from("/boot"),
+            );
+            diagnose_and_apply(&target, apply)
+        }
+        // B: mudar o que boota — desmonta o /@ (o restore monta o toplevel) e
+        // delega ao picker do restore, que lista checkpoints e o Regret.
+        RescueAction::ChangeBoot => {
+            drop(mount);
+            let _lock = crate::lock::acquire()?;
+            crate::commands::restore()
+        }
+    }
+}
+
+enum RescueAction {
+    SyncDefault,
+    ChangeBoot,
+}
+
+/// Mount read-only do subvol padrão num temp efêmero. Read-only é a segurança:
+/// o sync só lê módulos/config de lá; `/boot` é o único alvo de escrita.
+struct RescueMount {
+    path: PathBuf,
+}
+
+impl Drop for RescueMount {
+    fn drop(&mut self) {
+        let _ = Command::new("umount").arg(&self.path).status();
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+fn mount_default_subvol_ro(ctx: &boot::RescueContext) -> Result<RescueMount> {
+    let path = PathBuf::from(format!("/run/snapgroup/doctor-at-{}", std::process::id()));
+    std::fs::create_dir_all(&path).context("criar mountpoint do root padrão")?;
+    let out = Command::new("mount")
+        .args(["-o", &format!("ro,subvol=/{}", ctx.default_subvol)])
+        .arg(&ctx.device)
+        .arg(&path)
+        .output()
+        .context("mount do subvol padrão falhou")?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir(&path);
+        bail!(
+            "mount -o ro,subvol=/{} {} -> {}: {}",
+            ctx.default_subvol,
+            ctx.device,
+            path.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(RescueMount { path })
 }
 
 pub fn handle_boot_sync_failure(

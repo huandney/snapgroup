@@ -33,6 +33,67 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
 }
 
+/// Menu de resolução no resgate. Mostra a transição de kernel (montado vs
+/// boota) e oferece A (default, não-destrutivo) ou B. Retorna o índice (0=A).
+pub(crate) fn select_rescue_action(
+    ctx: &RescueContext,
+    current_kernel: &str,
+    default_kernel: &str,
+) -> Result<usize> {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} você está num snapshot de resgate",
+        style("!").yellow().bold()
+    ));
+    println!(
+        "{} {:<COL$} {}  kernel {}",
+        tree_branch(false),
+        "montado em /",
+        ctx.current_subvol,
+        current_kernel
+    );
+    println!(
+        "{} {:<COL$} {}  kernel {} (boota por padrão)",
+        tree_branch(false),
+        "padrão",
+        ctx.default_subvol,
+        default_kernel
+    );
+    println!(
+        "{} {:<COL$} {} descasado do que boota",
+        tree_branch(true),
+        "/boot",
+        style("✗").red().bold()
+    );
+    println!();
+    let items = [
+        format!(
+            "Tornar o sistema padrão (/{}) bootável — sincroniza /boot p/ {}",
+            ctx.default_subvol, default_kernel
+        ),
+        "Mudar o que boota — restaurar outro snapshot ou desfazer a última restauração"
+            .to_string(),
+    ];
+    dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Como resolver?")
+        .items(&items)
+        .default(0)
+        .clear(true)
+        .report(true)
+        .interact()
+        .context("selecionar ação de recuperação")
+}
+
+pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {
+    eprintln!(
+        "  {} não foi possível montar o root padrão para resolver automaticamente: {error:#}",
+        style("!").yellow().bold()
+    );
+    eprintln!("  seguindo com instrução manual:");
+    println!();
+}
+
 pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
     clear_screen();
     header("Diagnóstico de boot");

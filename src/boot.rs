@@ -367,6 +367,26 @@ fn subvols_diverge(current: &str, default: &str) -> bool {
     normalize_subvol(current) != normalize_subvol(default)
 }
 
+/// Kernels presentes em `<root>/usr/lib/modules`, ordenados e juntos por
+/// vírgula — rótulo curto para a UI mostrar a transição (montado vs boota).
+/// `?` quando o diretório não existe ou está vazio.
+pub fn kernel_label(root: &Path) -> String {
+    let modules = root.join("usr/lib/modules");
+    let Ok(entries) = fs::read_dir(&modules) else {
+        return "?".to_string();
+    };
+    let mut kvers: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    kvers.sort();
+    if kvers.is_empty() {
+        return "?".to_string();
+    }
+    kvers.join(", ")
+}
+
 pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     let fstype = boot_fstype(boot)?;
     if !fstype.eq_ignore_ascii_case("vfat") {
@@ -794,9 +814,23 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
-        limine_boot_path_from_line, parse_fstab_root_subvol, should_skip_sync, subvols_diverge,
+        kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol, should_skip_sync,
+        subvols_diverge,
     };
     use std::path::Path;
+
+    #[test]
+    fn kernel_label_lists_module_dirs() {
+        let base = std::env::temp_dir().join(format!("snapg_kver_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // sem usr/lib/modules → "?"
+        std::fs::create_dir_all(&base).unwrap();
+        assert_eq!(kernel_label(&base), "?");
+        // com um kver
+        std::fs::create_dir_all(base.join("usr/lib/modules/7.0.3-1-cachyos")).unwrap();
+        assert_eq!(kernel_label(&base), "7.0.3-1-cachyos");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn parses_fstab_root_subvol() {
