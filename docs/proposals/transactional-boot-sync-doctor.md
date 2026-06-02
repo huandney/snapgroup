@@ -393,3 +393,184 @@ bastam por enquanto?
 Responda como revisão técnica: achados primeiro, riscos, recomendação e plano
 incremental de implementação.
 ```
+
+---
+
+# Parte 2: `doctor` mira o subvolume que boota, não o `/` montado
+
+## Status
+
+Proposto, após incidente de 2026-06-02
+(`docs/incidents/2026-06-02-fat32-interrupted-boot-sync/postmortem.md`).
+
+## Contexto
+
+A Parte 1 cobre `/boot` interrompido. Este incidente expôs uma falha
+**independente e anterior**: o `snapg doctor`, rodado de dentro de um snapshot
+de resgate, sincronizou o `/boot` para o subvolume montado em `/` (o snapshot
+de resgate) em vez do `/@` que boota por padrão — e com isso *piorou* o estado,
+mantendo o sistema em Emergency Mode.
+
+Reconstrução do incidente:
+
+1. `snapg restore` para um checkpoint antigo (kernel 7.0.3-1). Rollback comita:
+   `/@` vira o root antigo (módulos 7.0.3-1).
+2. O boot-sync pós-rollback é interrompido (Ctrl+C). `/boot` fica em 7.0.10-2.
+3. Reboot → boot padrão (`subvol=/@`) carrega kernel 7.0.10-2 de `/boot` contra
+   `/@` que só tem módulos 7.0.3-1 → Emergency Mode.
+4. Usuário boota pelo Limine o snapshot `660` (kernel 7.0.10-2), que sobe.
+5. Roda `snapg doctor`. O doctor usa `/` como alvo — mas `/` é o snapshot 660,
+   **não** `/@`. Reporta NeedsSync e sincroniza `/boot` para 7.0.10-2 (o kernel
+   do resgate).
+6. Reboot → boot padrão (`/@`, 7.0.3-1) ainda não casa com `/boot` (7.0.10-2) →
+   Emergency Mode de novo.
+
+## Causa raiz
+
+`snapg doctor` sem argumentos usa `/` como root alvo. Quando se boota um
+snapshot de resgate pelo bootloader, `/ ≠ /@`: o doctor "conserta" o `/boot`
+para o ambiente de resgate, não para o subvolume que boota por padrão.
+
+Consequência: os mecanismos da Parte 1 (detecção de interrupção, sync forçado)
+estão corretos, mas pressupõem que o doctor mira o root certo. Em cenário de
+resgate, a **seleção de alvo** do doctor é o elo fraco, e precede a Parte 1.
+
+## O sinal correto
+
+O sistema expõe diretamente o que vai bootar, sem heurística:
+
+```text
+findmnt -no FSROOT /     ->  /@/.snapshots/660/snapshot   (subvol montado em /)
+fstab, entrada "/"       ->  subvol=/@                     (subvol que boota)
+```
+
+Quando esses dois divergem, `/` não é o root que vai bootar. É o mesmo
+princípio da Parte 1 (fstab como fonte da verdade), aplicado ao **root** em vez
+do `/boot`.
+
+## Regra de decisão
+
+```text
+fsroot_atual  = findmnt -no FSROOT /            // "@/.snapshots/660/snapshot"
+subvol_padrao = subvol= da entrada "/" no fstab // "@"
+normalizar ambos (remover "/" inicial)
+se fsroot_atual == subvol_padrao -> boot normal: alvo "/" está correto (atual)
+se divergem                      -> resgate: "/" é o root errado
+```
+
+A detecção guarda **apenas o caminho implícito** (`snapg doctor` sem args). O
+caminho explícito (`--root`/`--boot`) faz bypass: quem passa root explícito
+sabe o que está fazendo (inclusive preparar `/boot` para um snapshot de
+propósito).
+
+## Comportamento no resgate — duas opções
+
+**Opção 1 (mínima, mais segura): detectar, recusar e instruir.** Ao divergir, o
+doctor não sincroniza. Mostra o contexto e o comando exato (device de
+`findmnt -no SOURCE /`):
+
+```text
+ ▪ Diagnóstico de boot
+
+   Você está num snapshot de resgate.
+   ├─ montado em /      @/.snapshots/660/snapshot
+   ├─ boota por padrão  @  (conforme fstab)
+   └─ risco             sincronizar /boot daqui miraria o root errado
+
+   monte o root padrão e rode contra ele:
+     mount -o subvol=/@ /dev/nvme0n1p4 /mnt/at
+     snapg doctor --root /mnt/at --boot /boot --apply
+```
+
+Poucas linhas, zero efeito colateral, para o footgun na hora. Custo: montagem
+manual.
+
+**Opção 2 (auto-fix): montar o subvol padrão e mirar nele.** O doctor monta o
+`@` **read-only** num temp (só lê módulos/vmlinuz/mkinitcpio.conf; o `/boot` já
+está montado e é o único alvo de escrita), roda diagnose+sync, e desmonta com
+cleanup garantido. A montagem ro é a segurança: não há como corromper o `@`.
+Custo: lifecycle de mount/umount e descoberta de device, num estado frágil.
+
+Recomendação: Opção 1 primeiro (corta o problema com risco quase nulo); Opção 2
+como follow-up se quisermos o doctor autônomo no resgate. A detecção é a mesma.
+
+## Backstop pareado: invariante final antes do reboot
+
+Independente de como o mismatch surja, antes de qualquer "Reiniciar agora?",
+checar se o subvolume que boota por padrão tem `/usr/lib/modules/<kver>` para o
+kernel que está em `/boot`. Se não → aviso alto + bloqueio. Hoje o
+`verify_synced` só compara contra o root que recebeu o sync, não contra o que
+realmente boota. Esse cinto teria pego o estado do incidente (boot 7.0.10-2 vs
+`/@` 7.0.3-1) em qualquer caminho.
+
+## Plano incremental
+
+```text
+Fase 1 -> verify: testes de detecção
+  - helpers: fsroot atual, subvol do fstab, normalização/comparação
+  - current_system_target detecta divergência e retorna estado de resgate
+  - UI imprime contexto + comando (Opção 1)
+  - --root/--boot explícitos fazem bypass
+  - testes puros: igual->ok, divergente->resgate, parsing do subvol do fstab
+
+Fase 2 -> verify: invariante em teste + manual
+  - checagem "subvol padrão casa com /boot" antes de prompt_reboot()
+  - bloqueio + mensagem quando falha
+
+Fase 3 (opcional) -> auto-mount ro do subvol padrão (Opção 2)
+```
+
+## Prompt para validação externa
+
+Use o texto abaixo para pedir revisão crítica a outra IA.
+
+```text
+Estou desenvolvendo o snapgroup, uma ferramenta Rust que agrupa snapshots do
+Snapper/BTRFS e faz restore pareado de subvolumes (root e home). O root fica em
+BTRFS com subvol padrão /@. Em alguns sistemas /boot é uma partição FAT32
+separada, fora do snapshot. Após restaurar um snapshot antigo, o snapgroup
+sincroniza /boot (copia vmlinuz do root restaurado, regenera initramfs com
+mkinitcpio, atualiza hashes BLAKE2B do Limine). Existe um subcomando
+"snapg doctor" que diagnostica e repara /boot.
+
+Incidente:
+- Usuário restaurou para um checkpoint antigo (kernel 7.0.3-1). O /@ passou a
+  ser o root antigo.
+- O boot-sync pós-rollback foi interrompido; /boot ficou com kernel 7.0.10-2.
+- No boot seguinte, o boot padrão (subvol=/@) caiu em Emergency Mode porque o
+  kernel 7.0.10-2 de /boot não acha módulos no /@ (que só tem 7.0.3-1).
+- Para recuperar, o usuário bootou pelo bootloader um SNAPSHOT de resgate
+  (subvol @/.snapshots/660/snapshot, kernel 7.0.10-2) e rodou "snapg doctor".
+- O doctor usa "/" como root alvo. Mas "/" era o snapshot de resgate, não o /@.
+  Ele sincronizou /boot para 7.0.10-2 (kernel do resgate), piorando o estado.
+- No reboot, o boot padrão (/@, 7.0.3-1) seguiu sem casar com /boot (7.0.10-2).
+
+Diagnóstico:
+- findmnt -no FSROOT / => @/.snapshots/660/snapshot (subvol montado em /)
+- fstab, entrada "/" => subvol=/@ (subvol que boota por padrão)
+- Quando esses dois divergem, "/" não é o root que vai bootar.
+
+Proposta:
+- snapg doctor (sem args) deve comparar o subvol montado em / com o subvol
+  declarado no fstab (ou no cmdline da entrada padrão do bootloader). Se
+  divergem, é boot de resgate e "/" é o root errado.
+- Caminho explícito --root/--boot faz bypass da detecção.
+- Opção 1: detectar, recusar e instruir o comando correto (mount -o subvol=/@
+  <dev> /mnt/at && snapg doctor --root /mnt/at --boot /boot --apply).
+- Opção 2: doctor monta o subvol padrão read-only e mira nele automaticamente,
+  com cleanup garantido.
+- Backstop: antes de oferecer reboot, verificar que o subvol que boota por
+  padrão tem /usr/lib/modules/<kver> para o kernel em /boot.
+
+Pergunta:
+Comparar FSROOT de / contra o subvol do fstab é o sinal certo e robusto para
+detectar "estou num snapshot de resgate"? Há caso em que fstab e cmdline do
+bootloader discordam sobre o subvol padrão, e qual deveria vencer? A Opção 1
+(recusar+instruir) é suficiente como primeira versão, ou a Opção 2 (auto-mount
+read-only) é necessária para um tool de recuperação? O invariante "subvol
+padrão casa com /boot" antes do reboot é o backstop certo, ou há um sinal
+melhor? Existe abordagem mais simples ou mais robusta?
+
+Responda como revisão técnica: achados primeiro, riscos, recomendação e plano
+incremental de implementação.
+```
