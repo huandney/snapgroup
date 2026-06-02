@@ -6,6 +6,7 @@ use crate::rollback::{self, RollbackError};
 use crate::ui::restore::{RegretEntry, RegretInfo, RestorePlan, select_restore_plan};
 use crate::snapper;
 use crate::ui::snapshots;
+use crate::ui::term::clear_screen;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -326,6 +327,7 @@ fn delete_group(g: &Group) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
+    clear_screen();
     let groups = group::list_groups()?;
     if groups.is_empty() {
         snapshots::print_no_groups();

@@ -6,7 +6,37 @@ pub struct SnapgTheme;
 
 impl Theme for SnapgTheme {
     fn format_prompt(&self, f: &mut dyn fmt::Write, prompt: &str) -> fmt::Result {
-        write!(f, "{prompt}")
+        write!(f, "{CONTENT_INDENT}{prompt}")
+    }
+
+    fn format_select_prompt_item(
+        &self,
+        f: &mut dyn fmt::Write,
+        text: &str,
+        active: bool,
+    ) -> fmt::Result {
+        write!(f, "{}{} {}", CONTENT_INDENT, if active { ">" } else { " " }, text)
+    }
+
+    fn format_multi_select_prompt_item(
+        &self,
+        f: &mut dyn fmt::Write,
+        text: &str,
+        checked: bool,
+        active: bool,
+    ) -> fmt::Result {
+        write!(
+            f,
+            "{}{} {}",
+            CONTENT_INDENT,
+            match (checked, active) {
+                (true, true) => "> [x]",
+                (true, false) => "  [x]",
+                (false, true) => "> [ ]",
+                (false, false) => "  [ ]",
+            },
+            text
+        )
     }
 }
 
@@ -15,6 +45,16 @@ pub static THEME: SnapgTheme = SnapgTheme;
 /// Tom terroso (trigo, 256-color) dos títulos de seção. Trocar aqui muda toda a
 /// identidade visual dos cabeçalhos.
 const HEADER_COLOR: u8 = 173;
+/// Tom verde dessaturado para destacar Regret sem competir com sucesso/erro.
+const REGRET_COLOR: u8 = 109;
+/// Cor de marca: mais forte que os cabeçalhos, mas sem usar verde/vermelho de status.
+const BRAND_COLOR: u8 = 214;
+/// Versão exibida na UI. O manifesto fica plain (X.Y.Z) pelo esquema de release;
+/// o sufixo de pré-lançamento mora só aqui.
+pub const DISPLAY_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-beta");
+/// Conteúdo fica alinhado ao texto do cabeçalho, não ao marcador.
+pub const PAGE_INDENT: &str = " ";
+pub const CONTENT_INDENT: &str = "   ";
 
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
@@ -63,18 +103,37 @@ pub fn title(s: &str) -> console::StyledObject<&str> {
 
 /// Cabeçalho de seção de linha única (trigo + bold).
 pub fn header(s: &str) {
-    println!("{}", title(s));
+    println!(
+        "{PAGE_INDENT}{} {}",
+        console::style("SnapGroup").color256(BRAND_COLOR).bold(),
+        console::style(DISPLAY_VERSION).dim()
+    );
+    println!("{PAGE_INDENT}{} {}", title("▪"), title(s));
+}
+
+pub fn line(args: fmt::Arguments<'_>) {
+    println!("{CONTENT_INDENT}{args}");
+}
+
+/// Conector de árvore com o indent de conteúdo (CONTENT_INDENT = "   ") embutido
+/// como literal — `&'static str` pra evitar um `format!` por linha.
+pub fn tree_branch(last: bool) -> &'static str {
+    if last { "   └─" } else { "   ├─" }
+}
+
+pub fn tree_stem(last: bool) -> &'static str {
+    if last { "      " } else { "   │  " }
+}
+
+/// Token de Regret em cor própria para diferenciar o estado anterior sem usar
+/// o verde de sucesso.
+pub fn regret_title(s: &str) -> console::StyledObject<&str> {
+    console::style(s).color256(REGRET_COLOR).bold()
 }
 
 /// Conector de árvore pro último irmão (`└─`) ou intermediário (`├─`).
 pub fn branch(last: bool) -> &'static str {
     if last { "└─" } else { "├─" }
-}
-
-/// Prefixo de continuação pros filhos de um nó: vazio se o pai é o último
-/// irmão, barra vertical caso contrário.
-pub fn stem(last: bool) -> &'static str {
-    if last { "   " } else { "│  " }
 }
 
 /// Encurta um timestamp pra `YYYY-MM-DD HH:MM`, descartando segundos e timezone.

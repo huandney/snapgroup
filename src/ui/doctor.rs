@@ -1,6 +1,6 @@
 use crate::boot::{BootDiagnosis, BootHealth};
 use crate::doctor::DoctorTarget;
-use crate::ui::term::{THEME, branch, clear_screen, header, stem, title};
+use crate::ui::term::{THEME, clear_screen, header, line, title, tree_branch, tree_stem};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
@@ -33,33 +33,39 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
 }
 
-pub(crate) fn print_target(target: &DoctorTarget) {
-    println!(
+pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
+    clear_screen();
+    header("Diagnóstico de boot");
+    print_target(target);
+    print_diagnosis_inner(&target.root, diagnosis);
+}
+
+fn print_target(target: &DoctorTarget) {
+    line(format_args!(
         "{} {} {}",
         title("Alvo"),
         style("·").dim(),
         target.label
-    );
-    println!("{} root  {}", branch(false), target.root.display());
-    println!("{} boot  {}", branch(true), target.boot.display());
-    println!();
+    ));
+    println!("{} root  {}", tree_branch(false), target.root.display());
+    println!("{} boot  {}", tree_branch(false), target.boot.display());
 }
 
 pub(crate) fn print_no_action_needed() {
-    println!("{} nada a fazer", style("✓").green().bold());
+    line(format_args!("{} nada a fazer", style("✓").green().bold()));
 }
 
 pub(crate) fn print_suggested_sync(target: &DoctorTarget) {
     println!();
-    println!(
+    line(format_args!(
         "ação sugerida: sincronizar {} com {}",
         target.boot.display(),
         target.root.display()
-    );
+    ));
 }
 
 pub(crate) fn print_correction_skipped() {
-    println!("correção não aplicada");
+    line(format_args!("correção não aplicada"));
 }
 
 pub(crate) fn print_spacer() {
@@ -68,37 +74,45 @@ pub(crate) fn print_spacer() {
 
 pub(crate) fn print_diagnosis(root: &Path, diagnosis: &BootDiagnosis) {
     header("Diagnóstico de boot");
-    println!("{} filesystem  {}", branch(false), diagnosis.fstype);
+    print_diagnosis_inner(root, diagnosis);
+}
+
+/// Largura da coluna de rótulos do relatório (o maior é "kernel groups" = 13).
+const COL: usize = 14;
+
+fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
+    println!("{} {:<COL$} {}", tree_branch(false), "filesystem", diagnosis.fstype);
+    println!("{} {:<COL$} {}", tree_branch(false), "kernel groups", diagnosis.kernel_groups);
+    println!("{} {:<COL$} {}", tree_branch(false), "initramfs", diagnosis.initramfs_files);
     match diagnosis.health {
         BootHealth::NativeBoot => {
             println!(
-                "{} /boot não é FAT32 separado; nenhuma sincronização é necessária",
-                branch(true)
+                "{} {:<COL$} nativo (/boot não é FAT32 separado)",
+                tree_branch(true),
+                "estado"
             );
             if root != Path::new("/") {
                 println!(
                     "{}nota: se este sistema usa /boot FAT32 separado, monte-o em {} \
                      ou rode com --boot explícito",
-                    stem(true),
+                    tree_stem(true),
                     root.join("boot").display()
                 );
             }
         }
         BootHealth::Synced => {
             println!(
-                "{} /boot está coerente com o root alvo ({} kernel groups, {} initramfs)",
-                branch(true),
-                diagnosis.kernel_groups,
-                diagnosis.initramfs_files
+                "{} {:<COL$} coerente com o root alvo",
+                tree_branch(true),
+                "estado"
             );
         }
         BootHealth::NeedsSync => {
             println!(
-                "{} {} /boot está dessincronizado com o root alvo ({} kernel groups, {} initramfs)",
-                branch(true),
-                style("✗").red().bold(),
-                diagnosis.kernel_groups,
-                diagnosis.initramfs_files
+                "{} {:<COL$} {} dessincronizado com o root alvo",
+                tree_branch(true),
+                "estado",
+                style("✗").red().bold()
             );
         }
     }

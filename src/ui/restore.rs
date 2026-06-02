@@ -5,7 +5,7 @@ use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
-    stem, title, truncate_for_terminal,
+    line, regret_title, title, tree_branch, tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -107,7 +107,7 @@ pub(crate) fn select_restore_action(
 
     if let Some(r) = regret {
         let text = format!(
-            "⟲ regret  ·  {}  ·  {} membros  ·  estado anterior",
+            "↺ Regret  ·  {}  ·  {} membros  ·  estado anterior",
             short_datetime(&r.creation_time),
             r.entries.len()
         );
@@ -215,7 +215,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }
 
     clear_screen();
-    println!(
+    line(format_args!(
         "{} {}  {}  {}  {}  {}",
         title("Checkpoint"),
         style(group.id).dim(),
@@ -223,7 +223,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
         short_datetime(group::date(group)),
         style("·").dim(),
         group::description(group)
-    );
+    ));
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(format!("Selecione os membros para restaurar  {HINT_MULTI}"))
@@ -264,13 +264,13 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     }
 
     clear_screen();
-    println!(
+    line(format_args!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
-        title("Regret"),
+        regret_title("↺ Regret"),
         style("·").dim(),
         style("·").dim(),
         short_datetime(&regret.creation_time)
-    );
+    ));
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(format!("Selecione os membros do Regret para restaurar  {HINT_MULTI}"))
@@ -312,7 +312,7 @@ pub(crate) fn review_checkpoint_restore(
         .collect();
 
     clear_screen();
-    println!(
+    line(format_args!(
         "{} {} checkpoint {}  {}  {}/{} membros",
         title("Restauração"),
         style("·").dim(),
@@ -320,10 +320,10 @@ pub(crate) fn review_checkpoint_restore(
         style("·").dim(),
         selected.members.len(),
         original.members.len()
-    );
+    ));
 
     let has_skip = !skipped.is_empty();
-    println!("{} aplicar", branch(!has_skip));
+    println!("{} aplicar", tree_branch(!has_skip));
     let total = selected.members.len();
     for (i, m) in selected.members.iter().enumerate() {
         let mountpoint = snapper::config_subvolume(&m.config)?;
@@ -331,7 +331,7 @@ pub(crate) fn review_checkpoint_restore(
             .with_context(|| format!("descobrir subvol ativo de '{}'", m.config))?;
         println!(
             "{}{} {:<10} {:<8} #{} → {}",
-            stem(!has_skip),
+            tree_stem(!has_skip),
             branch(i + 1 == total),
             m.config,
             mountpoint,
@@ -355,22 +355,22 @@ pub(crate) fn review_regret_restore(
         .collect();
 
     clear_screen();
-    println!(
+    line(format_args!(
         "{} {} regret  {}  {}/{} membros",
         title("Restauração"),
         style("·").dim(),
         style("·").dim(),
         selected.entries.len(),
         original.entries.len()
-    );
+    ));
 
     let has_skip = !skipped.is_empty();
-    println!("{} aplicar", branch(!has_skip));
+    println!("{} aplicar", tree_branch(!has_skip));
     let total = selected.entries.len();
     for (i, e) in selected.entries.iter().enumerate() {
         println!(
             "{}{} {:<10} {:<8} {} → {}",
-            stem(!has_skip),
+            tree_stem(!has_skip),
             branch(i + 1 == total),
             e.config,
             e.mountpoint,
@@ -505,9 +505,9 @@ fn print_keep_branch(skipped: &[&str]) {
     if skipped.is_empty() {
         return;
     }
-    println!("{} manter", branch(true));
+    println!("{} manter", tree_branch(true));
     let total = skipped.len();
     for (i, config) in skipped.iter().enumerate() {
-        println!("{}{} {}", stem(true), branch(i + 1 == total), config);
+        println!("{}{} {}", tree_stem(true), branch(i + 1 == total), config);
     }
 }

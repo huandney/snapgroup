@@ -2,7 +2,7 @@ use crate::group::{self, Group};
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
-    stem, truncate_for_terminal,
+    line, regret_title, tree_branch, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -121,7 +121,7 @@ fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
     for (i, g) in targets.iter().enumerate() {
         println!(
             "{} {}  {}  {}  {}  {}  {} membros",
-            branch(i + 1 == total),
+            tree_branch(i + 1 == total),
             style(g.id).dim(),
             style("·").dim(),
             short_datetime(group::date(g)),
@@ -165,43 +165,40 @@ pub(crate) fn print_no_groups() {
     println!("nenhum grupo snapg save encontrado");
 }
 
+/// Largura da coluna de descrição no `list`. Trunca o que passar pra não empurrar
+/// a coluna de data quando uma descrição é longa.
+const DESC_COL: usize = 28;
+
 pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
     header("Checkpoints");
-    let gtotal = groups.len();
-    for (gi, g) in groups.iter().enumerate() {
-        let glast = gi + 1 == gtotal;
-        println!(
-            "{} {}  {}  {}  {}  {}  {}  {} membros",
-            branch(glast),
-            style(g.id).dim(),
-            style("·").dim(),
-            short_datetime(group::date(g)),
-            style("·").dim(),
-            group::description(g),
-            style("·").dim(),
-            g.members.len()
-        );
-        let mtotal = g.members.len();
-        for (mi, m) in g.members.iter().enumerate() {
-            let mountpoint = snapper::config_subvolume(&m.config)?;
-            println!(
-                "{}{} {:<10} {:<8} #{}",
-                stem(glast),
-                branch(mi + 1 == mtotal),
-                m.config,
-                mountpoint,
-                m.snapshot.number
-            );
+    for g in groups {
+        let mut mountpoints = Vec::with_capacity(g.members.len());
+        for m in &g.members {
+            mountpoints.push(snapper::config_subvolume(&m.config)?);
         }
+        let desc = group::description(g);
+        let desc_cell = if desc.chars().count() > DESC_COL {
+            let cut: String = desc.chars().take(DESC_COL - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<DESC_COL$}")
+        };
+        line(format_args!(
+            "{}   {}   {}   {}",
+            style(format!("{:>10}", g.id)).dim(),
+            desc_cell,
+            style(short_datetime(group::date(g))).dim(),
+            style(mountpoints.join(" + ")).dim(),
+        ));
     }
     Ok(())
 }
 
 pub(crate) fn print_regret_status(creation_time: &str) {
     println!();
-    println!(
+    line(format_args!(
         "{} Regret ativo ({}) — use 'snapg restore' para restaurar",
-        style("⚠").yellow().bold(),
+        regret_title("↺"),
         short_datetime(creation_time)
-    );
+    ));
 }
