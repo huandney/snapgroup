@@ -131,6 +131,23 @@ pub fn regret_title(s: &str) -> console::StyledObject<&str> {
     console::style(s).color256(REGRET_COLOR).bold()
 }
 
+/// Pergunta de confirmação em negrito. Reservado pras decisões consequentes
+/// (sim/não), não pra prompts de seleção — bold em tudo dilui o sinal.
+pub fn prompt_bold(question: &str) -> String {
+    console::style(question).bold().to_string()
+}
+
+/// Prompt de seleção com dica de navegação: pergunta normal + hint em dim.
+pub fn prompt_hint(question: &str, hint: &str) -> String {
+    format!("{}  {}", question, console::style(hint).dim())
+}
+
+/// Confirmação consequente com dica: pergunta em negrito + hint em dim. Estiliza
+/// os dois separados pra que o negrito da pergunta não vaze pro hint.
+pub fn prompt_bold_hint(question: &str, hint: &str) -> String {
+    format!("{}  {}", console::style(question).bold(), console::style(hint).dim())
+}
+
 /// Conector de árvore pro último irmão (`└─`) ou intermediário (`├─`).
 pub fn branch(last: bool) -> &'static str {
     if last { "└─" } else { "├─" }
@@ -167,7 +184,7 @@ pub fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {
 /// (cauteloso); Esc também equivale a "Não".
 pub fn confirm(prompt: &str) -> Result<bool> {
     let choice = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt)
+        .with_prompt(prompt_bold(prompt))
         .items(&["Sim", "Não"])
         .default(1)
         .clear(true)

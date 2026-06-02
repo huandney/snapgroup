@@ -2,7 +2,7 @@ use crate::group::{self, Group};
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
-    line, regret_title, tree_branch, truncate_for_terminal,
+    line, prompt_bold_hint, prompt_hint, regret_title, tree_branch, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -79,7 +79,7 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     clear_screen();
     header("Apagar checkpoints");
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(format!("Selecione os checkpoints para apagar  {HINT_MULTI}"))
+        .with_prompt(prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI))
         .items(&items)
         .clear(true)
         .report(false)
@@ -132,7 +132,7 @@ fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
     }
 
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(format!("Apagar estes checkpoints?  {HINT_BACK}"))
+        .with_prompt(prompt_bold_hint("Apagar estes checkpoints?", HINT_BACK))
         .items(&["Sim", "Não"])
         .default(1)
         .clear(true)

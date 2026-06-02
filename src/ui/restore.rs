@@ -4,8 +4,9 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
-    line, regret_title, title, tree_branch, tree_stem, truncate_for_terminal,
+    AltScreen, HINT_BACK, HINT_MULTI, PAGE_INDENT, THEME, branch, clear_screen, confirm, header,
+    line, prompt_bold_hint, prompt_hint, regret_title, short_datetime, title, tree_branch,
+    tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -150,13 +151,15 @@ pub(crate) fn print_cancelled() {
 }
 
 pub(crate) fn confirm_fat32_boot() -> Result<bool> {
-    eprintln!();
-    eprintln!("{} ATENÇÃO: /boot está em FAT32 (vfat)", style("⚠").yellow().bold());
-    eprintln!("  O snapg tentará sincronizar kernel/initramfs em /boot,");
-    eprintln!("  mas este é um modo legado: /boot fica fora do snapshot BTRFS.");
-    eprintln!("  Se a sincronização falhar, o backup de /boot será restaurado,");
-    eprintln!("  mas o modo nativo recomendado continua sendo /boot em BTRFS.");
-    eprintln!();
+    clear_screen();
+    header("Restauração");
+    println!();
+    println!("{PAGE_INDENT}{} ATENÇÃO: /boot está em FAT32 (vfat)", style("⚠").yellow().bold());
+    line(format_args!("O snapg tentará sincronizar kernel/initramfs em /boot,"));
+    line(format_args!("mas este é um modo legado: /boot fica fora do snapshot BTRFS."));
+    line(format_args!("Se a sincronização falhar, o backup de /boot será restaurado,"));
+    line(format_args!("mas o modo nativo recomendado continua sendo /boot em BTRFS."));
+    println!();
     confirm("Continuar mesmo assim?")
 }
 
@@ -226,7 +229,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     ));
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(format!("Selecione os membros para restaurar  {HINT_MULTI}"))
+        .with_prompt(prompt_hint("Selecione os membros para restaurar", HINT_MULTI))
         .items(&items)
         .defaults(&vec![true; group.members.len()])
         .clear(true)
@@ -273,7 +276,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     ));
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(format!("Selecione os membros do Regret para restaurar  {HINT_MULTI}"))
+        .with_prompt(prompt_hint("Selecione os membros do Regret para restaurar", HINT_MULTI))
         .items(&items)
         .defaults(&vec![true; regret.entries.len()])
         .clear(true)
@@ -485,7 +488,7 @@ fn read_restore_flow() -> Result<RestoreFlow> {
     println!();
     let flows = [RestoreFlow::Continue, RestoreFlow::Abort];
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(format!("Confirma a restauração?  {HINT_BACK}"))
+        .with_prompt(prompt_bold_hint("Confirma a restauração?", HINT_BACK))
         .items(&["Sim", "Não"])
         .default(1)
         .clear(true)
