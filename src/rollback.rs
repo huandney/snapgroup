@@ -214,6 +214,23 @@ pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, Rollb
     Ok(done)
 }
 
+/// Path top-level absoluto do subvolume read-only de um membro — o conteúdo que
+/// virará root no rollback. Disponível ANTES do commit, então serve tanto à
+/// fase 1 do rollback quanto ao preflight que prevê se o sync de /boot mexerá
+/// no /boot legado.
+pub fn member_snapshot_path(m: &Member, toplevel: &Path) -> Result<PathBuf> {
+    let mountpoint = snapper::config_subvolume(&m.config)?;
+    // Path top-level do snapshot read-only (pode ser nested ou top-level)
+    let snap_live_path = format!(
+        "{}/.snapshots/{}/snapshot",
+        mountpoint.trim_end_matches('/'),
+        m.snapshot.number
+    );
+    let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
+        .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
+    Ok(toplevel.join(&snap_subvol_path))
+}
+
 /// Fase 1: cria a cópia writable do snapshot RO num nome intermediário.
 /// Operação cara (metadata copy) e propensa a ENOSPC. **Não toca em nada vivo.**
 fn prepare_member(m: &Member, toplevel: &Path) -> Result<Prep> {
@@ -223,19 +240,10 @@ fn prepare_member(m: &Member, toplevel: &Path) -> Result<Prep> {
     let current_subvol = btrfs::subvol_relative_path(Path::new(&mountpoint))
         .with_context(|| format!("descobrir subvol ativo de {mountpoint}"))?;
 
-    // Path top-level do snapshot read-only (pode ser nested ou top-level)
-    let snap_live_path = format!(
-        "{}/.snapshots/{}/snapshot",
-        mountpoint.trim_end_matches('/'),
-        m.snapshot.number
-    );
-    let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
-        .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
-
     let backup_subvol = regret_name(&current_subvol);
     let intermediate_name = prep_intermediate_name(&current_subvol);
 
-    let src = toplevel.join(&snap_subvol_path);
+    let src = member_snapshot_path(m, toplevel)?;
     let intermediate = toplevel.join(&intermediate_name);
 
     // Limpa lixo de tentativa anterior abortada (defensivo).

@@ -85,9 +85,9 @@ fn current_system_target() -> Result<Option<DoctorTarget>> {
 }
 
 fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
-    doctor_ui::print_target(target);
-
-    let needs_sync = print_diagnosis(&target.root, &target.boot)?;
+    let diagnosis = diagnosis_for(&target.root, &target.boot)?;
+    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync);
+    doctor_ui::print_report(target, &diagnosis);
     if !needs_sync {
         doctor_ui::print_no_action_needed();
         return Ok(());
@@ -102,16 +102,21 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
 
     boot::sync_fat32_paths(&target.root, &target.boot)?;
     doctor_ui::print_spacer();
-    print_diagnosis(&target.root, &target.boot)?;
+    let diagnosis = diagnosis_for(&target.root, &target.boot)?;
+    doctor_ui::print_report(target, &diagnosis);
     Ok(())
 }
 
 fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
-    validate_target(root, boot_path)?;
-    let diagnosis = boot::diagnose_boot(root, boot_path)?;
+    let diagnosis = diagnosis_for(root, boot_path)?;
     let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync);
     doctor_ui::print_diagnosis(root, &diagnosis);
     Ok(needs_sync)
+}
+
+fn diagnosis_for(root: &Path, boot_path: &Path) -> Result<boot::BootDiagnosis> {
+    validate_target(root, boot_path)?;
+    boot::diagnose_boot(root, boot_path)
 }
 
 fn validate_target(root: &Path, boot: &Path) -> Result<()> {

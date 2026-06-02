@@ -58,6 +58,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         return Ok(());
     }
 
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
     let groups = discover_kernel_groups(boot)?;
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
@@ -67,16 +68,26 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
     // de interrupção junto. O caminho pesado só roda quando o kernel difere.
     if boot_matches_snapshot(restored_root, &groups)? {
-        crate::ui::boot_sync::print_already_synced();
+        panel.already_synced();
         return Ok(());
     }
 
     let critical = critical_boot_files(boot, &groups);
-    backup_boot_files(boot, &critical)?;
+    let backup = boot_backup_dir(boot);
+    panel.start_backup(boot, &backup);
+    if let Err(e) = backup_boot_files(boot, &critical) {
+        panel.fail_current("backup falhou");
+        return Err(e);
+    }
+    panel.finish_backup();
 
-    let result = sync_inner(restored_root, boot, &groups)
-        .and_then(|()| verify_synced(restored_root, &groups));
+    let result = sync_inner(restored_root, boot, &groups, &mut panel)
+        .and_then(|()| {
+            panel.start_verify();
+            verify_synced(restored_root, &groups)
+        });
     if let Err(e) = result {
+        panel.fail_current("sincronização falhou");
         crate::ui::boot_sync::print_restore_backup_after_failure();
         if let Err(re) = restore_backup_path(boot) {
             crate::ui::boot_sync::print_backup_restore_failed(&re);
@@ -85,11 +96,16 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     }
 
     let _ = fs::remove_dir_all(boot_backup_dir(boot));
-    crate::ui::boot_sync::print_synced();
+    panel.finish_synced();
     Ok(())
 }
 
-fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Result<()> {
+fn sync_inner(
+    restored_root: &Path,
+    boot: &Path,
+    groups: &[KernelGroup],
+    panel: &mut crate::ui::boot_sync::BootSyncPanel,
+) -> Result<()> {
     let modules_root = restored_root.join("usr/lib/modules");
     if !modules_root.exists() {
         bail!(
@@ -120,6 +136,7 @@ fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Resu
         }
 
         for dest in &group.vmlinuz_paths {
+            panel.start_vmlinuz(kver, dest);
             fs::copy(&snap_vmlinuz, dest).with_context(|| {
                 format!(
                     "copiar vmlinuz {} → {}",
@@ -127,17 +144,40 @@ fn sync_inner(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Resu
                     dest.display()
                 )
             })?;
-            crate::ui::boot_sync::print_vmlinuz_copied(kver, dest);
+            panel.finish_vmlinuz();
         }
 
         for dest in &group.initramfs_paths {
+            panel.start_initramfs(kver, dest);
             regen_initramfs(&config, kver, restored_root, dest)?;
-            crate::ui::boot_sync::print_initramfs_regenerated(kver, dest);
+            panel.finish_initramfs();
         }
     }
 
+    panel.start_limine(boot);
     refresh_limine_boot_hashes(boot).context("atualizar hashes do limine.conf")?;
+    panel.finish_limine();
     Ok(())
+}
+
+/// True se /boot já casa com o kernel de `candidate_root` — i.e. o sync
+/// pós-rollback seria no-op. Permite ao caller suprimir o aviso de FAT32
+/// antes do rollback, usando o mesmo sinal byte-a-byte que o gate do sync.
+/// /boot não-FAT32 → `Ok(true)` (nada a sincronizar/avisar). `Err` só em
+/// falha real de leitura; o caller trata isso como fail-safe (mantém o aviso).
+pub fn boot_already_synced(candidate_root: &Path) -> Result<bool> {
+    boot_already_synced_paths(candidate_root, Path::new("/boot"))
+}
+
+pub fn boot_already_synced_paths(candidate_root: &Path, boot: &Path) -> Result<bool> {
+    if !is_fat32_path(boot) {
+        return Ok(true);
+    }
+    let groups = discover_kernel_groups(boot)?;
+    if groups.is_empty() {
+        bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
+    }
+    boot_matches_snapshot(candidate_root, &groups)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,7 +476,6 @@ fn backup_boot_files(boot: &Path, files: &[PathBuf]) -> Result<()> {
         fs::copy(src, &dest)
             .with_context(|| format!("backup {} → {}", src.display(), dest.display()))?;
     }
-    crate::ui::boot_sync::print_backup_created(&backup);
     Ok(())
 }
 
@@ -506,7 +545,6 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     let tmp = path.with_extension("conf.snapg_tmp");
     fs::write(&tmp, updated).context("escrever limine.conf temporário")?;
     fs::rename(&tmp, &path).with_context(|| format!("substituir {}", path.display()))?;
-    crate::ui::boot_sync::print_hashes_updated();
     Ok(())
 }
 

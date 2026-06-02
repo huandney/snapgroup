@@ -1,11 +1,12 @@
 use crate::boot;
 use crate::btrfs;
 use crate::doctor;
-use crate::group::{self, Group};
+use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::ui::restore::{RegretEntry, RegretInfo, RestorePlan, select_restore_plan};
 use crate::snapper;
 use crate::ui::snapshots;
+use crate::ui::term::clear_screen;
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -126,36 +127,44 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
     }
 }
 
-fn group_includes_root(group: &Group) -> Result<bool> {
+fn root_member(group: &Group) -> Result<Option<&Member>> {
     for member in &group.members {
         let mountpoint = snapper::config_subvolume(&member.config)?;
         if mountpoint == "/" {
-            return Ok(true);
+            return Ok(Some(member));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
-/// True se /boot está montado em FAT32 (vfat). Isso significa que kernel e
-/// initramfs vivem fora do BTRFS e precisam de sincronização no rollback.
-fn boot_is_fat32() -> bool {
-    boot::is_fat32()
-}
-
-/// Emite warning: /boot em FAT32 é modo legado e menos transacional que BTRFS.
-/// Retorna false se o utilizador cancelar.
-fn warn_fat32_boot() -> Result<bool> {
-    if !boot_is_fat32() {
-        return Ok(true);
+/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
+/// quando o sync vai de fato mexer no /boot legado: kernel idêntico ao do
+/// snapshot → sync no-op → não incomoda. Qualquer falha de detecção cai no
+/// aviso (fail-safe) — nunca silencia por incerteza.
+fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
+    if !boot::is_fat32() {
+        return false;
     }
-    crate::ui::restore::confirm_fat32_boot()
+    // Err (detecção falhou) → true: fail-safe mantém o aviso.
+    boot_will_change(group, toplevel).unwrap_or(true)
+}
+
+/// Ok(true) se o sync pós-rollback vai escrever em /boot (kernel do snapshot
+/// difere do /boot atual). Ok(false) se será no-op: mesmo kernel, ou grupo que
+/// não restaura root. Err em falha real de leitura — o caller trata como aviso.
+fn boot_will_change(group: &Group, toplevel: &Path) -> Result<bool> {
+    let Some(root_m) = root_member(group)? else {
+        return Ok(false);
+    };
+    let snapshot_root = rollback::member_snapshot_path(root_m, toplevel)?;
+    Ok(!boot::boot_already_synced(&snapshot_root)?)
 }
 
 fn execute_restore_checkpoint(
     group: &Group,
     mount_path: &Path,
 ) -> Result<()> {
-    if group_includes_root(group)? && !warn_fat32_boot()? {
+    if should_warn_fat32(group, mount_path) && !crate::ui::restore::confirm_fat32_boot()? {
         crate::ui::restore::print_cancelled_boot_risk();
         return Ok(());
     }
@@ -183,7 +192,7 @@ fn execute_restore_checkpoint(
                         &restored_root,
                         e,
                         "rode 'snapg restore' e selecione o Regret \
-                         (⟲ Estado Anterior à Restauração) para voltar ao \
+                         (↺ Regret — Estado Anterior à Restauração) para voltar ao \
                          sistema bootável atual antes de qualquer reboot.",
                     );
                 }
@@ -326,6 +335,7 @@ fn delete_group(g: &Group) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
+    clear_screen();
     let groups = group::list_groups()?;
     if groups.is_empty() {
         snapshots::print_no_groups();
