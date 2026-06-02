@@ -123,5 +123,29 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
                 style("✗").red().bold()
             );
         }
+        BootHealth::Unmounted => print_unmounted(root),
     }
+}
+
+/// /boot deveria ser FAT32 (fstab) mas não está montado. Não dá pra diagnosticar
+/// nem sincronizar daqui; orienta montar ou recuperar por Live ISO.
+fn print_unmounted(root: &Path) {
+    let boot = root.join("boot");
+    println!(
+        "{} {:<COL$} {} /boot não está montado (fstab declara FAT32)",
+        tree_branch(true),
+        "estado",
+        style("✗").red().bold()
+    );
+    println!();
+    println!("  monte-o e rode de novo:  {}", style(format!("mount {}", boot.display())).bold());
+    println!();
+    println!("  se o kernel atual não montar vfat (emergency shell), use uma Live ISO:");
+    println!("    1. boot pela Live ISO");
+    println!("    2. monte o root BTRFS em /mnt");
+    println!("    3. monte a partição FAT32 em /mnt/boot");
+    println!(
+        "    4. {}",
+        style("snapg doctor --root /mnt --boot /mnt/boot --apply").bold()
+    );
 }

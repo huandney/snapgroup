@@ -86,11 +86,16 @@ fn current_system_target() -> Result<Option<DoctorTarget>> {
 
 fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
-    let needs_sync = matches!(diagnosis.health, BootHealth::NeedsSync(_));
     doctor_ui::print_report(target, &diagnosis);
-    if !needs_sync {
-        doctor_ui::print_no_action_needed();
-        return Ok(());
+    match diagnosis.health {
+        // /boot não montado: o relatório já mostrou a recuperação. Não há o que
+        // sincronizar até montá-lo, e não é "nada a fazer".
+        BootHealth::Unmounted => return Ok(()),
+        BootHealth::NeedsSync(_) => {}
+        BootHealth::NativeBoot | BootHealth::Synced => {
+            doctor_ui::print_no_action_needed();
+            return Ok(());
+        }
     }
 
     doctor_ui::print_suggested_sync(target);

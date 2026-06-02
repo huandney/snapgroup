@@ -230,6 +230,10 @@ pub enum BootHealth {
     NativeBoot,
     Synced,
     NeedsSync(BootIssue),
+    /// O fstab do root alvo declara /boot como FAT32, mas ele aparece com outro
+    /// filesystem — sinal de que /boot não está montado. Não há o que diagnosticar
+    /// ou sincronizar até montá-lo; a UI orienta a recuperação.
+    Unmounted,
 }
 
 #[derive(Debug, Clone)]
@@ -240,9 +244,55 @@ pub struct BootDiagnosis {
     pub health: BootHealth,
 }
 
+/// True se o fstab do root alvo declara o mountpoint de `boot` como vfat.
+/// Distingue um /boot BTRFS nativo de um /boot FAT32 separado apenas desmontado.
+/// Best-effort: fstab ausente/ilegível ou sem a entrada → false (mantém o
+/// caminho atual de diagnóstico em vez de quebrar com erro).
+fn fstab_declares_vfat_boot(root: &Path, boot: &Path) -> bool {
+    let mountpoint = boot_mountpoint_in(root, boot);
+    let Ok(content) = fs::read_to_string(root.join("etc/fstab")) else {
+        return false;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (_spec, mp, fstype) = (fields.next(), fields.next(), fields.next());
+        if mp == Some(mountpoint.as_str())
+            && fstype.is_some_and(|t| t.eq_ignore_ascii_case("vfat"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Mountpoint de `boot` no namespace do root alvo, como apareceria no fstab:
+/// "/boot" tanto para (root=/, boot=/boot) quanto para (root=/mnt, boot=/mnt/boot).
+fn boot_mountpoint_in(root: &Path, boot: &Path) -> String {
+    match boot.strip_prefix(root) {
+        Ok(rel) => format!("/{}", rel.display()),
+        Err(_) => boot.display().to_string(),
+    }
+}
+
 pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     let fstype = boot_fstype(boot)?;
     if !fstype.eq_ignore_ascii_case("vfat") {
+        // /boot FAT32 separado que não está montado: `findmnt --target` resolve
+        // para o mount pai (o root BTRFS), então `fstype` vem "btrfs" e seria
+        // classificado como nativo — falso "nada a fazer". O fstab do root alvo
+        // é a fonte da verdade sobre o que /boot deveria ser.
+        if fstab_declares_vfat_boot(root, boot) {
+            return Ok(BootDiagnosis {
+                fstype,
+                kernel_groups: 0,
+                initramfs_files: 0,
+                health: BootHealth::Unmounted,
+            });
+        }
         if !fstype.eq_ignore_ascii_case("btrfs") {
             bail!(
                 "{} usa filesystem de boot '{fstype}', não suportado pelo doctor",
@@ -653,8 +703,45 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_backup_remnant, classify_boot_file, limine_boot_path_from_line, should_skip_sync};
+    use super::{
+        boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
+        limine_boot_path_from_line, should_skip_sync,
+    };
     use std::path::Path;
+
+    #[test]
+    fn boot_mountpoint_relative_to_root() {
+        assert_eq!(boot_mountpoint_in(Path::new("/"), Path::new("/boot")), "/boot");
+        assert_eq!(
+            boot_mountpoint_in(Path::new("/mnt"), Path::new("/mnt/boot")),
+            "/boot"
+        );
+    }
+
+    #[test]
+    fn fstab_vfat_boot_detection() {
+        let base = std::env::temp_dir().join(format!("snapg_fstab_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("etc")).unwrap();
+        let boot = base.join("boot");
+
+        // Sem fstab: não dá pra afirmar nada → false (mantém caminho atual).
+        assert!(!fstab_declares_vfat_boot(&base, &boot));
+
+        // /boot declarado vfat → true (comentários e outras linhas ignorados).
+        std::fs::write(
+            base.join("etc/fstab"),
+            "# /etc/fstab\nUUID=aaa\t/\tbtrfs\tsubvol=/@\t0 0\nUUID=bbb  /boot  vfat  defaults  0 2\n",
+        )
+        .unwrap();
+        assert!(fstab_declares_vfat_boot(&base, &boot));
+
+        // /boot em btrfs (boot dentro do snapshot) → false.
+        std::fs::write(base.join("etc/fstab"), "UUID=bbb /boot btrfs defaults 0 0\n").unwrap();
+        assert!(!fstab_declares_vfat_boot(&base, &boot));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn skips_sync_only_when_clean_and_matching() {
