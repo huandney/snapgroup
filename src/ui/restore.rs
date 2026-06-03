@@ -158,20 +158,20 @@ pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<u3
     let prefix_len = 4;
 
     clear_screen();
-    header("Restaurar só o /");
+    header("Restaurar só o / — qual kernel?");
 
     for r in rows {
         let text = format!(
-            "snapshot {}  ·  {}  ·  kernel {}",
+            "kernel {}  ·  snapshot #{}  ·  {}",
+            r.kernel,
             r.number,
-            short_datetime(&r.date),
-            r.kernel
+            short_datetime(&r.date)
         );
         items.push(truncate_for_terminal(&text, prefix_len));
     }
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Escolha o kernel/snapshot para o /")
+        .with_prompt("Qual kernel manter no /")
         .items(&items)
         .default(0)
         .clear(true)

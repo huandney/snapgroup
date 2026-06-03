@@ -98,8 +98,14 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
         return Ok(());
     }
 
+    // Deduplica por kernel: o propósito da Opção C é casar o root com o kernel do
+    // /boot, e todos os snapshots de um mesmo kernel bootam igual. `snaps` vem
+    // ordenado por número desc, então o primeiro de cada kernel é o mais recente.
+    // Escolher um ponto-no-tempo específico é assunto do restore completo.
+    let mut seen = std::collections::HashSet::new();
     let rows: Vec<crate::ui::restore::RootSnapshotRow> = snaps
         .iter()
+        .filter(|s| seen.insert(s.kernel.clone()))
         .map(|s| crate::ui::restore::RootSnapshotRow {
             number: s.number,
             date: s.date.clone(),
