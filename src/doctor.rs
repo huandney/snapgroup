@@ -41,16 +41,45 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
         let current_kernel = boot::kernel_label(Path::new("/"));
         let default_kernel = boot::kernel_label(&mount.path);
         let boot_kernel = boot::boot_kernel_label(Path::new("/boot"));
+        let can_undo_pending_restore = crate::commands::has_pending_restore()?;
 
-        let Some(choice) =
-            doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel, &boot_kernel)?
+        let Some(choice) = doctor_ui::select_rescue_action(
+            &ctx,
+            &current_kernel,
+            &default_kernel,
+            &boot_kernel,
+            can_undo_pending_restore,
+        )?
         else {
             return Ok(()); // ESC no menu do doctor: sai
         };
 
+        if can_undo_pending_restore && choice == 0 {
+            drop(mount);
+            {
+                let _lock = crate::lock::acquire()?;
+                crate::commands::undo_pending_restore()?;
+            }
+            match doctor_ui::select_undo_done_action()? {
+                doctor_ui::UndoDoneAction::Exit => return Ok(()),
+                doctor_ui::UndoDoneAction::ShowDiagnosis => {
+                    let target = DoctorTarget::new(
+                        "sistema atual".to_string(),
+                        PathBuf::from("/"),
+                        PathBuf::from("/boot"),
+                    );
+                    let _ = diagnose_and_apply(&target, false)?;
+                    return Ok(());
+                }
+            }
+        }
+        let choice = if can_undo_pending_restore { choice - 1 } else { choice };
+
         match choice {
             // A: ajusta o "/boot" contra o /@ montado. Terminal — o `apply`
-            // original ainda governa o confirm final.
+            // original ainda governa o confirm final. Aplicado, declinado ou
+            // "nada a fazer", o resultado já está na tela; em vez de recair no
+            // menu, fecha com enter sai / esc mostra o diagnóstico do `/`.
             0 => {
                 let target = DoctorTarget::new(
                     format!("root padrão (subvol /{})", ctx.default_subvol),
@@ -58,9 +87,19 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                     PathBuf::from("/boot"),
                 )
                 .with_root_display(format!("/{}", ctx.default_subvol));
-                // Aplicado/terminal: sai. Declinado (ESC/Não): volta ao menu.
-                if diagnose_and_apply(&target, apply)? {
-                    return Ok(());
+                diagnose_and_apply(&target, apply)?;
+                drop(mount);
+                match doctor_ui::wait_done_action()? {
+                    doctor_ui::UndoDoneAction::Exit => return Ok(()),
+                    doctor_ui::UndoDoneAction::ShowDiagnosis => {
+                        let target = DoctorTarget::new(
+                            "sistema atual".to_string(),
+                            PathBuf::from("/"),
+                            PathBuf::from("/boot"),
+                        );
+                        diagnose_and_apply(&target, false)?;
+                        return Ok(());
+                    }
                 }
             }
             // C: ajusta a outra ponta — restaura SÓ o membro root para um

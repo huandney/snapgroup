@@ -19,6 +19,11 @@ pub struct RollbackError {
     pub error: anyhow::Error,
 }
 
+pub struct RootRollback {
+    pub done: Done,
+    pub preserved_regret_asides: Vec<AsidedRegret>,
+}
+
 /// Resultado da Fase 1 (preparação) — descreve um membro pronto pra commit.
 /// Ainda nada foi tocado no sistema vivo nesse ponto.
 struct Prep {
@@ -87,7 +92,7 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
 /// Sufixo distinto de `_snapg_regret`, `.snapgroup_prep` e `_snapg_discard_*`
 /// pra não colidir com nada que rollback_group/revert criem.
 /// Ex: "@" → "@.snapgroup_regret_aside"
-fn regret_aside_name(current_subvol: &str) -> String {
+pub fn regret_aside_name(current_subvol: &str) -> String {
     format!("{current_subvol}.snapgroup_regret_aside")
 }
 
@@ -149,18 +154,6 @@ pub fn restore_asides(asides: &[AsidedRegret], toplevel: &Path) -> Result<()> {
         })?;
     }
     Ok(())
-}
-
-/// Deleta os asides obsoletos após um rollback bem-sucedido (o regret anterior
-/// foi substituído pelo novo). Best-effort: o rollback já commitou, então um
-/// subvol-lixo remanescente não deve abortar a operação — só avisa.
-pub fn delete_asides(asides: &[AsidedRegret], toplevel: &Path) {
-    for a in asides {
-        let aside_path = toplevel.join(&a.aside_subvol);
-        if let Err(e) = btrfs::delete_subvolume(&aside_path) {
-            crate::ui::rollback::print_aside_delete_failed(&a.aside_subvol, &aside_path, &e);
-        }
-    }
 }
 
 /// Two-phase rollback de um grupo.
@@ -280,7 +273,7 @@ fn cleanup_preps(preps: &[Prep], toplevel: &Path) {
 /// snapshot, não o `@` que boota — o caminho normal arquivaria o subvol errado.
 /// Reusa o mesmo rename-dance e regret do fluxo normal, só com o alvo fixo. Caso
 /// de um membro só, então sem a máquina de revert-partial multi-membro.
-pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) -> Result<Done> {
+pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) -> Result<RootRollback> {
     let current_subvol = root_subvol.to_string();
     let backup_subvol = regret_name(&current_subvol);
 
@@ -289,7 +282,8 @@ pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) ->
     let regret_path = toplevel.join(&backup_subvol);
     let aside_name = regret_aside_name(&current_subvol);
     let aside_path = toplevel.join(&aside_name);
-    let asided = if regret_path.exists() {
+    let mut preserved_regret_asides = Vec::new();
+    if regret_path.exists() {
         if aside_path.exists() {
             bail!(
                 "aside órfão em {} — tentativa anterior interrompida; resolva manualmente",
@@ -298,10 +292,12 @@ pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) ->
         }
         fs::rename(&regret_path, &aside_path)
             .with_context(|| format!("mover regret {backup_subvol} pra aside {aside_name}"))?;
-        true
-    } else {
-        false
-    };
+        preserved_regret_asides.push(AsidedRegret {
+            config: "root".to_string(),
+            regret_subvol: backup_subvol.clone(),
+            aside_subvol: aside_name.clone(),
+        });
+    }
 
     // Fase 1: cópia writable do snapshot. Falha aqui = nada commitado; restaura
     // o aside e sai limpo.
@@ -310,7 +306,7 @@ pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) ->
         let _ = btrfs::delete_subvolume(&intermediate);
     }
     if let Err(e) = btrfs::create_snapshot(src, &intermediate) {
-        if asided {
+        if !preserved_regret_asides.is_empty() {
             let _ = fs::rename(&aside_path, &regret_path);
         }
         return Err(e).with_context(|| format!("criar cópia writable de {}", src.display()));
@@ -327,18 +323,17 @@ pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) ->
     let done = match commit_prep(&prep, toplevel) {
         Ok(d) => d,
         Err(e) => {
-            if asided {
+            if !preserved_regret_asides.is_empty() {
                 let _ = fs::rename(&aside_path, &regret_path);
             }
             return Err(e);
         }
     };
 
-    // Commit OK: o regret anterior (asided) virou obsoleto. Best-effort.
-    if asided {
-        let _ = btrfs::delete_subvolume(&aside_path);
-    }
-    Ok(done)
+    Ok(RootRollback {
+        done,
+        preserved_regret_asides,
+    })
 }
 
 fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {

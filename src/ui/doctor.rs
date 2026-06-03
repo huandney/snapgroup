@@ -1,11 +1,17 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{
-    THEME, clear_screen, header, line, path, title, tree_branch, tree_stem, truncate_for_terminal,
+    SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch, tree_stem,
+    truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
+
+pub(crate) enum UndoDoneAction {
+    Exit,
+    ShowDiagnosis,
+}
 
 pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
@@ -19,6 +25,36 @@ pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
         .report(false)
         .interact()
         .context("selecionar sistema")
+}
+
+pub(crate) fn select_undo_done_action() -> Result<UndoDoneAction> {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} restauração desfeita sem reboot",
+        style("✓").green().bold()
+    ));
+    line(format_args!("Regret anterior restaurado, quando existia."));
+    wait_done_action()
+}
+
+/// Espera enter/esc após uma ação terminal cujo status já está na tela (relatório
+/// do doctor, "nada a fazer", "correção não aplicada"). Enter sai; Esc pede o
+/// diagnóstico do sistema atual. Só imprime a dica de teclas — não limpa nem
+/// reescreve o status acima.
+pub(crate) fn wait_done_action() -> Result<UndoDoneAction> {
+    println!();
+    line(format_args!("{}", style("enter sai · esc mostra diagnóstico").dim()));
+    loop {
+        match console::Term::stdout()
+            .read_key()
+            .context("aguardar confirmação")?
+        {
+            console::Key::Enter => return Ok(UndoDoneAction::Exit),
+            console::Key::Escape => return Ok(UndoDoneAction::ShowDiagnosis),
+            _ => {}
+        }
+    }
 }
 
 pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
@@ -43,6 +79,7 @@ pub(crate) fn select_rescue_action(
     current_kernel: &str,
     default_kernel: &str,
     boot_kernel: &str,
+    can_undo_pending_restore: bool,
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Diagnóstico de boot");
@@ -80,15 +117,23 @@ pub(crate) fn select_rescue_action(
     // um item do Select quebra a medição de largura, e item que dá wrap faz o
     // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
     // linhas de diagnóstico acima, impressas direto.
-    let items: Vec<String> = [
+    let mut choices = Vec::new();
+    if can_undo_pending_restore {
+        choices.push(
+            "Desfazer restauração sem reboot — volta ao estado anterior e restaura o Regret antigo"
+                .to_string(),
+        );
+    }
+    choices.extend([
         format!(
-            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot   [só /boot; mantém root e home]"
+            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot · mantém root e home"
         ),
-        "Restaurar só o / (escolher kernel) — mantém home e root".to_string(),
-        "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
-    ]
+        "Restaurar só o / — escolher kernel · mantém home e root".to_string(),
+        "Mudar o que boota — restore completo · outro snapshot ou desfazer".to_string(),
+    ]);
+    let items: Vec<String> = choices
     .iter()
-    .map(|t| truncate_for_terminal(t, 4))
+    .map(|t| truncate_for_terminal(t, SELECT_MARKER))
     .collect();
     dialoguer::Select::with_theme(&THEME)
         .with_prompt("Como resolver?")
@@ -147,19 +192,31 @@ pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
     clear_screen();
     header("Diagnóstico de boot");
-    print_target(target);
+    print_target(target, diagnosis);
     print_diagnosis_inner(&target.root, diagnosis);
 }
 
-fn print_target(target: &DoctorTarget) {
+fn print_target(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
     line(format_args!(
-        "{} {} {}",
+        "{}  {}  {}",
         title("Alvo"),
         style("·").dim(),
         target.label
     ));
-    println!("{} root  {}", tree_branch(false), path(&target.root_display));
-    println!("{} boot  {}", tree_branch(false), path(&target.boot.display().to_string()));
+    println!(
+        "{} {:<COL$} {:<PATH_COL$} {}",
+        tree_branch(false),
+        "root",
+        path(&target.root_display),
+        style(format!("kernel {}", diagnosis.root_kernel)).dim()
+    );
+    println!(
+        "{} {:<COL$} {:<PATH_COL$} {}",
+        tree_branch(false),
+        "boot",
+        path(&target.boot.display().to_string()),
+        style(format!("kernel {}", diagnosis.boot_kernel)).dim()
+    );
 }
 
 pub(crate) fn print_no_action_needed() {
@@ -190,6 +247,7 @@ pub(crate) fn print_diagnosis(root: &Path, diagnosis: &BootDiagnosis) {
 
 /// Largura da coluna de rótulos do relatório (o maior é "kernel groups" = 13).
 const COL: usize = 14;
+const PATH_COL: usize = 8;
 
 fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
     println!("{} {:<COL$} {}", tree_branch(false), "filesystem", diagnosis.fstype);
@@ -228,7 +286,7 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
         }
         BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
             println!(
-                "{} {:<COL$} {} sincronização incompleta (backup de boot remanescente)",
+                "{} {:<COL$} {} incompleta: kernels casam, mas há backup remanescente",
                 tree_branch(true),
                 "estado",
                 style("✗").red().bold()

@@ -4,12 +4,14 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, HINT_BACK, HINT_MULTI, PAGE_INDENT, THEME, branch, clear_screen, confirm, header,
-    line, prompt_bold_hint, prompt_hint, regret_title, short_datetime, title, tree_branch,
-    tree_stem, truncate_for_terminal,
+    AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
+    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold_hint,
+    prompt_hint, regret_title, short_datetime, tree_branch, tree_stem, truncate_for_terminal,
+    wrap_text,
 };
 use anyhow::{Context, Result};
 use console::style;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Entrada de regret descoberta no toplevel.
@@ -34,6 +36,13 @@ pub(crate) enum RestoreFlow {
     Abort,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PostRestoreAction {
+    RebootNow,
+    Undo,
+    RebootLater,
+}
+
 /// Ação selecionada na TUI.
 pub(crate) enum RestoreAction {
     Checkpoint(GroupId),
@@ -54,10 +63,12 @@ pub(crate) enum RestorePlan {
 pub(crate) fn select_restore_plan(
     groups: &[Group],
     regret: Option<&RegretInfo>,
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
     loop {
-        match select_restore_action(groups, regret)? {
+        match select_restore_action(groups, regret, kernel_labels, regret_kernel)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 loop {
@@ -96,19 +107,25 @@ pub(crate) fn select_restore_plan(
 pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
 ) -> Result<RestoreAction> {
     let mut items: Vec<String> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
 
-    // Select prefix: "> " = 2 chars
-    let prefix_len = 4;
+    let prefix_len = SELECT_MARKER;
 
     clear_screen();
     header("Pontos de restauração");
+    let name_col = restore_name_col(groups, regret.is_some());
+    let kernel_col = restore_kernel_col(groups, kernel_labels, regret_kernel);
 
     if let Some(r) = regret {
+        let kernel = regret_kernel.unwrap_or("?");
         let text = format!(
-            "↺ Regret  ·  {}  ·  {} membros  ·  estado anterior",
+            "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
+            "↺ Regret",
+            kernel,
             short_datetime(&r.creation_time),
             r.entries.len()
         );
@@ -117,12 +134,21 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
+        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
+        let desc = group::description(g);
+        let name = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<name_col$}")
+        };
         let text = format!(
-            "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
-            g.id,
+            "{}   {:<kernel_col$}   {}   {} membros   #{}",
+            name,
+            kernel,
             short_datetime(group::date(g)),
             g.members.len(),
-            group::description(g)
+            g.id
         );
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
@@ -140,6 +166,36 @@ pub(crate) fn select_restore_action(
     };
 
     Ok(actions.remove(selection))
+}
+
+const RESTORE_NAME_COL_MAX: usize = 28;
+
+fn restore_name_col(groups: &[Group], has_regret: bool) -> usize {
+    let regret_len = if has_regret { "↺ Regret".chars().count() } else { 0 };
+    groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(regret_len)
+        .max(regret_len)
+        .min(RESTORE_NAME_COL_MAX)
+}
+
+fn restore_kernel_col(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
+) -> usize {
+    let group_max = groups
+        .iter()
+        .filter_map(|g| kernel_labels.get(&g.id))
+        .map(|k| k.chars().count())
+        .max()
+        .unwrap_or(1);
+    regret_kernel
+        .map(|k| k.chars().count())
+        .unwrap_or(1)
+        .max(group_max)
 }
 
 /// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
@@ -160,7 +216,8 @@ pub(crate) fn select_root_snapshot(
     current_kernel: &str,
 ) -> Result<Option<u32>> {
     let mut items: Vec<String> = Vec::new();
-    let max = (console::Term::stdout().size().1 as usize).saturating_sub(4);
+    let max = (console::Term::stdout().size().1 as usize)
+        .saturating_sub(CONTENT_INDENT.chars().count() + SELECT_MARKER);
 
     clear_screen();
     header("Restaurar só o / — qual kernel?");
@@ -180,7 +237,7 @@ pub(crate) fn select_root_snapshot(
         let item = if plain.chars().count() <= max {
             format!("kernel {kver} {name} {}", style(date).dim())
         } else {
-            truncate_for_terminal(&plain, 4)
+            truncate_for_terminal(&plain, SELECT_MARKER)
         };
         items.push(item);
     }
@@ -234,17 +291,19 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
     clear_screen();
     header("Restauração");
     println!();
-    println!("{PAGE_INDENT}{} ATENÇÃO: /boot está em FAT32 (vfat)", style("⚠").yellow().bold());
-    line(format_args!("O snapg tentará sincronizar kernel/initramfs em /boot,"));
-    line(format_args!("mas este é um modo legado: /boot fica fora do snapshot BTRFS."));
-    line(format_args!("Se a sincronização falhar, o backup de /boot será restaurado,"));
-    line(format_args!("mas o modo nativo recomendado continua sendo /boot em BTRFS."));
+    println!("{PAGE_INDENT}{} /boot está em FAT32 separado", style("!").yellow().bold());
+    line(format_args!("Kernel e initramfs não fazem parte do snapshot BTRFS."));
+    line(format_args!("Ao restaurar este checkpoint, o snapg também vai sincronizar"));
+    line(format_args!("esses arquivos e o limine.conf em /boot."));
     println!();
-    confirm("Continuar mesmo assim?")
+    line(format_args!("Se a sincronização for interrompida, rode {}.", style("snapg doctor").bold()));
+    println!();
+    confirm("Continuar?")
 }
 
 pub(crate) fn print_cancelled_boot_risk() {
-    println!("cancelado (risco de dessincronização de boot)");
+    println!("restauração cancelada");
+    println!("/boot não foi alterado");
 }
 
 pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {
@@ -292,30 +351,52 @@ pub(crate) fn print_cleanup_arm_failed(error: &anyhow::Error) {
     );
 }
 
+pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
+    let actions = [
+        PostRestoreAction::RebootNow,
+        PostRestoreAction::Undo,
+        PostRestoreAction::RebootLater,
+    ];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Próximo passo")
+        .items(&["Reiniciar agora", "Desfazer restauração", "Reiniciar depois"])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(PostRestoreAction::RebootLater);
+    };
+    Ok(actions[choice])
+}
+
+pub(crate) fn print_restore_undone(done_len: usize) {
+    println!(
+        "{} restauração desfeita sem reboot ({} membros)",
+        style("✓").green().bold(),
+        done_len
+    );
+}
+
 pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> {
     let mut items: Vec<String> = Vec::new();
     for m in &group.members {
         let mountpoint = snapper::config_subvolume(&m.config)?;
         let text = format!(
-            "{:<10} {:<8} #{:<5} {}",
+            "{:<10}   {:<8}   #{:<5}   {}",
             m.config,
             mountpoint,
             m.snapshot.number,
             short_datetime(&m.snapshot.date)
         );
-        items.push(truncate_for_terminal(&text, 6));
+        items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
 
     clear_screen();
-    line(format_args!(
-        "{} {}  {}  {}  {}  {}",
-        title("Checkpoint"),
-        style(group.id).dim(),
-        style("·").dim(),
-        short_datetime(group::date(group)),
-        style("·").dim(),
-        group::description(group)
-    ));
+    header("Restaurar checkpoint");
+    print_checkpoint_summary(group);
+    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt_hint("Selecione os membros para restaurar", HINT_MULTI))
@@ -345,17 +426,38 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }))
 }
 
+/// Cabeçalho compacto do checkpoint no picker de membros. A descrição fica numa
+/// linha própria e truncada: informa contexto sem dominar a tela nem quebrar o
+/// redraw do dialoguer quando o texto é longo.
+fn print_checkpoint_summary(group: &Group) {
+    let date = short_datetime(group::date(group));
+    let desc = group::description(group);
+    let desc = desc.trim();
+    line(format_args!("checkpoint {}  {}  {date}", group.id, style("·").dim()));
+    if desc.is_empty() {
+        return;
+    }
+    let avail = content_width().min(96);
+    let desc = if desc.chars().count() > avail {
+        format!("{}…", desc.chars().take(avail - 1).collect::<String>())
+    } else {
+        desc.to_string()
+    };
+    line(format_args!("{desc}"));
+}
+
 pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<RegretInfo>> {
     let mut items: Vec<String> = Vec::new();
     for e in &regret.entries {
         let text = format!(
-            "{:<10} {:<8} {} → {}",
+            "{:<10}   {:<8}   {} → {}",
             e.config, e.mountpoint, e.regret_subvol, e.current_subvol
         );
-        items.push(truncate_for_terminal(&text, 6));
+        items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
 
     clear_screen();
+    header("Restaurar Regret");
     line(format_args!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
         regret_title("↺ Regret"),
@@ -363,6 +465,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
         style("·").dim(),
         short_datetime(&regret.creation_time)
     ));
+    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt_hint("Selecione os membros do Regret para restaurar", HINT_MULTI))
@@ -404,15 +507,22 @@ pub(crate) fn review_checkpoint_restore(
         .collect();
 
     clear_screen();
+    header("Restauração");
     line(format_args!(
-        "{} {} checkpoint {}  {}  {}/{} membros",
-        title("Restauração"),
-        style("·").dim(),
+        "checkpoint {}  {}  {}/{} membros",
         style(original.id).dim(),
         style("·").dim(),
         selected.members.len(),
         original.members.len()
     ));
+    let desc = group::description(original);
+    let desc = desc.trim();
+    if !desc.is_empty() {
+        for wrapped in wrap_text(desc, content_width()) {
+            line(format_args!("{wrapped}"));
+        }
+        println!();
+    }
 
     let has_skip = !skipped.is_empty();
     println!("{} aplicar", tree_branch(!has_skip));
@@ -422,7 +532,7 @@ pub(crate) fn review_checkpoint_restore(
         let current = btrfs::subvol_relative_path(Path::new(&mountpoint))
             .with_context(|| format!("descobrir subvol ativo de '{}'", m.config))?;
         println!(
-            "{}{} {:<10} {:<8} #{} → {}",
+            "{}{} {:<10}   {:<8}   #{} → {}",
             tree_stem(!has_skip),
             branch(i + 1 == total),
             m.config,
@@ -447,10 +557,9 @@ pub(crate) fn review_regret_restore(
         .collect();
 
     clear_screen();
+    header("Restauração");
     line(format_args!(
-        "{} {} regret  {}  {}/{} membros",
-        title("Restauração"),
-        style("·").dim(),
+        "regret  {}  {}/{} membros",
         style("·").dim(),
         selected.entries.len(),
         original.entries.len()
@@ -461,7 +570,7 @@ pub(crate) fn review_regret_restore(
     let total = selected.entries.len();
     for (i, e) in selected.entries.iter().enumerate() {
         println!(
-            "{}{} {:<10} {:<8} {} → {}",
+            "{}{} {:<10}   {:<8}   {} → {}",
             tree_stem(!has_skip),
             branch(i + 1 == total),
             e.config,

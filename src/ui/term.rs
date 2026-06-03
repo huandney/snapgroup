@@ -1,6 +1,35 @@
 use anyhow::{Context, Result};
 use dialoguer::theme::Theme;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::fmt;
+use std::time::Duration;
+
+/// Spinner ao vivo, atualizado no lugar (sem limpar a tela) — robusto em
+/// qualquer terminal, ao contrário do redraw com `clear_screen`. O `indicatif`
+/// anima numa thread própria (steady tick), então gira mesmo durante uma fase
+/// muda (ex.: compressão do zstd no mkinitcpio, ou o `btrfs snapshot` que
+/// bloqueia sem emitir nada). Use `set_message` pra alimentar a linha viva e
+/// `finish_and_clear` ao terminar. Indentado pra casar com o `CONTENT_INDENT`.
+pub fn spinner(message: String) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    // Spinner na cor de marca dos cabeçalhos (trigo, HEADER_COLOR), pra casar
+    // com o `▪ Sincronização de boot` no topo.
+    let template = format!("   {{spinner:.{HEADER_COLOR}}} {{wide_msg}}");
+    pb.set_style(
+        ProgressStyle::with_template(&template)
+            .unwrap()
+            // Braille girando (suave, sentido horário). O último frame é o
+            // "concluído" do indicatif — irrelevante aqui porque finalizamos com
+            // finish_and_clear, mas é exigido pela API.
+            .tick_strings(&[
+                "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠿",
+            ]),
+    );
+    pb.set_message(message);
+    pb.tick();
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb
+}
 
 pub struct SnapgTheme;
 
@@ -59,6 +88,13 @@ pub const DISPLAY_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-beta");
 pub const PAGE_INDENT: &str = " ";
 pub const CONTENT_INDENT: &str = "   ";
 
+/// Largura do prefixo que cada tema injeta entre o CONTENT_INDENT e o texto do
+/// item. Select escreve "> " (marcador 1 + espaço 1 = 2); MultiSelect escreve
+/// "> [x] " (marcador 5 + espaço 1 = 6). O CONTENT_INDENT é somado dentro de
+/// `truncate_for_terminal`, então o caller passa só um destes.
+pub const SELECT_MARKER: usize = 2;
+pub const MULTI_MARKER: usize = 6;
+
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// Dica canônica pros Select que voltam um passo com Esc.
@@ -105,17 +141,50 @@ pub fn title(s: &str) -> console::StyledObject<&str> {
 }
 
 /// Cabeçalho de seção de linha única (trigo + bold).
-pub fn header(s: &str) {
+pub fn app_header() {
     println!(
         "{PAGE_INDENT}{} {}",
         console::style("SnapGroup").color256(BRAND_COLOR).bold(),
         console::style(DISPLAY_VERSION).dim()
     );
-    println!("{PAGE_INDENT}{} {}", title("▪"), title(s));
+}
+
+pub fn section_header(marker: &str, s: &str) {
+    println!("{PAGE_INDENT}{} {}", title(marker), title(s));
+}
+
+pub fn header(s: &str) {
+    app_header();
+    section_header("▪", s);
 }
 
 pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
+}
+
+pub fn content_width() -> usize {
+    let width = console::Term::stdout().size().1 as usize;
+    width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)
+}
+
+pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        let sep = usize::from(!line.is_empty());
+        if !line.is_empty() && line.chars().count() + sep + word.chars().count() > width {
+            lines.push(line);
+            line = String::new();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// Conector de árvore com o indent de conteúdo (CONTENT_INDENT = "   ") embutido
@@ -177,11 +246,14 @@ pub fn short_datetime(s: &str) -> String {
     format!("{date} {hm}")
 }
 
-/// Trunca texto pra caber na largura do terminal.
-/// Previne wrapping que causa bug visual no dialoguer (linhas "comendo" o conteúdo acima).
-pub fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {
+/// Trunca texto pra caber numa linha de item interativo sem wrap. `marker_len` é
+/// só a largura do marcador do tema (`SELECT_MARKER` ou `MULTI_MARKER`); o
+/// CONTENT_INDENT, constante em todo item, é somado aqui pra que nenhum caller
+/// precise lembrar dele. Previne o bug visual do dialoguer (linhas "comendo" o
+/// conteúdo acima) quando um item estoura a largura e quebra.
+pub fn truncate_for_terminal(text: &str, marker_len: usize) -> String {
     let width = console::Term::stdout().size().1 as usize;
-    let max = width.saturating_sub(prefix_len);
+    let max = width.saturating_sub(CONTENT_INDENT.chars().count() + marker_len);
     if text.chars().count() <= max {
         return text.to_string();
     }
@@ -201,4 +273,17 @@ pub fn confirm(prompt: &str) -> Result<bool> {
         .interact_opt()
         .context("seleção cancelada")?;
     Ok(matches!(choice, Some(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_template_is_valid() {
+        // O template é parseado em runtime; sem este teste, uma cor 256 ou
+        // placeholder inválido viraria panic no `unwrap` só durante um restore.
+        let template = format!("   {{spinner:.{HEADER_COLOR}}} {{wide_msg}}");
+        assert!(ProgressStyle::with_template(&template).is_ok());
+    }
 }
