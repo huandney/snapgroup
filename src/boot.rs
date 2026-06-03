@@ -179,7 +179,15 @@ fn sync_inner(
 
         for dest in &group.initramfs_paths {
             panel.start_initramfs(kver, dest);
-            regen_initramfs(&config, kver, restored_root, dest, |l| panel.stream(l))?;
+            // Painel fixo no topo; a saída ao vivo do mkinitcpio vai num spinner
+            // que se atualiza no lugar (sem clear_screen por linha, que empilhava
+            // em alguns terminais). Limpa o spinner mesmo em falha, antes do `?`.
+            let pb = crate::ui::term::spinner(String::new());
+            let r = regen_initramfs(&config, kver, restored_root, dest, |l| {
+                pb.set_message(l.trim_end().to_string());
+            });
+            pb.finish_and_clear();
+            r?;
             panel.finish_initramfs();
         }
     }

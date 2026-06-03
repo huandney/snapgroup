@@ -383,7 +383,7 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
-    let pb = crate::ui::rollback::spinner(format!("restaurando / → snapshot #{number}…"));
+    let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
     let result = rollback::rollback_root_explicit(toplevel, root_subvol, &src);
     pb.finish_and_clear();
     let rollback = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
@@ -443,7 +443,7 @@ fn execute_restore_checkpoint(
     // só no próximo boot, quando o novo root já virou realidade.
     let asides = rollback::aside_existing_regrets(mount_path, &configs)?;
 
-    let pb = crate::ui::rollback::spinner(format!(
+    let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
         group.members.len()

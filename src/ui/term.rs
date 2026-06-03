@@ -1,6 +1,22 @@
 use anyhow::{Context, Result};
 use dialoguer::theme::Theme;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::fmt;
+use std::time::Duration;
+
+/// Spinner ao vivo, atualizado no lugar (sem limpar a tela) — robusto em
+/// qualquer terminal, ao contrário do redraw com `clear_screen`. O `indicatif`
+/// anima numa thread própria (steady tick), então gira mesmo durante uma fase
+/// muda (ex.: compressão do zstd no mkinitcpio, ou o `btrfs snapshot` que
+/// bloqueia sem emitir nada). Use `set_message` pra alimentar a linha viva e
+/// `finish_and_clear` ao terminar. Indentado pra casar com o `CONTENT_INDENT`.
+pub fn spinner(message: String) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::with_template("   {spinner} {wide_msg}").unwrap());
+    pb.enable_steady_tick(Duration::from_millis(120));
+    pb.set_message(message);
+    pb
+}
 
 pub struct SnapgTheme;
 
