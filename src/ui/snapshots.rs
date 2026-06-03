@@ -64,18 +64,30 @@ fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
 }
 
 fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    // MultiSelect prefix: "> [ ] " = 6 chars
-    let prefix_len = 6;
+    let name_col = groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(NAME_HEADER.len())
+        .max(NAME_HEADER.len())
+        .min(NAME_COL_MAX);
+
     let mut items: Vec<String> = Vec::new();
     for g in groups {
+        let desc = group::description(g);
+        let desc_cell = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<name_col$}")
+        };
         let text = format!(
-            "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
-            g.id,
+            "{desc_cell}   {:<DATE_COL$}   {} membros   #{}",
             short_datetime(group::date(g)),
             g.members.len(),
-            group::description(g)
+            g.id
         );
-        items.push(truncate_for_terminal(&text, prefix_len));
+        items.push(truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER));
     }
 
     clear_screen();

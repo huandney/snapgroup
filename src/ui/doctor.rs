@@ -1,7 +1,8 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{
-    THEME, clear_screen, header, line, path, title, tree_branch, tree_stem, truncate_for_terminal,
+    SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch, tree_stem,
+    truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -125,7 +126,7 @@ pub(crate) fn select_rescue_action(
     ]);
     let items: Vec<String> = choices
     .iter()
-    .map(|t| truncate_for_terminal(t, 4))
+    .map(|t| truncate_for_terminal(t, SELECT_MARKER))
     .collect();
     dialoguer::Select::with_theme(&THEME)
         .with_prompt("Como resolver?")

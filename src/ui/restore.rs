@@ -4,9 +4,9 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, PAGE_INDENT, THEME, branch, clear_screen,
-    confirm, header, line, prompt_bold_hint, prompt_hint, regret_title, short_datetime, title,
-    tree_branch, tree_stem, truncate_for_terminal,
+    AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
+    THEME, branch, clear_screen, confirm, header, line, prompt_bold_hint, prompt_hint, regret_title,
+    short_datetime, title, tree_branch, tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -112,8 +112,7 @@ pub(crate) fn select_restore_action(
     let mut items: Vec<String> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
 
-    // Select prefix: "> " = 2 chars
-    let prefix_len = 4;
+    let prefix_len = SELECT_MARKER;
 
     clear_screen();
     header("Pontos de restauração");
@@ -217,7 +216,8 @@ pub(crate) fn select_root_snapshot(
     current_kernel: &str,
 ) -> Result<Option<u32>> {
     let mut items: Vec<String> = Vec::new();
-    let max = (console::Term::stdout().size().1 as usize).saturating_sub(4);
+    let max = (console::Term::stdout().size().1 as usize)
+        .saturating_sub(CONTENT_INDENT.chars().count() + SELECT_MARKER);
 
     clear_screen();
     header("Restaurar só o / — qual kernel?");
@@ -237,7 +237,7 @@ pub(crate) fn select_root_snapshot(
         let item = if plain.chars().count() <= max {
             format!("kernel {kver} {name} {}", style(date).dim())
         } else {
-            truncate_for_terminal(&plain, 4)
+            truncate_for_terminal(&plain, SELECT_MARKER)
         };
         items.push(item);
     }
@@ -358,7 +358,7 @@ pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
         .with_prompt("Próximo passo")
         .items(&["Reiniciar agora", "Desfazer restauração", "Reiniciar depois"])
-        .default(2)
+        .default(0)
         .clear(true)
         .report(false)
         .interact_opt()
@@ -388,7 +388,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
             m.snapshot.number,
             short_datetime(&m.snapshot.date)
         );
-        items.push(truncate_for_terminal(&text, 6));
+        items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
 
     clear_screen();
@@ -500,7 +500,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
             "{:<10} {:<8} {} → {}",
             e.config, e.mountpoint, e.regret_subvol, e.current_subvol
         );
-        items.push(truncate_for_terminal(&text, 6));
+        items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
 
     clear_screen();

@@ -59,6 +59,13 @@ pub const DISPLAY_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-beta");
 pub const PAGE_INDENT: &str = " ";
 pub const CONTENT_INDENT: &str = "   ";
 
+/// Largura do prefixo que cada tema injeta entre o CONTENT_INDENT e o texto do
+/// item. Select escreve "> " (marcador 1 + espaço 1 = 2); MultiSelect escreve
+/// "> [x] " (marcador 5 + espaço 1 = 6). O CONTENT_INDENT é somado dentro de
+/// `truncate_for_terminal`, então o caller passa só um destes.
+pub const SELECT_MARKER: usize = 2;
+pub const MULTI_MARKER: usize = 6;
+
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// Dica canônica pros Select que voltam um passo com Esc.
@@ -185,11 +192,14 @@ pub fn short_datetime(s: &str) -> String {
     format!("{date} {hm}")
 }
 
-/// Trunca texto pra caber na largura do terminal.
-/// Previne wrapping que causa bug visual no dialoguer (linhas "comendo" o conteúdo acima).
-pub fn truncate_for_terminal(text: &str, prefix_len: usize) -> String {
+/// Trunca texto pra caber numa linha de item interativo sem wrap. `marker_len` é
+/// só a largura do marcador do tema (`SELECT_MARKER` ou `MULTI_MARKER`); o
+/// CONTENT_INDENT, constante em todo item, é somado aqui pra que nenhum caller
+/// precise lembrar dele. Previne o bug visual do dialoguer (linhas "comendo" o
+/// conteúdo acima) quando um item estoura a largura e quebra.
+pub fn truncate_for_terminal(text: &str, marker_len: usize) -> String {
     let width = console::Term::stdout().size().1 as usize;
-    let max = width.saturating_sub(prefix_len);
+    let max = width.saturating_sub(CONTENT_INDENT.chars().count() + marker_len);
     if text.chars().count() <= max {
         return text.to_string();
     }
