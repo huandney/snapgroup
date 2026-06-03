@@ -43,13 +43,6 @@ fn prep_intermediate_name(current_subvol: &str) -> String {
     format!("{current_subvol}.snapgroup_prep")
 }
 
-/// Linha de comando literal exibida no painel durante a fase 1. O `src` é
-/// absoluto sob o toplevel; mostra relativo pra encurtar sem perder o sentido.
-fn snapshot_command(toplevel: &Path, src: &Path, dest_name: &str) -> String {
-    let src_disp = src.strip_prefix(toplevel).unwrap_or(src);
-    format!("btrfs subvolume snapshot {} {}", src_disp.display(), dest_name)
-}
-
 /// Preflight: toda config Snapper precisa viver no mesmo filesystem BTRFS que
 /// `/`. O snapg monta só o top-level do FS de `/` e opera nos subvolumes por
 /// path relativo sob esse top-level. Uma config em outro BTRFS não existiria
@@ -178,15 +171,11 @@ pub fn restore_asides(asides: &[AsidedRegret], toplevel: &Path) -> Result<()> {
 /// o caller decida se reverte (`revert_partial`).
 ///
 /// INVARIANTE: o caller DEVE ter deletado regrets existentes antes de chamar.
-pub fn rollback_group(
-    group: &Group,
-    toplevel: &Path,
-    panel: &mut crate::ui::rollback::RollbackPanel,
-) -> Result<Vec<Done>, RollbackError> {
+pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, RollbackError> {
     // === Fase 1: preparação ===
     let mut preps = Vec::new();
     for m in &group.members {
-        match prepare_member(m, toplevel, panel) {
+        match prepare_member(m, toplevel) {
             Ok(p) => preps.push(p),
             Err(e) => {
                 cleanup_preps(&preps, toplevel);
@@ -200,7 +189,6 @@ pub fn rollback_group(
     }
 
     // === Fase 2: commit ===
-    panel.start_commit();
     let mut done = Vec::new();
     for p in &preps {
         match commit_prep(p, toplevel) {
@@ -238,11 +226,7 @@ pub fn member_snapshot_path(m: &Member, toplevel: &Path) -> Result<PathBuf> {
 
 /// Fase 1: cria a cópia writable do snapshot RO num nome intermediário.
 /// Operação cara (metadata copy) e propensa a ENOSPC. **Não toca em nada vivo.**
-fn prepare_member(
-    m: &Member,
-    toplevel: &Path,
-    panel: &mut crate::ui::rollback::RollbackPanel,
-) -> Result<Prep> {
+fn prepare_member(m: &Member, toplevel: &Path) -> Result<Prep> {
     let mountpoint = snapper::config_subvolume(&m.config)?;
 
     // Path top-level do subvol atualmente ativo (ex: "@home")
@@ -260,10 +244,8 @@ fn prepare_member(
         let _ = btrfs::delete_subvolume(&intermediate);
     }
 
-    panel.start_prepare(&m.config, snapshot_command(toplevel, &src, &intermediate_name));
-    btrfs::create_snapshot(&src, &intermediate, || panel.tick())
+    btrfs::create_snapshot(&src, &intermediate)
         .with_context(|| format!("criar cópia writable do snap #{}", m.snapshot.number))?;
-    panel.finish_prepare(&m.config);
 
     Ok(Prep {
         config: m.config.clone(),
@@ -291,12 +273,7 @@ fn cleanup_preps(preps: &[Prep], toplevel: &Path) {
 /// snapshot, não o `@` que boota — o caminho normal arquivaria o subvol errado.
 /// Reusa o mesmo rename-dance e regret do fluxo normal, só com o alvo fixo. Caso
 /// de um membro só, então sem a máquina de revert-partial multi-membro.
-pub fn rollback_root_explicit(
-    toplevel: &Path,
-    root_subvol: &str,
-    src: &Path,
-    panel: &mut crate::ui::rollback::RollbackPanel,
-) -> Result<RootRollback> {
+pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) -> Result<RootRollback> {
     let current_subvol = root_subvol.to_string();
     let backup_subvol = regret_name(&current_subvol);
 
@@ -324,23 +301,19 @@ pub fn rollback_root_explicit(
 
     // Fase 1: cópia writable do snapshot. Falha aqui = nada commitado; restaura
     // o aside e sai limpo.
-    let intermediate_name = prep_intermediate_name(&current_subvol);
-    let intermediate = toplevel.join(&intermediate_name);
+    let intermediate = toplevel.join(prep_intermediate_name(&current_subvol));
     if intermediate.exists() {
         let _ = btrfs::delete_subvolume(&intermediate);
     }
-    panel.start_prepare("root", snapshot_command(toplevel, src, &intermediate_name));
-    if let Err(e) = btrfs::create_snapshot(src, &intermediate, || panel.tick()) {
+    if let Err(e) = btrfs::create_snapshot(src, &intermediate) {
         if !preserved_regret_asides.is_empty() {
             let _ = fs::rename(&aside_path, &regret_path);
         }
         return Err(e).with_context(|| format!("criar cópia writable de {}", src.display()));
     }
-    panel.finish_prepare("root");
 
     // Fase 2: rename-dance (live→regret, prep→live, fix .snapshots). commit_prep
     // já reverte seus próprios passos em falha; aqui só restauramos o aside.
-    panel.start_commit();
     let prep = Prep {
         config: "root".to_string(),
         mountpoint: "/".to_string(),
