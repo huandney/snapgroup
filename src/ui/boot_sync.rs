@@ -1,6 +1,5 @@
 use crate::ui::term::{clear_screen, header, line, tree_branch};
 use console::style;
-use std::path::Path;
 
 const STEP_COUNT: usize = 5;
 
@@ -17,8 +16,6 @@ pub(crate) struct BootSyncPanel {
     steps: [StepStatus; STEP_COUNT],
     current_step: usize,
     summary: String,
-    execution_label: &'static str,
-    execution: String,
 }
 
 impl BootSyncPanel {
@@ -27,8 +24,6 @@ impl BootSyncPanel {
             steps: [StepStatus::Pending; STEP_COUNT],
             current_step: 1,
             summary: String::from("preparando sincronização"),
-            execution_label: "executando",
-            execution: String::from("analisar /boot"),
         }
     }
 
@@ -43,17 +38,10 @@ impl BootSyncPanel {
             "estado",
             style("sincronizado").green().bold()
         );
-        println!();
-        line(format_args!("executado"));
-        line(format_args!("nenhuma sincronização necessária"));
     }
 
-    pub(crate) fn start_backup(&mut self, boot: &Path, backup: &Path) {
-        self.start(
-            0,
-            "criando backup",
-            format!("backup {} -> {}", boot.display(), backup.display()),
-        );
+    pub(crate) fn start_backup(&mut self) {
+        self.start(0, "criando backup");
     }
 
     pub(crate) fn finish_backup(&mut self) {
@@ -62,45 +50,29 @@ impl BootSyncPanel {
 
     /// Resync de interrupção: o backup remanescente é preservado como rollback,
     /// não recriado. Marca a etapa como concluída sem refazer o backup.
-    pub(crate) fn reuse_backup(&mut self, backup: &Path) {
-        self.start(
-            0,
-            "reusando backup existente",
-            format!("backup preservado em {}", backup.display()),
-        );
+    pub(crate) fn reuse_backup(&mut self) {
+        self.start(0, "reusando backup existente");
         self.finish(0, "backup preservado");
     }
 
-    pub(crate) fn start_vmlinuz(&mut self, kver: &str, dest: &Path) {
-        self.start(
-            1,
-            "copiando vmlinuz",
-            format!("copiar vmlinuz {kver} -> {}", short_path(dest)),
-        );
+    pub(crate) fn start_vmlinuz(&mut self) {
+        self.start(1, "copiando vmlinuz");
     }
 
     pub(crate) fn finish_vmlinuz(&mut self) {
         self.finish(1, "vmlinuz copiado");
     }
 
-    pub(crate) fn start_initramfs(&mut self, kver: &str, dest: &Path) {
-        self.start(
-            2,
-            "regenerando initramfs",
-            format!("mkinitcpio -k {kver} -g {}", short_path(dest)),
-        );
+    pub(crate) fn start_initramfs(&mut self) {
+        self.start(2, "regenerando initramfs");
     }
 
     pub(crate) fn finish_initramfs(&mut self) {
         self.finish(2, "initramfs gerado");
     }
 
-    pub(crate) fn start_limine(&mut self, boot: &Path) {
-        self.start(
-            3,
-            "atualizando limine.conf",
-            format!("atualizar hashes BLAKE2B em {}", boot.join("limine.conf").display()),
-        );
+    pub(crate) fn start_limine(&mut self) {
+        self.start(3, "atualizando limine.conf");
     }
 
     pub(crate) fn finish_limine(&mut self) {
@@ -108,18 +80,12 @@ impl BootSyncPanel {
     }
 
     pub(crate) fn start_verify(&mut self) {
-        self.start(
-            4,
-            "verificando sincronização",
-            String::from("comparar /boot com o snapshot restaurado"),
-        );
+        self.start(4, "verificando sincronização");
     }
 
     pub(crate) fn finish_synced(&mut self) {
         self.current_step = STEP_COUNT;
         self.summary = String::from("sincronização concluída");
-        self.execution_label = "executado";
-        self.execution = String::from("kernel, initramfs e limine.conf sincronizados");
         self.steps[4] = StepStatus::Synced;
         self.render();
     }
@@ -131,20 +97,16 @@ impl BootSyncPanel {
             StepStatus::Pending | StepStatus::Running | StepStatus::Failed => current,
         };
         self.summary = summary.to_string();
-        self.execution_label = "falhou";
         if matches!(self.steps[current], StepStatus::Done | StepStatus::Synced) {
             self.current_step = STEP_COUNT;
-            self.execution = String::from("ver detalhes do erro abaixo");
         }
         self.steps[idx] = StepStatus::Failed;
         self.render();
     }
 
-    fn start(&mut self, idx: usize, summary: &str, execution: String) {
+    fn start(&mut self, idx: usize, summary: &str) {
         self.current_step = idx + 1;
         self.summary = summary.to_string();
-        self.execution_label = "executando";
-        self.execution = execution;
         self.steps[idx] = StepStatus::Running;
         self.render();
     }
@@ -152,7 +114,6 @@ impl BootSyncPanel {
     fn finish(&mut self, idx: usize, summary: &str) {
         self.current_step = idx + 1;
         self.summary = summary.to_string();
-        self.execution_label = "executado";
         self.steps[idx] = StepStatus::Done;
         self.render();
     }
@@ -184,9 +145,10 @@ impl BootSyncPanel {
                 }
             }
         }
+        // Sem bloco "executando/comando": a linha de etapa já anuncia a ação, e
+        // o spinner ao vivo (durante o initramfs) é desenhado logo abaixo daqui
+        // pelo caller. O kernel aparece no próprio stream ("Starting build: …").
         println!();
-        line(format_args!("{}", self.execution_label));
-        line(format_args!("{}", self.execution));
     }
 
     fn status_text(&self, status: StepStatus) -> String {
@@ -218,14 +180,4 @@ pub(crate) fn print_backup_cleanup_failed(error: &std::io::Error) {
         style("!").yellow().bold()
     );
     eprintln!("  o sistema está bootável; rode 'snapg doctor' para remover o backup");
-}
-
-fn short_path(path: &Path) -> String {
-    let Some(file_name) = path.file_name() else {
-        return path.display().to_string();
-    };
-    let Some(parent_name) = path.parent().and_then(Path::file_name) else {
-        return path.display().to_string();
-    };
-    format!("{}/{}", parent_name.to_string_lossy(), file_name.to_string_lossy())
 }

@@ -81,33 +81,41 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     }
 
     let critical = critical_boot_files(boot, &groups);
-    let backup = boot_backup_dir(boot);
     // No resync de interrupção NÃO recriar o backup: o remanescente é o último
     // estado bom conhecido de /boot (pré-primeira tentativa). `backup_boot_files`
     // apaga e recria, então sobrescrevê-lo com o /boot meio-sincronizado atual
     // destruiria o único rollback existente se esta passada também cair.
     if !interrupted {
-        panel.start_backup(boot, &backup);
-        if let Err(e) = backup_boot_files(boot, &critical) {
+        panel.start_backup();
+        // Cópia de ~130MB: I/O mudo de alguns segundos. Spinner pra não parecer
+        // parado (mesmo motivo do mkinitcpio).
+        let pb = crate::ui::term::spinner("copiando arquivos de /boot…".to_string());
+        let r = backup_boot_files(boot, &critical);
+        pb.finish_and_clear();
+        if let Err(e) = r {
             panel.fail_current("backup falhou");
             return Err(e);
         }
         panel.finish_backup();
     } else {
-        panel.reuse_backup(&backup);
+        panel.reuse_backup();
     }
 
-    let result = sync_inner(restored_root, boot, &groups, &mut panel)
-        .and_then(|()| {
-            panel.start_verify();
-            verify_synced(restored_root, &groups)
-        });
-    if let Err(e) = result {
+    if let Err(e) = sync_inner(restored_root, boot, &groups, &mut panel) {
         panel.fail_current("sincronização falhou");
-        crate::ui::boot_sync::print_restore_backup_after_failure();
-        if let Err(re) = restore_backup_path(boot) {
-            crate::ui::boot_sync::print_backup_restore_failed(&re);
-        }
+        restore_backup_after_failure(boot);
+        return Err(e);
+    }
+
+    // Verify + limpeza do backup: dois I/O mudos de ~130MB, entre "limine.conf
+    // concluído" e "estado sincronizado". Um spinner cobre os dois pra esse
+    // trecho não ficar parado.
+    panel.start_verify();
+    let pb = crate::ui::term::spinner("verificando /boot contra o snapshot…".to_string());
+    if let Err(e) = verify_synced(restored_root, &groups) {
+        pb.finish_and_clear();
+        panel.fail_current("sincronização falhou");
+        restore_backup_after_failure(boot);
         return Err(e);
     }
 
@@ -115,11 +123,23 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // falha aqui não invalida o sync nem pode bloquear o reboot (o caller trata
     // Err como desync), só avisa. Um backup que sobra vira NeedsSync no próximo
     // doctor, que reroda este mesmo caminho seguro.
-    if let Err(e) = fs::remove_dir_all(boot_backup_dir(boot)) {
+    pb.set_message("removendo backup de /boot…".to_string());
+    let cleanup = fs::remove_dir_all(boot_backup_dir(boot));
+    pb.finish_and_clear();
+    if let Err(e) = cleanup {
         crate::ui::boot_sync::print_backup_cleanup_failed(&e);
     }
     panel.finish_synced();
     Ok(())
+}
+
+/// Restaura o backup de /boot após uma falha de sync/verify e reporta. Caminho
+/// de erro compartilhado pelas duas falhas possíveis (sync_inner e verify).
+fn restore_backup_after_failure(boot: &Path) {
+    crate::ui::boot_sync::print_restore_backup_after_failure();
+    if let Err(re) = restore_backup_path(boot) {
+        crate::ui::boot_sync::print_backup_restore_failed(&re);
+    }
 }
 
 /// True se há um backup de boot remanescente. O backup só é removido após o
@@ -166,7 +186,7 @@ fn sync_inner(
         }
 
         for dest in &group.vmlinuz_paths {
-            panel.start_vmlinuz(kver, dest);
+            panel.start_vmlinuz();
             fs::copy(&snap_vmlinuz, dest).with_context(|| {
                 format!(
                     "copiar vmlinuz {} → {}",
@@ -178,13 +198,13 @@ fn sync_inner(
         }
 
         for dest in &group.initramfs_paths {
-            panel.start_initramfs(kver, dest);
+            panel.start_initramfs();
             // Painel fixo no topo; a saída ao vivo do mkinitcpio vai num spinner
             // que se atualiza no lugar (sem clear_screen por linha, que empilhava
             // em alguns terminais). Limpa o spinner mesmo em falha, antes do `?`.
             let pb = crate::ui::term::spinner(String::new());
             let r = regen_initramfs(&config, kver, restored_root, dest, |l| {
-                pb.set_message(l.trim_end().to_string());
+                pb.set_message(clean_mkinitcpio_line(l));
             });
             pb.finish_and_clear();
             r?;
@@ -192,7 +212,7 @@ fn sync_inner(
         }
     }
 
-    panel.start_limine(boot);
+    panel.start_limine();
     refresh_limine_boot_hashes(boot).context("atualizar hashes do limine.conf")?;
     panel.finish_limine();
     Ok(())
@@ -529,6 +549,18 @@ fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
     bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
 }
 
+/// Normaliza uma linha de progresso do mkinitcpio pra linha viva: remove a
+/// indentação inicial e os marcadores `==>` / `->`, deixando só o texto num
+/// alinhamento constante. Sem isso, a margem do texto pula entre passos maiores
+/// (`==>`, sem indentação) e sub-passos (`  -> `, indentados). O spinner já
+/// sinaliza atividade — o marcador é ruído.
+fn clean_mkinitcpio_line(l: &str) -> String {
+    let t = l.trim();
+    let t = t.strip_prefix("==>").unwrap_or(t);
+    let t = t.strip_prefix("->").unwrap_or(t);
+    t.trim_start().to_string()
+}
+
 fn regen_initramfs(
     config: &Path,
     kver: &str,
@@ -848,10 +880,26 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
-        kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol, subvols_diverge,
+        boot_backup_remnant, boot_mountpoint_in, classify_boot_file, clean_mkinitcpio_line,
+        fstab_declares_vfat_boot, kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol,
+        subvols_diverge,
     };
     use std::path::Path;
+
+    #[test]
+    fn clean_mkinitcpio_line_strips_markers_and_indent() {
+        // Passos maiores e sub-passos devem virar texto no mesmo alinhamento.
+        assert_eq!(
+            clean_mkinitcpio_line("==> Starting build: '7.0'"),
+            "Starting build: '7.0'"
+        );
+        assert_eq!(
+            clean_mkinitcpio_line("  -> Running build hook: [base]"),
+            "Running build hook: [base]"
+        );
+        // Linha sem marcador continua intacta (só sem espaços nas pontas).
+        assert_eq!(clean_mkinitcpio_line("  pronto  "), "pronto");
+    }
 
     #[test]
     fn kernel_label_lists_module_dirs() {
