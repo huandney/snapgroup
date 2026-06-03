@@ -87,10 +87,11 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // destruiria o único rollback existente se esta passada também cair.
     if !interrupted {
         panel.start_backup();
-        // Cópia de ~130MB: I/O mudo de alguns segundos. Spinner pra não parecer
-        // parado (mesmo motivo do mkinitcpio).
+        // Cópia de ~130MB: I/O mudo de alguns segundos. Spinner + nome do arquivo
+        // em curso (não há subprocesso pra streamar; o "processo" aqui são os
+        // arquivos sendo copiados).
         let pb = crate::ui::term::spinner("copiando arquivos de /boot…".to_string());
-        let r = backup_boot_files(boot, &critical);
+        let r = backup_boot_files(boot, &critical, |name| pb.set_message(format!("copiando {name}")));
         pb.finish_and_clear();
         if let Err(e) = r {
             panel.fail_current("backup falhou");
@@ -735,7 +736,7 @@ fn boot_backup_dir(boot: &Path) -> PathBuf {
     boot.join(".snapg_boot_backup")
 }
 
-fn backup_boot_files(boot: &Path, files: &[PathBuf]) -> Result<()> {
+fn backup_boot_files(boot: &Path, files: &[PathBuf], mut on_file: impl FnMut(&str)) -> Result<()> {
     let backup = boot_backup_dir(boot);
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
@@ -743,6 +744,9 @@ fn backup_boot_files(boot: &Path, files: &[PathBuf]) -> Result<()> {
     fs::create_dir_all(&backup).context("criar diretório de backup do boot")?;
 
     for src in files {
+        if let Some(name) = src.file_name().and_then(|n| n.to_str()) {
+            on_file(name);
+        }
         let rel = src
             .strip_prefix(boot)
             .with_context(|| format!("{} não está dentro de {}", src.display(), boot.display()))?;
