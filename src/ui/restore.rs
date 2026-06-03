@@ -190,6 +190,28 @@ pub(crate) fn print_no_restore_points() {
     println!("nenhum checkpoint ou regret encontrado — nada pra restaurar");
 }
 
+pub(crate) fn print_no_root_snapshots() {
+    clear_screen();
+    header("Restaurar só o /");
+    println!();
+    line(format_args!(
+        "{} nenhum snapshot de / disponível aqui",
+        style("✗").red().bold()
+    ));
+    line(format_args!(
+        "um boot de resgate não enxerga os snapshots do config root: eles ficam"
+    ));
+    line(format_args!(
+        "fora da visão do snapshot atual. Restaurar o / precisa de um boot normal."
+    ));
+    println!();
+    line(format_args!("{}", style("enter para voltar").dim()));
+    // Pausa até Enter — sem isso o loop do doctor limparia a tela e a mensagem
+    // sumiria antes de ser lida.
+    let mut discard = String::new();
+    let _ = std::io::stdin().read_line(&mut discard);
+}
+
 pub(crate) fn print_cancelled() {
     println!("cancelado");
 }

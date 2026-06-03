@@ -1,6 +1,6 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
-use crate::ui::term::{THEME, clear_screen, header, line, title, tree_branch, tree_stem};
+use crate::ui::term::{THEME, clear_screen, header, line, path, title, tree_branch, tree_stem};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
@@ -44,35 +44,41 @@ pub(crate) fn select_rescue_action(
     clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
-        "{} \"/boot\" e \"/\" (o root que boota) estão dessincronizados",
-        style("!").yellow().bold()
+        "{} os kernels de {} e do {} não estão sincronizados",
+        style("!").yellow().bold(),
+        path("/boot"),
+        path("/")
     ));
     println!(
         "{} {:<COL$} {}  kernel {}  (resgate)",
         tree_branch(false),
-        "montado em \"/\"",
-        ctx.current_subvol,
+        "montado",
+        path(&ctx.current_subvol),
         current_kernel
     );
     println!(
         "{} {:<COL$} {}  kernel {}",
         tree_branch(false),
-        "boota \"/\"",
-        ctx.default_subvol,
+        "boota",
+        path(&ctx.default_subvol),
         default_kernel
     );
     println!(
-        "{} {:<COL$} {} não casa com o root que boota",
+        "{} {:<COL$} {} {} difere do {}",
         tree_branch(true),
-        "\"/boot\"",
-        style("✗").red().bold()
+        "boot",
+        style("✗").red().bold(),
+        path("/boot"),
+        path("/")
     );
     println!();
     let items = [
         format!(
-            "Manter o root atual (kernel {default_kernel}) — ajusta o \"/boot\"   [só \"/boot\"; mantém root e home]"
+            "Manter o root atual (kernel {default_kernel}) — ajusta o {}   [só {}; mantém root e home]",
+            path("/boot"),
+            path("/boot")
         ),
-        "Restaurar só o \"/\" (escolher kernel) — mantém home e root".to_string(),
+        format!("Restaurar só o {} (escolher kernel) — mantém home e root", path("/")),
         "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
     ];
     dialoguer::Select::with_theme(&THEME)
@@ -143,8 +149,8 @@ fn print_target(target: &DoctorTarget) {
         style("·").dim(),
         target.label
     ));
-    println!("{} root  {}", tree_branch(false), target.root.display());
-    println!("{} boot  {}", tree_branch(false), target.boot.display());
+    println!("{} root  {}", tree_branch(false), path(&target.root_display));
+    println!("{} boot  {}", tree_branch(false), path(&target.boot.display().to_string()));
 }
 
 pub(crate) fn print_no_action_needed() {
@@ -155,8 +161,8 @@ pub(crate) fn print_suggested_sync(target: &DoctorTarget) {
     println!();
     line(format_args!(
         "ação sugerida: sincronizar {} com {}",
-        target.boot.display(),
-        target.root.display()
+        path(&target.boot.display().to_string()),
+        path(&target.root_display)
     ));
 }
 

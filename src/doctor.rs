@@ -17,7 +17,8 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
         return resolve_rescue(ctx, apply);
     }
     let target = select_target(root, boot)?;
-    diagnose_and_apply(&target, apply)
+    diagnose_and_apply(&target, apply)?;
+    Ok(())
 }
 
 /// Resolve um boot de resgate. Monta o subvol padrão (`/@`) read-only e oferece
@@ -54,8 +55,12 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                     format!("root padrão (subvol /{})", ctx.default_subvol),
                     mount.path.clone(),
                     PathBuf::from("/boot"),
-                );
-                return diagnose_and_apply(&target, apply);
+                )
+                .with_root_display(format!("/{}", ctx.default_subvol));
+                // Aplicado/terminal: sai. Declinado (ESC/Não): volta ao menu.
+                if diagnose_and_apply(&target, apply)? {
+                    return Ok(());
+                }
             }
             // C: ajusta a outra ponta — restaura SÓ o membro root para um
             // snapshot escolhido (kernel anotado), mantendo home e root_home.
@@ -198,17 +203,20 @@ fn current_system_target() -> Result<Option<DoctorTarget>> {
     )))
 }
 
-fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
+/// `Ok(true)` quando o caso foi resolvido/terminal (sync aplicado, nada a fazer,
+/// ou não montado); `Ok(false)` quando o usuário **declinou** a correção — o
+/// caller de resgate usa isso para voltar ao menu em vez de encerrar.
+fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<bool> {
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
     doctor_ui::print_report(target, &diagnosis);
     match diagnosis.health {
         // /boot não montado: o relatório já mostrou a recuperação. Não há o que
         // sincronizar até montá-lo, e não é "nada a fazer".
-        BootHealth::Unmounted => return Ok(()),
+        BootHealth::Unmounted => return Ok(true),
         BootHealth::NeedsSync(_) => {}
         BootHealth::NativeBoot | BootHealth::Synced => {
             doctor_ui::print_no_action_needed();
-            return Ok(());
+            return Ok(true);
         }
     }
 
@@ -216,14 +224,14 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<()> {
     let should_apply = apply || confirm("Aplicar correção agora?")?;
     if !should_apply {
         doctor_ui::print_correction_skipped();
-        return Ok(());
+        return Ok(false);
     }
 
     boot::sync_fat32_paths(&target.root, &target.boot)?;
     doctor_ui::print_spacer();
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
     doctor_ui::print_report(target, &diagnosis);
-    Ok(())
+    Ok(true)
 }
 
 fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
@@ -255,11 +263,25 @@ pub(crate) struct DoctorTarget {
     pub(crate) label: String,
     pub(crate) root: PathBuf,
     pub(crate) boot: PathBuf,
+    /// Como o root aparece na UI. Por padrão é o path; no resgate vira "/@" para
+    /// não mostrar o mountpoint temporário (/run/snapgroup/doctor-at-...).
+    pub(crate) root_display: String,
 }
 
 impl DoctorTarget {
     fn new(label: String, root: PathBuf, boot: PathBuf) -> Self {
-        Self { label, root, boot }
+        let root_display = root.display().to_string();
+        Self {
+            label,
+            root,
+            boot,
+            root_display,
+        }
+    }
+
+    fn with_root_display(mut self, display: String) -> Self {
+        self.root_display = display;
+        self
     }
 }
 

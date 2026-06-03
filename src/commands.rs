@@ -114,7 +114,7 @@ fn restore_root_only_inner(groups: &[Group], mount_path: &Path) -> Result<()> {
     }
 
     if rows.is_empty() {
-        crate::ui::restore::print_no_restore_points();
+        crate::ui::restore::print_no_root_snapshots();
         return Ok(());
     }
 
