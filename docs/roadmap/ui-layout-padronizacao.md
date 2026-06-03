@@ -59,5 +59,21 @@ resumos; reservar o ` · ` (um espaço) para separar cláusulas dentro de uma fr
 de item (ex.: `ajusta o /boot · mantém root e home`), onde o ` — ` (em-dash) já
 faz o corte primário.
 
-**Pendente:** auditar cada tela e alinhar onde diverge da regra. A lista de
-apagar já foi convertida de dots para colunas (caso 1).
+**Marca permanente:** toda tela que limpa o terminal abre com `header()` (marca
+`SnapGroup x.y.z` + marcador `▪ seção`). As 4 telas do `restore` (pickers de
+membro e revisões) faziam `clear_screen()` + linha solta e pulavam a marca —
+corrigidas.
+
+**Gap de coluna:** padronizado em 3 espaços (igual ao `snapg list`) nos pickers
+e tabelas. Dot de resumo padronizado em `  ·  ` (2 espaços).
+
+**Feito até agora:**
+- Lista de apagar: dots → colunas (caso 1).
+- Picker de membros: bloco `Descrição` multi-linha → linha-resumo única (caso 2),
+  fechando o resize do caso comum.
+- Diagnóstico do doctor: `root`/`boot` movidos para a mesma coluna de rótulo
+  (`COL`) dos demais campos (caso 3).
+- Marca `header()` nas 4 telas do `restore`.
+
+**Pendente:** auditar telas menos usadas (picker de kernel em "restaurar só o /",
+anotações inline do doctor de resgate) e alinhar onde ainda divergir.

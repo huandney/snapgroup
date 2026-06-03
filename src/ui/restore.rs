@@ -6,7 +6,7 @@ use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
     THEME, branch, clear_screen, confirm, header, line, prompt_bold_hint, prompt_hint, regret_title,
-    short_datetime, title, tree_branch, tree_stem, truncate_for_terminal,
+    short_datetime, tree_branch, tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -122,7 +122,7 @@ pub(crate) fn select_restore_action(
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
         let text = format!(
-            "{:<name_col$}  {:<kernel_col$}  {}  {} membros",
+            "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
             "↺ Regret",
             kernel,
             short_datetime(&r.creation_time),
@@ -143,7 +143,7 @@ pub(crate) fn select_restore_action(
             format!("{desc:<checkpoint_name_col$}")
         };
         let text = format!(
-            "• {}  {:<kernel_col$}  {}  {} membros  #{}",
+            "• {}   {:<kernel_col$}   {}   {} membros   #{}",
             name,
             kernel,
             short_datetime(group::date(g)),
@@ -382,7 +382,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     for m in &group.members {
         let mountpoint = snapper::config_subvolume(&m.config)?;
         let text = format!(
-            "{:<10} {:<8} #{:<5} {}",
+            "{:<10}   {:<8}   #{:<5}   {}",
             m.config,
             mountpoint,
             m.snapshot.number,
@@ -392,9 +392,9 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }
 
     clear_screen();
-    line(format_args!("Checkpoint {}", group.id));
-    line(format_args!("Data: {}", short_datetime(group::date(group))));
-    print_checkpoint_description(group::description(group));
+    header("Restaurar checkpoint");
+    print_checkpoint_summary(group);
+    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt_hint("Selecione os membros para restaurar", HINT_MULTI))
@@ -424,19 +424,31 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }))
 }
 
-fn print_checkpoint_description(description: &str) {
-    let description = description.trim();
-    if description.is_empty() {
-        println!();
+/// Linha-resumo do checkpoint no picker de membros (caso "resumo": id · data ·
+/// descrição). Trunca à largura para caber numa linha só — o bloco multi-linha
+/// que existia aqui quebrava ao redimensionar o terminal (ver
+/// docs/roadmap/ui-layout-padronizacao.md). Descrição vazia some com o separador.
+fn print_checkpoint_summary(group: &Group) {
+    let date = short_datetime(group::date(group));
+    let desc = group::description(group);
+    let desc = desc.trim();
+    if desc.is_empty() {
+        line(format_args!("checkpoint {}  {}  {date}", group.id, style("·").dim()));
         return;
     }
-
-    println!();
-    line(format_args!("Descrição:"));
-    for wrapped in wrap_text(description, content_width()) {
-        line(format_args!("{wrapped}"));
-    }
-    println!();
+    let head = format!("checkpoint {}  ·  {date}  ·  ", group.id);
+    let avail = content_width().saturating_sub(head.chars().count()).max(8);
+    let desc = if desc.chars().count() > avail {
+        format!("{}…", desc.chars().take(avail - 1).collect::<String>())
+    } else {
+        desc.to_string()
+    };
+    line(format_args!(
+        "checkpoint {}  {}  {date}  {}  {desc}",
+        group.id,
+        style("·").dim(),
+        style("·").dim(),
+    ));
 }
 
 fn content_width() -> usize {
@@ -444,66 +456,18 @@ fn content_width() -> usize {
     width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)
 }
 
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        let sep = usize::from(!current.is_empty());
-        if current.chars().count() + sep + word.chars().count() <= width {
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(word);
-            continue;
-        }
-
-        if !current.is_empty() {
-            lines.push(current);
-            current = String::new();
-        }
-
-        if word.chars().count() <= width {
-            current.push_str(word);
-            continue;
-        }
-
-        lines.extend(split_long_word(word, width));
-    }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
-fn split_long_word(word: &str, width: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut chunk = String::new();
-    for ch in word.chars() {
-        if chunk.chars().count() == width {
-            chunks.push(chunk);
-            chunk = String::new();
-        }
-        chunk.push(ch);
-    }
-    if !chunk.is_empty() {
-        chunks.push(chunk);
-    }
-    chunks
-}
-
 pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<RegretInfo>> {
     let mut items: Vec<String> = Vec::new();
     for e in &regret.entries {
         let text = format!(
-            "{:<10} {:<8} {} → {}",
+            "{:<10}   {:<8}   {} → {}",
             e.config, e.mountpoint, e.regret_subvol, e.current_subvol
         );
         items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
 
     clear_screen();
+    header("Restaurar Regret");
     line(format_args!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
         regret_title("↺ Regret"),
@@ -511,6 +475,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
         style("·").dim(),
         short_datetime(&regret.creation_time)
     ));
+    println!();
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt_hint("Selecione os membros do Regret para restaurar", HINT_MULTI))
@@ -552,10 +517,9 @@ pub(crate) fn review_checkpoint_restore(
         .collect();
 
     clear_screen();
+    header("Restauração");
     line(format_args!(
-        "{} {} checkpoint {}  {}  {}/{} membros",
-        title("Restauração"),
-        style("·").dim(),
+        "checkpoint {}  {}  {}/{} membros",
         style(original.id).dim(),
         style("·").dim(),
         selected.members.len(),
@@ -570,7 +534,7 @@ pub(crate) fn review_checkpoint_restore(
         let current = btrfs::subvol_relative_path(Path::new(&mountpoint))
             .with_context(|| format!("descobrir subvol ativo de '{}'", m.config))?;
         println!(
-            "{}{} {:<10} {:<8} #{} → {}",
+            "{}{} {:<10}   {:<8}   #{} → {}",
             tree_stem(!has_skip),
             branch(i + 1 == total),
             m.config,
@@ -595,10 +559,9 @@ pub(crate) fn review_regret_restore(
         .collect();
 
     clear_screen();
+    header("Restauração");
     line(format_args!(
-        "{} {} regret  {}  {}/{} membros",
-        title("Restauração"),
-        style("·").dim(),
+        "regret  {}  {}/{} membros",
         style("·").dim(),
         selected.entries.len(),
         original.entries.len()
@@ -609,7 +572,7 @@ pub(crate) fn review_regret_restore(
     let total = selected.entries.len();
     for (i, e) in selected.entries.iter().enumerate() {
         println!(
-            "{}{} {:<10} {:<8} {} → {}",
+            "{}{} {:<10}   {:<8}   {} → {}",
             tree_stem(!has_skip),
             branch(i + 1 == total),
             e.config,

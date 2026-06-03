@@ -198,13 +198,18 @@ pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
 
 fn print_target(target: &DoctorTarget) {
     line(format_args!(
-        "{} {} {}",
+        "{}  {}  {}",
         title("Alvo"),
         style("·").dim(),
         target.label
     ));
-    println!("{} root  {}", tree_branch(false), path(&target.root_display));
-    println!("{} boot  {}", tree_branch(false), path(&target.boot.display().to_string()));
+    println!("{} {:<COL$} {}", tree_branch(false), "root", path(&target.root_display));
+    println!(
+        "{} {:<COL$} {}",
+        tree_branch(false),
+        "boot",
+        path(&target.boot.display().to_string())
+    );
 }
 
 pub(crate) fn print_no_action_needed() {
