@@ -145,34 +145,33 @@ pub(crate) fn select_restore_action(
 /// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
 /// anotado para o usuário escolher o que casa com o `/boot`.
 pub(crate) struct RootSnapshotRow {
-    pub(crate) id: GroupId,
+    pub(crate) number: u32,
     pub(crate) date: String,
-    pub(crate) description: String,
     pub(crate) kernel: String,
 }
 
-/// Picker para "restaurar só o /": lista os snapshots com membro `root`,
-/// anotados com o kernel. Retorna o `GroupId` escolhido, ou `None` no ESC.
-pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<GroupId>> {
+/// Picker para "restaurar só o /": lista os snapshots de root (varridos do
+/// toplevel), anotados com o kernel. Retorna o número do snapshot, ou `None` no
+/// ESC.
+pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<u32>> {
     let mut items: Vec<String> = Vec::new();
     let prefix_len = 4;
 
     clear_screen();
-    header("Restaurar só o \"/\"");
+    header("Restaurar só o /");
 
     for r in rows {
         let text = format!(
-            "snapshot {}  ·  {}  ·  kernel {}  ·  {}",
-            r.id,
+            "snapshot {}  ·  {}  ·  kernel {}",
+            r.number,
             short_datetime(&r.date),
-            r.kernel,
-            r.description
+            r.kernel
         );
         items.push(truncate_for_terminal(&text, prefix_len));
     }
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Escolha o kernel/snapshot para o \"/\"")
+        .with_prompt("Escolha o kernel/snapshot para o /")
         .items(&items)
         .default(0)
         .clear(true)
@@ -183,7 +182,7 @@ pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<Gr
         return Ok(None);
     };
 
-    Ok(Some(rows[selection].id))
+    Ok(Some(rows[selection].number))
 }
 
 pub(crate) fn print_no_restore_points() {
@@ -231,6 +230,15 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
 
 pub(crate) fn print_cancelled_boot_risk() {
     println!("cancelado (risco de dessincronização de boot)");
+}
+
+pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {
+    println!(
+        "{} / restaurado para o snapshot #{} (home e /root intactos)",
+        style("✓").green().bold(),
+        number
+    );
+    println!("    root anterior arquivado como {}", done.backup_subvol);
 }
 
 pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback::Done]) {

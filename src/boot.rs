@@ -336,6 +336,13 @@ fn fstab_root_subvol() -> Option<String> {
     parse_fstab_root_subvol(&content)
 }
 
+/// Subvol que o fstab declara para `/` (normalizado, sem "/" inicial — ex: "@").
+/// É o root que boota por padrão. Serve para operar no `@` certo mesmo de dentro
+/// de um boot de resgate, onde `/` é um snapshot e não o `@`.
+pub fn default_root_subvol() -> Option<String> {
+    fstab_root_subvol().map(|s| normalize_subvol(&s))
+}
+
 /// Extrai o `subvol=` da entrada `/` do fstab. Pura, para teste.
 fn parse_fstab_root_subvol(content: &str) -> Option<String> {
     for line in content.lines() {

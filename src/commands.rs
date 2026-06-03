@@ -6,7 +6,7 @@ use crate::rollback::{self, RollbackError};
 use crate::ui::restore::{RegretEntry, RegretInfo, RestorePlan, select_restore_plan};
 use crate::snapper;
 use crate::ui::snapshots;
-use crate::ui::term::clear_screen;
+use crate::ui::term::{clear_screen, confirm};
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -74,56 +74,52 @@ pub fn restore() -> Result<()> {
     result
 }
 
-/// Restaura só o membro `root` (`/`): o doctor usa isto para "manter o kernel do
-/// `/boot`" ajustando a outra ponta (o `/`) sem tocar `home`/`root_home`. Monta
-/// o toplevel, mostra o picker anotado com o kernel de cada snapshot e reverte
-/// só o `root` do grupo escolhido.
+/// Restaura só o `/` para um snapshot escolhido, preservando `home`/`root_home`.
+/// O doctor usa isto para "manter o kernel do `/boot`" ajustando a outra ponta
+/// (o `/`). Varre os snapshots de root direto do toplevel (funciona inclusive
+/// num boot de resgate) e reverte com o subvol-alvo `@` explícito.
 pub fn restore_root_only() -> Result<()> {
-    let configs = snapper::list_configs()?;
-    if configs.is_empty() {
-        bail!("nenhuma config snapper encontrada");
-    }
-
-    let groups = group::list_groups()?;
-    rollback::ensure_single_filesystem(&configs)?;
+    let root_subvol = boot::default_root_subvol()
+        .context("não foi possível determinar o subvol de / pelo fstab")?;
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = restore_root_only_inner(&groups, &mount_path);
+    let result = restore_root_only_inner(&mount_path, &root_subvol);
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
 
-fn restore_root_only_inner(groups: &[Group], mount_path: &Path) -> Result<()> {
-    let mut rows = Vec::new();
-    let mut by_id = std::collections::HashMap::new();
-    for g in groups {
-        let Some(root) = root_member(g)? else {
-            continue; // grupo sem membro root: não dá para restaurar só o /
-        };
-        let snap_path = rollback::member_snapshot_path(root, mount_path)?;
-        rows.push(crate::ui::restore::RootSnapshotRow {
-            id: g.id,
-            date: group::date(g).to_string(),
-            description: group::description(g).to_string(),
-            kernel: boot::kernel_label(&snap_path),
-        });
-        by_id.insert(g.id, g.clone());
-    }
-
-    if rows.is_empty() {
+fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
+    let snaps = scan_root_snapshots(mount_path, root_subvol)?;
+    if snaps.is_empty() {
         crate::ui::restore::print_no_root_snapshots();
         return Ok(());
     }
 
-    let Some(id) = crate::ui::restore::select_root_snapshot(&rows)? else {
+    let rows: Vec<crate::ui::restore::RootSnapshotRow> = snaps
+        .iter()
+        .map(|s| crate::ui::restore::RootSnapshotRow {
+            number: s.number,
+            date: s.date.clone(),
+            kernel: s.kernel.clone(),
+        })
+        .collect();
+
+    let Some(number) = crate::ui::restore::select_root_snapshot(&rows)? else {
         crate::ui::restore::print_cancelled();
         return Ok(());
     };
-    let group = by_id.get(&id).expect("id selecionado veio das rows");
-    execute_restore_root_only(group, mount_path)
+
+    if !confirm(&format!(
+        "Restaurar o / para o snapshot #{number}? Troca o root que boota (home e /root ficam intactos)."
+    ))? {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    }
+
+    execute_restore_root_to_snapshot(mount_path, root_subvol, number)
 }
 
 /// Descobre regrets existentes no toplevel.
@@ -189,29 +185,74 @@ fn root_member(group: &Group) -> Result<Option<&Member>> {
     Ok(None)
 }
 
-/// Sub-grupo com só o membro de config `config` (None se ausente). Base do
-/// restore escopado: `rollback_group` itera os membros, então um grupo de um
-/// membro reverte só ele. Puro.
-fn scope_group_to_config(group: &Group, config: &str) -> Option<Group> {
-    let member = group.members.iter().find(|m| m.config == config)?;
-    Some(Group {
-        id: group.id,
-        members: vec![member.clone()],
-    })
+/// Um snapshot de root varrido direto do toplevel (`@/.snapshots/N/snapshot`),
+/// sem snapper — funciona inclusive de dentro de um boot de resgate.
+struct RootSnap {
+    number: u32,
+    kernel: String,
+    date: String,
 }
 
-/// Restaura SÓ o membro `root` (`/`) do grupo, preservando `home` e `root_home`.
-/// Reusa `execute_restore_checkpoint` com um grupo de um membro: aside, rollback,
-/// sync de `/boot` e regret já ficam escopados a esse único membro. O sync
-/// pós-rollback garante consistência: no-op se o `/boot` já casa com o snapshot
-/// escolhido, senão reescreve o `/boot` para casar.
-fn execute_restore_root_only(group: &Group, mount_path: &Path) -> Result<()> {
-    let Some(root) = root_member(group)? else {
-        bail!("grupo {} não tem membro root (/) para restaurar", group.id);
-    };
-    let scoped = scope_group_to_config(group, &root.config)
-        .expect("membro root recém-localizado existe no grupo");
-    execute_restore_checkpoint(&scoped, mount_path)
+/// Varre os snapshots de root no toplevel, contornando a cegueira do snapper num
+/// boot de resgate (`/.snapshots` do snapshot está vazio). Lê o kernel e a data
+/// de cada um direto do subvol — sem snapper, sem `info.xml`.
+fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSnap>> {
+    let dir = toplevel.join(root_subvol).join(".snapshots");
+    let mut snaps = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("ler {}", dir.display()))? {
+        let entry = entry?;
+        let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let src = entry.path().join("snapshot");
+        if !src.join("usr/lib/modules").exists() {
+            continue; // não é um snapshot de root válido
+        }
+        snaps.push(RootSnap {
+            number,
+            kernel: boot::kernel_label(&src),
+            date: btrfs::subvol_creation_time(&src).unwrap_or_default(),
+        });
+    }
+    // Mais recente primeiro.
+    snaps.sort_by_key(|s| std::cmp::Reverse(s.number));
+    Ok(snaps)
+}
+
+/// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
+/// explícito (`@` do fstab) — preserva `home` e `root_home`. O sync pós-rollback
+/// garante consistência do `/boot`: no-op se o snapshot já casa com o `/boot`,
+/// senão reescreve. Em falha de sync, bloqueia o reboot (não bricka).
+fn execute_restore_root_to_snapshot(
+    toplevel: &Path,
+    root_subvol: &str,
+    number: u32,
+) -> Result<()> {
+    let src = toplevel
+        .join(root_subvol)
+        .join(".snapshots")
+        .join(number.to_string())
+        .join("snapshot");
+
+    let done = rollback::rollback_root_explicit(toplevel, root_subvol, &src)
+        .with_context(|| format!("rollback de / para o snapshot #{number}"))?;
+    crate::ui::restore::print_root_restore_done(number, &done);
+
+    let restored_root = toplevel.join(root_subvol);
+    if let Err(e) = boot::sync_fat32(&restored_root) {
+        return abort_reboot_boot_desync(
+            &restored_root,
+            e,
+            "verifique /boot manualmente (vmlinuz/initramfs vs /usr/lib/modules \
+             do root) antes de reiniciar; não reinicie enquanto não corresponderem.",
+        );
+    }
+
+    prompt_reboot()
 }
 
 /// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
@@ -582,38 +623,3 @@ fn prompt_reboot() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::scope_group_to_config;
-    use crate::group::{Group, Member};
-    use crate::snapper::Snapshot;
-
-    fn member(config: &str) -> Member {
-        Member {
-            config: config.to_string(),
-            snapshot: Snapshot {
-                number: 1,
-                kind: "single".to_string(),
-                date: String::new(),
-                user: String::new(),
-                description: String::new(),
-                cleanup: String::new(),
-                userdata: None,
-            },
-        }
-    }
-
-    #[test]
-    fn scopes_group_to_single_member() {
-        let group = Group {
-            id: 42,
-            members: vec![member("home"), member("root"), member("root_home")],
-        };
-        let scoped = scope_group_to_config(&group, "root").expect("grupo tem root");
-        assert_eq!(scoped.id, 42);
-        assert_eq!(scoped.members.len(), 1);
-        assert_eq!(scoped.members[0].config, "root");
-        // home e root_home não entram
-        assert!(scope_group_to_config(&group, "ausente").is_none());
-    }
-}
