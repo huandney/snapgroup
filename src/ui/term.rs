@@ -162,6 +162,31 @@ pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
 }
 
+pub fn content_width() -> usize {
+    let width = console::Term::stdout().size().1 as usize;
+    width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)
+}
+
+pub fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        let sep = usize::from(!line.is_empty());
+        if !line.is_empty() && line.chars().count() + sep + word.chars().count() > width {
+            lines.push(line);
+            line = String::new();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Conector de árvore com o indent de conteúdo (CONTENT_INDENT = "   ") embutido
 /// como literal — `&'static str` pra evitar um `format!` por linha.
 pub fn tree_branch(last: bool) -> &'static str {

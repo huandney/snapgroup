@@ -5,8 +5,9 @@ use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, header, line, prompt_bold_hint, prompt_hint, regret_title,
-    short_datetime, tree_branch, tree_stem, truncate_for_terminal,
+    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold_hint,
+    prompt_hint, regret_title, short_datetime, tree_branch, tree_stem, truncate_for_terminal,
+    wrap_text,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -425,36 +426,24 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }))
 }
 
-/// Linha-resumo do checkpoint no picker de membros (caso "resumo": id · data ·
-/// descrição). Trunca à largura para caber numa linha só — o bloco multi-linha
-/// que existia aqui quebrava ao redimensionar o terminal (ver
-/// docs/roadmap/ui-layout-padronizacao.md). Descrição vazia some com o separador.
+/// Cabeçalho compacto do checkpoint no picker de membros. A descrição fica numa
+/// linha própria e truncada: informa contexto sem dominar a tela nem quebrar o
+/// redraw do dialoguer quando o texto é longo.
 fn print_checkpoint_summary(group: &Group) {
     let date = short_datetime(group::date(group));
     let desc = group::description(group);
     let desc = desc.trim();
+    line(format_args!("checkpoint {}  {}  {date}", group.id, style("·").dim()));
     if desc.is_empty() {
-        line(format_args!("checkpoint {}  {}  {date}", group.id, style("·").dim()));
         return;
     }
-    let head = format!("checkpoint {}  ·  {date}  ·  ", group.id);
-    let avail = content_width().saturating_sub(head.chars().count()).max(8);
+    let avail = content_width().min(96);
     let desc = if desc.chars().count() > avail {
         format!("{}…", desc.chars().take(avail - 1).collect::<String>())
     } else {
         desc.to_string()
     };
-    line(format_args!(
-        "checkpoint {}  {}  {date}  {}  {desc}",
-        group.id,
-        style("·").dim(),
-        style("·").dim(),
-    ));
-}
-
-fn content_width() -> usize {
-    let width = console::Term::stdout().size().1 as usize;
-    width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)
+    line(format_args!("{desc}"));
 }
 
 pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<RegretInfo>> {
@@ -526,6 +515,14 @@ pub(crate) fn review_checkpoint_restore(
         selected.members.len(),
         original.members.len()
     ));
+    let desc = group::description(original);
+    let desc = desc.trim();
+    if !desc.is_empty() {
+        for wrapped in wrap_text(desc, content_width()) {
+            line(format_args!("{wrapped}"));
+        }
+        println!();
+    }
 
     let has_skip = !skipped.is_empty();
     println!("{} aplicar", tree_branch(!has_skip));

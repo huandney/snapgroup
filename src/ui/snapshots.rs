@@ -1,8 +1,8 @@
 use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, HINT_BACK, HINT_MULTI, THEME, app_header, branch, clear_screen, confirm, header,
-    line, prompt_bold_hint, prompt_hint, section_header, short_datetime, tree_branch,
+    AltScreen, CONTENT_INDENT, HINT_MULTI, THEME, app_header, branch, clear_screen,
+    confirm, content_width, header, line, prompt_hint, section_header, short_datetime,
     truncate_for_terminal,
 };
 use anyhow::{Context, Result};
@@ -57,7 +57,10 @@ fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
                 Some(targets) => return Ok(Some(targets)),
                 None => continue,
             },
-            Some(1) => return select_all_delete_targets(groups),
+            Some(1) => match select_all_delete_targets(groups)? {
+                Some(targets) => return Ok(Some(targets)),
+                None => continue,
+            },
             _ => return Ok(None),
         }
     }
@@ -112,12 +115,19 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
 }
 
 fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    clear_screen();
-    header("Apagar checkpoints");
-    if !confirm("Apagar TODOS os checkpoints?")? {
-        return Ok(None);
+    let targets: Vec<&Group> = groups.iter().collect();
+    match confirm_delete_targets_with_prompt(&targets, "Confirmar?", Some("todos selecionados"))? {
+        DeleteFlow::Proceed => {
+            clear_screen();
+            header("Apagar checkpoints");
+            if confirm("Tem certeza que deseja apagar todos os checkpoints?")? {
+                Ok(Some((0..groups.len()).collect()))
+            } else {
+                Ok(None)
+            }
+        }
+        DeleteFlow::Back | DeleteFlow::Cancel => Ok(None),
     }
-    Ok(Some((0..groups.len()).collect()))
 }
 
 /// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
@@ -129,37 +139,110 @@ enum DeleteFlow {
 }
 
 fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
+    confirm_delete_targets_with_prompt(targets, "Confirmar?", None)
+}
+
+fn confirm_delete_targets_with_prompt(
+    targets: &[&Group],
+    prompt: &str,
+    dim_hint: Option<&str>,
+) -> Result<DeleteFlow> {
+    let mut yes = false;
+    let mut page = 0usize;
+    loop {
+        let page_size = delete_confirm_page_size();
+        let pages = targets.len().div_ceil(page_size).max(1);
+        page = page.min(pages - 1);
+
+        render_delete_confirmation(targets, prompt, dim_hint, yes, page, page_size, pages);
+        match console::Term::stdout()
+            .read_key()
+            .context("aguardar confirmação")?
+        {
+            console::Key::ArrowUp | console::Key::ArrowDown => yes = !yes,
+            console::Key::ArrowLeft => page = page.saturating_sub(1),
+            console::Key::ArrowRight => page = (page + 1).min(pages - 1),
+            console::Key::Enter => {
+                return Ok(if yes {
+                    DeleteFlow::Proceed
+                } else {
+                    DeleteFlow::Cancel
+                });
+            }
+            console::Key::Escape => return Ok(DeleteFlow::Back),
+            _ => {}
+        }
+    }
+}
+
+fn render_delete_confirmation(
+    targets: &[&Group],
+    prompt: &str,
+    dim_hint: Option<&str>,
+    yes: bool,
+    page: usize,
+    page_size: usize,
+    pages: usize,
+) {
     clear_screen();
     header("Apagar checkpoints");
-    let total = targets.len();
-    for (i, g) in targets.iter().enumerate() {
-        println!(
-            "{} {}  {}  {}  {}  {}  {} membros",
-            tree_branch(i + 1 == total),
-            style(g.id).dim(),
-            style("·").dim(),
-            short_datetime(group::date(g)),
-            style("·").dim(),
-            group::description(g),
-            g.members.len()
-        );
+    println!();
+    match dim_hint {
+        Some(hint) => line(format_args!("{} {}", style(prompt).bold(), style(format!("({hint})")).dim())),
+        None => line(format_args!("{}", style(prompt).bold())),
     }
+    line(format_args!("{} Sim", if yes { ">" } else { " " }));
+    line(format_args!("{} Não", if yes { " " } else { ">" }));
+    println!();
 
-    let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt_bold_hint("Apagar estes checkpoints?", HINT_BACK))
-        .items(&["Sim", "Não"])
-        .default(1)
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(DeleteFlow::Back);
+    let start = page * page_size;
+    let end = (start + page_size).min(targets.len());
+    for g in &targets[start..end] {
+        print_delete_target_card(g);
+    }
+    if pages > 1 {
+        line(format_args!(
+            "{}",
+            style(format!("página {}/{} · ←/→ navega", page + 1, pages)).dim()
+        ));
+    }
+}
+
+fn delete_confirm_page_size() -> usize {
+    let rows = console::Term::stdout().size().0 as usize;
+    // Header + prompt/options + paginação ocupam ~8 linhas. Cada item usa
+    // 3 linhas (nome, metadados, respiro).
+    rows.saturating_sub(8).max(3) / 3
+}
+
+fn print_delete_target_card(g: &Group) {
+    let desc_width = content_width().min(80);
+    let desc = group::description(g).trim();
+    let desc = if desc.is_empty() {
+        format!("#{}", g.id)
+    } else {
+        desc.to_string()
     };
-    Ok(match choice {
-        0 => DeleteFlow::Proceed,
-        _ => DeleteFlow::Cancel,
-    })
+    let desc = truncate_chars(&desc, desc_width);
+    println!("{CONTENT_INDENT}{desc}");
+    println!(
+        "{}{} {}",
+        CONTENT_INDENT,
+        style(format!(
+            "└─ {} · {} membros ·",
+            short_datetime(group::date(g)),
+            g.members.len()
+        ))
+        .dim(),
+        style(g.id).dim()
+    );
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
 }
 
 pub(crate) fn print_delete_cancelled() {
