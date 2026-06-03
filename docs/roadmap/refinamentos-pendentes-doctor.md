@@ -6,17 +6,24 @@ casar com o kernel de `/boot`"). O fluxo consertou a máquina real: Opção C
 restaurou o `/` para 7.0.10-2, `/boot` casou, `/home` ficou intacto e o sistema
 bootou limpo.
 
+## Concluído
+
+- **Kernel-na-lista no restore completo + `snapg list`.** O fluxo geral agora
+  mostra o kernel do membro `root` por checkpoint e Regret no picker do
+  `restore`, e também em `snapg list`, usando `kernel_label`.
+- **Preservação durável do Regret antigo em checkpoint restore.** O Regret
+  antigo fica em `.snapgroup_regret_aside` até o próximo boot, e o
+  `snapg-cleanup.service` remove esse aside junto das sobras pós-restore. Isso
+  prepara o caminho para "desfazer sem reboot" sem depender do terminal.
+- **"Desfazer" sem reboot** (Parte 2c). Após checkpoint restore ou restore só
+  do `/`, o usuário pode desfazer antes do reboot. O fluxo reverte os renames,
+  restaura o Regret antigo preservado em aside e ressincroniza `/boot` quando o
+  root participa. O doctor também oferece a ação quando detecta restore
+  pendente de reboot.
+
 ## Pendente
 
-### Funcional (combinado)
-1. **Kernel-na-lista no restore completo + `snap list`.** Já feito nas telas do
-   resgate (diagnóstico + picker da Opção C). Falta no fluxo geral: kernel por
-   checkpoint/regret no picker do `restore` e em `snapg list` (ler o kernel do
-   membro `root` de cada grupo via `kernel_label`).
-
 ### Desenhado na proposta, não construído
-2. **"Desfazer" sem reboot** (Parte 2c) — cancelar um restore antes do reboot via
-   rename de volta (o `/` vivo ainda é o `_snapg_regret`).
 3. **Backstop antes do reboot** (Fase 3) — invariante "subvol padrão casa com
    `/boot`" como rede universal, independente de como o mismatch surgiu.
 4. **Endurecer a janela crítica** — bloquear Ctrl+C / `systemd-inhibit` durante o
@@ -33,5 +40,5 @@ bootou limpo.
 
 ## Ordem sugerida
 
-1 (fecha o kernel-na-lista) -> 3 (backstop, rede barata). As demais
-(2/4/5/6/7) são incrementais, priorizar conforme o uso.
+3 (backstop, rede barata). As demais (4/5/6/7) são incrementais, priorizar
+conforme o uso.

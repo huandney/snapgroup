@@ -1,11 +1,13 @@
-use crate::group::{self, Group};
+use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, HINT_BACK, HINT_MULTI, THEME, branch, clear_screen, confirm, header, short_datetime,
-    line, prompt_bold_hint, prompt_hint, regret_title, tree_branch, truncate_for_terminal,
+    AltScreen, HINT_BACK, HINT_MULTI, THEME, app_header, branch, clear_screen, confirm, header,
+    line, prompt_bold_hint, prompt_hint, section_header, short_datetime, tree_branch,
+    truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
+use std::collections::HashMap;
 
 pub(crate) fn print_save_created(id: i64, desc: &str, created: &[(String, u32)]) {
     println!(
@@ -165,40 +167,125 @@ pub(crate) fn print_no_groups() {
     println!("nenhum grupo snapg save encontrado");
 }
 
-/// Largura da coluna de descrição no `list`. Trunca o que passar pra não empurrar
-/// a coluna de data quando uma descrição é longa.
-const DESC_COL: usize = 28;
+const ID_COL: usize = 10;
+const NAME_HEADER: &str = "Nome";
+const KERNEL_HEADER: &str = "Kernel";
+const DATE_HEADER: &str = "Data";
+const MEMBERS_HEADER: &str = "Membros";
+const DATE_COL: usize = 16;
+/// Limite da coluna de nome no `list`: respeita o maior nome comum, mas impede
+/// uma descrição muito longa de empurrar kernel/data para fora da tela.
+const NAME_COL_MAX: usize = 36;
 
-pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
-    header("Checkpoints");
+pub(crate) fn print_groups(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    show_app_header: bool,
+) -> Result<()> {
+    if show_app_header {
+        header("Checkpoints");
+    } else {
+        section_header("▪", "Checkpoints");
+    }
+    let mut rows = Vec::with_capacity(groups.len());
     for g in groups {
         let mut mountpoints = Vec::with_capacity(g.members.len());
         for m in &g.members {
             mountpoints.push(snapper::config_subvolume(&m.config)?);
         }
+        rows.push((g, member_badges(&mut mountpoints)));
+    }
+
+    let kernel_col = groups
+        .iter()
+        .filter_map(|g| kernel_labels.get(&g.id))
+        .map(|k| k.chars().count())
+        .max()
+        .unwrap_or(KERNEL_HEADER.len())
+        .max(KERNEL_HEADER.len());
+    let members_col = rows
+        .iter()
+        .map(|(_, members)| members.chars().count())
+        .max()
+        .unwrap_or(MEMBERS_HEADER.len())
+        .max(MEMBERS_HEADER.len());
+    let natural_name_col = groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(NAME_HEADER.len())
+        .max(NAME_HEADER.len())
+        .min(NAME_COL_MAX);
+    let name_col = natural_name_col.min(list_name_col_for_terminal(kernel_col, members_col));
+
+    line(format_args!(
+        "{}   {}   {}   {}   {}",
+        style(format!("{:<ID_COL$}", "ID")).bold(),
+        style(format!("{:<name_col$}", NAME_HEADER)).bold(),
+        style(format!("{:<kernel_col$}", KERNEL_HEADER)).bold(),
+        style(format!("{:<DATE_COL$}", DATE_HEADER)).bold(),
+        style(MEMBERS_HEADER).bold()
+    ));
+
+    for (g, members) in rows {
         let desc = group::description(g);
-        let desc_cell = if desc.chars().count() > DESC_COL {
-            let cut: String = desc.chars().take(DESC_COL - 1).collect();
+        let desc_cell = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
             format!("{cut}…")
         } else {
-            format!("{desc:<DESC_COL$}")
+            format!("{desc:<name_col$}")
         };
+        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
         line(format_args!(
-            "{}   {}   {}   {}",
-            style(format!("{:>10}", g.id)).dim(),
+            "{}   {}   {:<kernel_col$}   {:<DATE_COL$}   {}",
+            style(format!("{:>ID_COL$}", g.id)).dim(),
             desc_cell,
+            style(kernel).dim(),
             style(short_datetime(group::date(g))).dim(),
-            style(mountpoints.join(" + ")).dim(),
+            style(members).dim(),
         ));
     }
     Ok(())
 }
 
-pub(crate) fn print_regret_status(creation_time: &str) {
-    println!();
+fn list_name_col_for_terminal(kernel_col: usize, members_col: usize) -> usize {
+    let width = console::Term::stdout().size().1 as usize;
+    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3);
+    width
+        .saturating_sub(crate::ui::term::CONTENT_INDENT.chars().count())
+        .saturating_sub(fixed)
+        .max(NAME_HEADER.len())
+}
+
+fn member_badges(mountpoints: &mut [String]) -> String {
+    mountpoints.sort_by(|a, b| match (a.as_str(), b.as_str()) {
+        ("/", "/") => std::cmp::Ordering::Equal,
+        ("/", _) => std::cmp::Ordering::Less,
+        (_, "/") => std::cmp::Ordering::Greater,
+        _ => a.cmp(b),
+    });
+    mountpoints
+        .iter()
+        .map(|m| format!("[{m}]"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
+    app_header();
+    section_header("↺", "Regret ativo");
+    let kernel_col = kernel.chars().count().max(KERNEL_HEADER.len());
     line(format_args!(
-        "{} Regret ativo ({}) — use 'snapg restore' para restaurar",
-        regret_title("↺"),
-        short_datetime(creation_time)
+        "{}   {}   {}",
+        style(format!("{:<kernel_col$}", KERNEL_HEADER)).bold(),
+        style(format!("{:<DATE_COL$}", DATE_HEADER)).bold(),
+        style("Ação").bold()
     ));
+    line(format_args!(
+        "{}   {}   {}",
+        style(format!("{:<kernel_col$}", kernel)).dim(),
+        style(format!("{:<DATE_COL$}", short_datetime(creation_time))).dim(),
+        style("snapg restore").dim()
+    ));
+    println!();
 }

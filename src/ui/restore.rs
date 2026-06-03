@@ -4,12 +4,13 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, HINT_BACK, HINT_MULTI, PAGE_INDENT, THEME, branch, clear_screen, confirm, header,
-    line, prompt_bold_hint, prompt_hint, regret_title, short_datetime, title, tree_branch,
-    tree_stem, truncate_for_terminal,
+    AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, PAGE_INDENT, THEME, branch, clear_screen,
+    confirm, header, line, prompt_bold_hint, prompt_hint, regret_title, short_datetime, title,
+    tree_branch, tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Entrada de regret descoberta no toplevel.
@@ -34,6 +35,13 @@ pub(crate) enum RestoreFlow {
     Abort,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum PostRestoreAction {
+    RebootNow,
+    Undo,
+    RebootLater,
+}
+
 /// Ação selecionada na TUI.
 pub(crate) enum RestoreAction {
     Checkpoint(GroupId),
@@ -54,10 +62,12 @@ pub(crate) enum RestorePlan {
 pub(crate) fn select_restore_plan(
     groups: &[Group],
     regret: Option<&RegretInfo>,
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
     loop {
-        match select_restore_action(groups, regret)? {
+        match select_restore_action(groups, regret, kernel_labels, regret_kernel)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 loop {
@@ -96,6 +106,8 @@ pub(crate) fn select_restore_plan(
 pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
 ) -> Result<RestoreAction> {
     let mut items: Vec<String> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
@@ -105,10 +117,15 @@ pub(crate) fn select_restore_action(
 
     clear_screen();
     header("Pontos de restauração");
+    let name_col = restore_name_col(groups, regret.is_some());
+    let kernel_col = restore_kernel_col(groups, kernel_labels, regret_kernel);
 
     if let Some(r) = regret {
+        let kernel = regret_kernel.unwrap_or("?");
         let text = format!(
-            "↺ Regret  ·  {}  ·  {} membros  ·  estado anterior",
+            "{:<name_col$}  {:<kernel_col$}  {}  {} membros",
+            "↺ Regret",
+            kernel,
             short_datetime(&r.creation_time),
             r.entries.len()
         );
@@ -117,12 +134,22 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
+        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
+        let desc = group::description(g);
+        let checkpoint_name_col = name_col.saturating_sub(2);
+        let name = if desc.chars().count() > checkpoint_name_col {
+            let cut: String = desc.chars().take(checkpoint_name_col - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<checkpoint_name_col$}")
+        };
         let text = format!(
-            "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
-            g.id,
+            "• {}  {:<kernel_col$}  {}  {} membros  #{}",
+            name,
+            kernel,
             short_datetime(group::date(g)),
             g.members.len(),
-            group::description(g)
+            g.id
         );
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
@@ -140,6 +167,36 @@ pub(crate) fn select_restore_action(
     };
 
     Ok(actions.remove(selection))
+}
+
+const RESTORE_NAME_COL_MAX: usize = 28;
+
+fn restore_name_col(groups: &[Group], has_regret: bool) -> usize {
+    let regret_len = if has_regret { "↺ Regret".chars().count() } else { 0 };
+    groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(regret_len)
+        .max(regret_len)
+        .min(RESTORE_NAME_COL_MAX)
+}
+
+fn restore_kernel_col(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    regret_kernel: Option<&str>,
+) -> usize {
+    let group_max = groups
+        .iter()
+        .filter_map(|g| kernel_labels.get(&g.id))
+        .map(|k| k.chars().count())
+        .max()
+        .unwrap_or(1);
+    regret_kernel
+        .map(|k| k.chars().count())
+        .unwrap_or(1)
+        .max(group_max)
 }
 
 /// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
@@ -292,6 +349,34 @@ pub(crate) fn print_cleanup_arm_failed(error: &anyhow::Error) {
     );
 }
 
+pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
+    let actions = [
+        PostRestoreAction::RebootNow,
+        PostRestoreAction::Undo,
+        PostRestoreAction::RebootLater,
+    ];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Próximo passo")
+        .items(&["Reiniciar agora", "Desfazer restauração", "Reiniciar depois"])
+        .default(2)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(PostRestoreAction::RebootLater);
+    };
+    Ok(actions[choice])
+}
+
+pub(crate) fn print_restore_undone(done_len: usize) {
+    println!(
+        "{} restauração desfeita sem reboot ({} membros)",
+        style("✓").green().bold(),
+        done_len
+    );
+}
+
 pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> {
     let mut items: Vec<String> = Vec::new();
     for m in &group.members {
@@ -307,15 +392,9 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     }
 
     clear_screen();
-    line(format_args!(
-        "{} {}  {}  {}  {}  {}",
-        title("Checkpoint"),
-        style(group.id).dim(),
-        style("·").dim(),
-        short_datetime(group::date(group)),
-        style("·").dim(),
-        group::description(group)
-    ));
+    line(format_args!("Checkpoint {}", group.id));
+    line(format_args!("Data: {}", short_datetime(group::date(group))));
+    print_checkpoint_description(group::description(group));
 
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt_hint("Selecione os membros para restaurar", HINT_MULTI))
@@ -343,6 +422,75 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
         id: group.id,
         members,
     }))
+}
+
+fn print_checkpoint_description(description: &str) {
+    let description = description.trim();
+    if description.is_empty() {
+        println!();
+        return;
+    }
+
+    println!();
+    line(format_args!("Descrição:"));
+    for wrapped in wrap_text(description, content_width()) {
+        line(format_args!("{wrapped}"));
+    }
+    println!();
+}
+
+fn content_width() -> usize {
+    let width = console::Term::stdout().size().1 as usize;
+    width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        let sep = usize::from(!current.is_empty());
+        if current.chars().count() + sep + word.chars().count() <= width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            continue;
+        }
+
+        if !current.is_empty() {
+            lines.push(current);
+            current = String::new();
+        }
+
+        if word.chars().count() <= width {
+            current.push_str(word);
+            continue;
+        }
+
+        lines.extend(split_long_word(word, width));
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn split_long_word(word: &str, width: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut chunk = String::new();
+    for ch in word.chars() {
+        if chunk.chars().count() == width {
+            chunks.push(chunk);
+            chunk = String::new();
+        }
+        chunk.push(ch);
+    }
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+    chunks
 }
 
 pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<RegretInfo>> {

@@ -7,6 +7,11 @@ use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
 
+pub(crate) enum UndoDoneAction {
+    Exit,
+    ShowDiagnosis,
+}
+
 pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
     clear_screen();
@@ -19,6 +24,29 @@ pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
         .report(false)
         .interact()
         .context("selecionar sistema")
+}
+
+pub(crate) fn select_undo_done_action() -> Result<UndoDoneAction> {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} restauração desfeita sem reboot",
+        style("✓").green().bold()
+    ));
+    line(format_args!("Regret anterior restaurado, quando existia."));
+    println!();
+    line(format_args!("{}", style("enter sai · esc mostra diagnóstico").dim()));
+
+    loop {
+        match console::Term::stdout()
+            .read_key()
+            .context("aguardar confirmação")?
+        {
+            console::Key::Enter => return Ok(UndoDoneAction::Exit),
+            console::Key::Escape => return Ok(UndoDoneAction::ShowDiagnosis),
+            _ => {}
+        }
+    }
 }
 
 pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
@@ -43,6 +71,7 @@ pub(crate) fn select_rescue_action(
     current_kernel: &str,
     default_kernel: &str,
     boot_kernel: &str,
+    can_undo_pending_restore: bool,
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Diagnóstico de boot");
@@ -80,13 +109,21 @@ pub(crate) fn select_rescue_action(
     // um item do Select quebra a medição de largura, e item que dá wrap faz o
     // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
     // linhas de diagnóstico acima, impressas direto.
-    let items: Vec<String> = [
+    let mut choices = Vec::new();
+    if can_undo_pending_restore {
+        choices.push(
+            "Desfazer restauração sem reboot — volta ao estado anterior e restaura o Regret antigo"
+                .to_string(),
+        );
+    }
+    choices.extend([
         format!(
             "Manter o root atual (kernel {default_kernel}) — ajusta o /boot   [só /boot; mantém root e home]"
         ),
         "Restaurar só o / (escolher kernel) — mantém home e root".to_string(),
         "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
-    ]
+    ]);
+    let items: Vec<String> = choices
     .iter()
     .map(|t| truncate_for_terminal(t, 4))
     .collect();

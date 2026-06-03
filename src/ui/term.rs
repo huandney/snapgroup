@@ -105,13 +105,21 @@ pub fn title(s: &str) -> console::StyledObject<&str> {
 }
 
 /// Cabeçalho de seção de linha única (trigo + bold).
-pub fn header(s: &str) {
+pub fn app_header() {
     println!(
         "{PAGE_INDENT}{} {}",
         console::style("SnapGroup").color256(BRAND_COLOR).bold(),
         console::style(DISPLAY_VERSION).dim()
     );
-    println!("{PAGE_INDENT}{} {}", title("▪"), title(s));
+}
+
+pub fn section_header(marker: &str, s: &str) {
+    println!("{PAGE_INDENT}{} {}", title(marker), title(s));
+}
+
+pub fn header(s: &str) {
+    app_header();
+    section_header("▪", s);
 }
 
 pub fn line(args: fmt::Arguments<'_>) {

@@ -41,12 +41,39 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
         let current_kernel = boot::kernel_label(Path::new("/"));
         let default_kernel = boot::kernel_label(&mount.path);
         let boot_kernel = boot::boot_kernel_label(Path::new("/boot"));
+        let can_undo_pending_restore = crate::commands::has_pending_restore()?;
 
-        let Some(choice) =
-            doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel, &boot_kernel)?
+        let Some(choice) = doctor_ui::select_rescue_action(
+            &ctx,
+            &current_kernel,
+            &default_kernel,
+            &boot_kernel,
+            can_undo_pending_restore,
+        )?
         else {
             return Ok(()); // ESC no menu do doctor: sai
         };
+
+        if can_undo_pending_restore && choice == 0 {
+            drop(mount);
+            {
+                let _lock = crate::lock::acquire()?;
+                crate::commands::undo_pending_restore()?;
+            }
+            match doctor_ui::select_undo_done_action()? {
+                doctor_ui::UndoDoneAction::Exit => return Ok(()),
+                doctor_ui::UndoDoneAction::ShowDiagnosis => {
+                    let target = DoctorTarget::new(
+                        "sistema atual".to_string(),
+                        PathBuf::from("/"),
+                        PathBuf::from("/boot"),
+                    );
+                    let _ = diagnose_and_apply(&target, false)?;
+                    return Ok(());
+                }
+            }
+        }
+        let choice = if can_undo_pending_restore { choice - 1 } else { choice };
 
         match choice {
             // A: ajusta o "/boot" contra o /@ montado. Terminal — o `apply`
