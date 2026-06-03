@@ -148,26 +148,33 @@ pub(crate) struct RootSnapshotRow {
     pub(crate) number: u32,
     pub(crate) date: String,
     pub(crate) kernel: String,
+    /// Nome do backup quando feito pelo snapgroup (ex: "Atual 2").
+    pub(crate) name: Option<String>,
 }
 
-/// Picker para "restaurar só o /": lista os snapshots de root (varridos do
-/// toplevel), anotados com o kernel. Retorna o número do snapshot, ou `None` no
-/// ESC.
+/// Picker para "restaurar só o /": lista os kernels disponíveis (deduplicados),
+/// com o nome do backup snapgroup quando houver e a data esmaecida. Retorna o
+/// número do snapshot escolhido (o mais recente daquele kernel), ou `None` no ESC.
 pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<u32>> {
     let mut items: Vec<String> = Vec::new();
-    let prefix_len = 4;
+    let max = (console::Term::stdout().size().1 as usize).saturating_sub(4);
 
     clear_screen();
     header("Restaurar só o / — qual kernel?");
 
     for r in rows {
-        let text = format!(
-            "kernel {}  ·  snapshot #{}  ·  {}",
-            r.kernel,
-            r.number,
-            short_datetime(&r.date)
-        );
-        items.push(truncate_for_terminal(&text, prefix_len));
+        let kver = format!("{:<18}", r.kernel);
+        let name = format!("{:<16}", r.name.as_deref().unwrap_or("—"));
+        let date = short_datetime(&r.date);
+        let plain = format!("kernel {kver} {name} {date}");
+        // Dim na data só quando a linha plana cabe (ANSI dentro de item do Select
+        // quebra a medição/wrap). Se não couber, cai no plano truncado.
+        let item = if plain.chars().count() <= max {
+            format!("kernel {kver} {name} {}", style(date).dim())
+        } else {
+            truncate_for_terminal(&plain, 4)
+        };
+        items.push(item);
     }
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)

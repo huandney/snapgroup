@@ -110,6 +110,7 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
             number: s.number,
             date: s.date.clone(),
             kernel: s.kernel.clone(),
+            name: s.name.clone(),
         })
         .collect();
 
@@ -197,11 +198,13 @@ struct RootSnap {
     number: u32,
     kernel: String,
     date: String,
+    /// Nome do backup, se foi feito pelo snapgroup (descrição do `info.xml`).
+    name: Option<String>,
 }
 
 /// Varre os snapshots de root no toplevel, contornando a cegueira do snapper num
-/// boot de resgate (`/.snapshots` do snapshot está vazio). Lê o kernel e a data
-/// de cada um direto do subvol — sem snapper, sem `info.xml`.
+/// boot de resgate (`/.snapshots` do snapshot está vazio). Lê kernel e data
+/// direto do subvol, e o nome do backup do `info.xml` (só quando é snapgroup).
 fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSnap>> {
     let dir = toplevel.join(root_subvol).join(".snapshots");
     let mut snaps = Vec::new();
@@ -222,11 +225,30 @@ fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSna
             number,
             kernel: boot::kernel_label(&src),
             date: btrfs::subvol_creation_time(&src).unwrap_or_default(),
+            name: snapgroup_backup_name(&entry.path().join("info.xml")),
         });
     }
     // Mais recente primeiro.
     snaps.sort_by_key(|s| std::cmp::Reverse(s.number));
     Ok(snaps)
+}
+
+/// Nome de um backup feito pelo snapgroup: a `<description>` do `info.xml`, mas
+/// só quando o snapshot tem `snapgroup-id` no userdata (senão é timeline/pacman,
+/// sem nome útil). Extração mínima de string — sem crate de XML. `None` se não
+/// for snapgroup, o arquivo não existir, ou a descrição for vazia.
+fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
+    let content = fs::read_to_string(info_xml).ok()?;
+    if !content.contains("snapgroup-id") {
+        return None;
+    }
+    let open = "<description>";
+    let close = "</description>";
+    let start = content.find(open)? + open.len();
+    let rest = &content[start..];
+    let end = rest.find(close)?;
+    let val = rest[..end].trim();
+    (!val.is_empty()).then(|| val.to_string())
 }
 
 /// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
