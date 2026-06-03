@@ -1,6 +1,8 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
-use crate::ui::term::{THEME, clear_screen, header, line, path, title, tree_branch, tree_stem};
+use crate::ui::term::{
+    THEME, clear_screen, header, line, path, title, tree_branch, tree_stem, truncate_for_terminal,
+};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
@@ -72,15 +74,20 @@ pub(crate) fn select_rescue_action(
         path("/")
     );
     println!();
-    let items = [
+    // Itens em texto plano e truncados à largura do terminal. Cor/ANSI dentro de
+    // um item do Select quebra a medição de largura, e item que dá wrap faz o
+    // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
+    // linhas de diagnóstico acima, impressas direto.
+    let items: Vec<String> = [
         format!(
-            "Manter o root atual (kernel {default_kernel}) — ajusta o {}   [só {}; mantém root e home]",
-            path("/boot"),
-            path("/boot")
+            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot   [só /boot; mantém root e home]"
         ),
-        format!("Restaurar só o {} (escolher kernel) — mantém home e root", path("/")),
+        "Restaurar só o / (escolher kernel) — mantém home e root".to_string(),
         "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
-    ];
+    ]
+    .iter()
+    .map(|t| truncate_for_terminal(t, 4))
+    .collect();
     dialoguer::Select::with_theme(&THEME)
         .with_prompt("Como resolver?")
         .items(&items)
