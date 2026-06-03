@@ -135,15 +135,14 @@ pub(crate) fn select_restore_action(
     for g in groups {
         let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
         let desc = group::description(g);
-        let checkpoint_name_col = name_col.saturating_sub(2);
-        let name = if desc.chars().count() > checkpoint_name_col {
-            let cut: String = desc.chars().take(checkpoint_name_col - 1).collect();
+        let name = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
             format!("{cut}…")
         } else {
-            format!("{desc:<checkpoint_name_col$}")
+            format!("{desc:<name_col$}")
         };
         let text = format!(
-            "• {}   {:<kernel_col$}   {}   {} membros   #{}",
+            "{}   {:<kernel_col$}   {}   {} membros   #{}",
             name,
             kernel,
             short_datetime(group::date(g)),
@@ -291,17 +290,19 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
     clear_screen();
     header("Restauração");
     println!();
-    println!("{PAGE_INDENT}{} ATENÇÃO: /boot está em FAT32 (vfat)", style("⚠").yellow().bold());
-    line(format_args!("O snapg tentará sincronizar kernel/initramfs em /boot,"));
-    line(format_args!("mas este é um modo legado: /boot fica fora do snapshot BTRFS."));
-    line(format_args!("Se a sincronização falhar, o backup de /boot será restaurado,"));
-    line(format_args!("mas o modo nativo recomendado continua sendo /boot em BTRFS."));
+    println!("{PAGE_INDENT}{} /boot está em FAT32 separado", style("!").yellow().bold());
+    line(format_args!("Kernel e initramfs não fazem parte do snapshot BTRFS."));
+    line(format_args!("Ao restaurar este checkpoint, o snapg também vai sincronizar"));
+    line(format_args!("esses arquivos e o limine.conf em /boot."));
     println!();
-    confirm("Continuar mesmo assim?")
+    line(format_args!("Se a sincronização for interrompida, rode {}.", style("snapg doctor").bold()));
+    println!();
+    confirm("Continuar?")
 }
 
 pub(crate) fn print_cancelled_boot_risk() {
-    println!("cancelado (risco de dessincronização de boot)");
+    println!("restauração cancelada");
+    println!("/boot não foi alterado");
 }
 
 pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {

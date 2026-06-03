@@ -192,23 +192,30 @@ pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
     clear_screen();
     header("Diagnóstico de boot");
-    print_target(target);
+    print_target(target, diagnosis);
     print_diagnosis_inner(&target.root, diagnosis);
 }
 
-fn print_target(target: &DoctorTarget) {
+fn print_target(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
     line(format_args!(
         "{}  {}  {}",
         title("Alvo"),
         style("·").dim(),
         target.label
     ));
-    println!("{} {:<COL$} {}", tree_branch(false), "root", path(&target.root_display));
     println!(
-        "{} {:<COL$} {}",
+        "{} {:<COL$} {:<PATH_COL$} {}",
+        tree_branch(false),
+        "root",
+        path(&target.root_display),
+        style(format!("kernel {}", diagnosis.root_kernel)).dim()
+    );
+    println!(
+        "{} {:<COL$} {:<PATH_COL$} {}",
         tree_branch(false),
         "boot",
-        path(&target.boot.display().to_string())
+        path(&target.boot.display().to_string()),
+        style(format!("kernel {}", diagnosis.boot_kernel)).dim()
     );
 }
 
@@ -240,6 +247,7 @@ pub(crate) fn print_diagnosis(root: &Path, diagnosis: &BootDiagnosis) {
 
 /// Largura da coluna de rótulos do relatório (o maior é "kernel groups" = 13).
 const COL: usize = 14;
+const PATH_COL: usize = 8;
 
 fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
     println!("{} {:<COL$} {}", tree_branch(false), "filesystem", diagnosis.fstype);
@@ -278,7 +286,7 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
         }
         BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
             println!(
-                "{} {:<COL$} {} sincronização incompleta (backup de boot remanescente)",
+                "{} {:<COL$} {} incompleta: kernels casam, mas há backup remanescente",
                 tree_branch(true),
                 "estado",
                 style("✗").red().bold()

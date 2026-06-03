@@ -25,8 +25,9 @@ pub fn spinner(message: String) -> ProgressBar {
                 "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠿",
             ]),
     );
-    pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(message);
+    pb.tick();
+    pb.enable_steady_tick(Duration::from_millis(120));
     pb
 }
 

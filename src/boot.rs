@@ -125,6 +125,9 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // Err como desync), só avisa. Um backup que sobra vira NeedsSync no próximo
     // doctor, que reroda este mesmo caminho seguro.
     pb.set_message("removendo backup de /boot…".to_string());
+    pb.disable_steady_tick();
+    pb.tick();
+    pb.enable_steady_tick(std::time::Duration::from_millis(120));
     let cleanup = fs::remove_dir_all(boot_backup_dir(boot));
     pb.finish_and_clear();
     if let Err(e) = cleanup {
@@ -214,7 +217,10 @@ fn sync_inner(
     }
 
     panel.start_limine();
-    refresh_limine_boot_hashes(boot).context("atualizar hashes do limine.conf")?;
+    let pb = crate::ui::term::spinner("atualizando hashes do limine.conf…".to_string());
+    let r = refresh_limine_boot_hashes(boot).context("atualizar hashes do limine.conf");
+    pb.finish_and_clear();
+    r?;
     panel.finish_limine();
     Ok(())
 }
@@ -263,6 +269,8 @@ pub enum BootHealth {
 #[derive(Debug, Clone)]
 pub struct BootDiagnosis {
     pub fstype: String,
+    pub root_kernel: String,
+    pub boot_kernel: String,
     pub kernel_groups: usize,
     pub initramfs_files: usize,
     pub health: BootHealth,
@@ -445,6 +453,7 @@ pub fn kernel_label(root: &Path) -> String {
 
 pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     let fstype = boot_fstype(boot)?;
+    let root_kernel = kernel_label(root);
     if !fstype.eq_ignore_ascii_case("vfat") {
         // /boot FAT32 separado que não está montado: `findmnt --target` resolve
         // para o mount pai (o root BTRFS), então `fstype` vem "btrfs" e seria
@@ -453,6 +462,8 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
         if fstab_declares_vfat_boot(root, boot) {
             return Ok(BootDiagnosis {
                 fstype,
+                root_kernel,
+                boot_kernel: "?".to_string(),
                 kernel_groups: 0,
                 initramfs_files: 0,
                 health: BootHealth::Unmounted,
@@ -466,6 +477,8 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
         }
         return Ok(BootDiagnosis {
             fstype,
+            boot_kernel: root_kernel.clone(),
+            root_kernel,
             kernel_groups: 0,
             initramfs_files: 0,
             health: BootHealth::NativeBoot,
@@ -493,6 +506,8 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     };
     Ok(BootDiagnosis {
         fstype,
+        root_kernel,
+        boot_kernel: boot_kernel_label(boot),
         kernel_groups: groups.len(),
         initramfs_files,
         health,
