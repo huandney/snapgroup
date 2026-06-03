@@ -40,9 +40,10 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
 
         let current_kernel = boot::kernel_label(Path::new("/"));
         let default_kernel = boot::kernel_label(&mount.path);
+        let boot_kernel = boot::boot_kernel_label(Path::new("/boot"));
 
         let Some(choice) =
-            doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel)?
+            doctor_ui::select_rescue_action(&ctx, &current_kernel, &default_kernel, &boot_kernel)?
         else {
             return Ok(()); // ESC no menu do doctor: sai
         };

@@ -42,6 +42,7 @@ pub(crate) fn select_rescue_action(
     ctx: &RescueContext,
     current_kernel: &str,
     default_kernel: &str,
+    boot_kernel: &str,
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Diagnóstico de boot");
@@ -66,11 +67,12 @@ pub(crate) fn select_rescue_action(
         default_kernel
     );
     println!(
-        "{} {:<COL$} {} {} difere do {}",
+        "{} {:<COL$} {} {}  kernel {} (difere do {})",
         tree_branch(true),
         "boot",
         style("✗").red().bold(),
         path("/boot"),
+        boot_kernel,
         path("/")
     );
     println!();

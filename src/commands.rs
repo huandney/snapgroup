@@ -114,7 +114,8 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
         })
         .collect();
 
-    let Some(number) = crate::ui::restore::select_root_snapshot(&rows)? else {
+    let current_kernel = boot::running_kernel().unwrap_or_default();
+    let Some(number) = crate::ui::restore::select_root_snapshot(&rows, &current_kernel)? else {
         crate::ui::restore::print_cancelled();
         return Ok(());
     };

@@ -155,7 +155,10 @@ pub(crate) struct RootSnapshotRow {
 /// Picker para "restaurar só o /": lista os kernels disponíveis (deduplicados),
 /// com o nome do backup snapgroup quando houver e a data esmaecida. Retorna o
 /// número do snapshot escolhido (o mais recente daquele kernel), ou `None` no ESC.
-pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<u32>> {
+pub(crate) fn select_root_snapshot(
+    rows: &[RootSnapshotRow],
+    current_kernel: &str,
+) -> Result<Option<u32>> {
     let mut items: Vec<String> = Vec::new();
     let max = (console::Term::stdout().size().1 as usize).saturating_sub(4);
 
@@ -163,7 +166,12 @@ pub(crate) fn select_root_snapshot(rows: &[RootSnapshotRow]) -> Result<Option<u3
     header("Restaurar só o / — qual kernel?");
 
     for r in rows {
-        let kver = format!("{:<18}", r.kernel);
+        let marked = if r.kernel == current_kernel {
+            format!("{} (atual)", r.kernel)
+        } else {
+            r.kernel.clone()
+        };
+        let kver = format!("{marked:<26}");
         let name = format!("{:<16}", r.name.as_deref().unwrap_or("—"));
         let date = short_datetime(&r.date);
         let plain = format!("kernel {kver} {name} {date}");

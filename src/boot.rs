@@ -374,6 +374,31 @@ fn subvols_diverge(current: &str, default: &str) -> bool {
     normalize_subvol(current) != normalize_subvol(default)
 }
 
+/// Kernel rodando agora (uname -r), de `/proc/sys/kernel/osrelease`.
+pub fn running_kernel() -> Option<String> {
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Versão do kernel no `/boot` ativo, identificada comparando o `vmlinuz` de
+/// `/boot` com o do kernel rodando. `?` se não casar (ex: `/boot` tem outro
+/// kernel que não o em execução) — o nome só sai de uma comparação byte-a-byte,
+/// já que o arquivo não traz a versão.
+pub fn boot_kernel_label(boot: &Path) -> String {
+    boot_kernel_version(boot).unwrap_or_else(|| "?".to_string())
+}
+
+fn boot_kernel_version(boot: &Path) -> Option<String> {
+    let kver = running_kernel()?;
+    let running_vmlinuz = Path::new("/usr/lib/modules").join(&kver).join("vmlinuz");
+    let groups = discover_kernel_groups(boot).ok()?;
+    let boot_vmlinuz = groups.first()?.vmlinuz_paths.first()?;
+    let boot_bytes = fs::read(boot_vmlinuz).ok()?;
+    let running_bytes = fs::read(&running_vmlinuz).ok()?;
+    (boot_bytes == running_bytes).then_some(kver)
+}
+
 /// Kernels presentes em `<root>/usr/lib/modules`, ordenados e juntos por
 /// vírgula — rótulo curto para a UI mostrar a transição (montado vs boota).
 /// `?` quando o diretório não existe ou está vazio.
