@@ -383,7 +383,12 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
-    let rollback = rollback::rollback_root_explicit(toplevel, root_subvol, &src)
+    let mut panel = crate::ui::rollback::RollbackPanel::new(
+        "Restaurar só o /",
+        format!("/ → snapshot #{number}"),
+        &["root".to_string()],
+    );
+    let rollback = rollback::rollback_root_explicit(toplevel, root_subvol, &src, &mut panel)
         .with_context(|| format!("rollback de / para o snapshot #{number}"))?;
     crate::ui::restore::print_root_restore_done(number, &rollback.done);
 
@@ -441,7 +446,12 @@ fn execute_restore_checkpoint(
     // só no próximo boot, quando o novo root já virou realidade.
     let asides = rollback::aside_existing_regrets(mount_path, &configs)?;
 
-    match rollback::rollback_group(group, mount_path) {
+    let mut panel = crate::ui::rollback::RollbackPanel::new(
+        "Restaurar checkpoint",
+        format!("checkpoint {} · {} membros", group.id, group.members.len()),
+        &configs,
+    );
+    match rollback::rollback_group(group, mount_path, &mut panel) {
         Ok(done) => {
             crate::ui::restore::print_checkpoint_rollback_done(group.id, &done);
 

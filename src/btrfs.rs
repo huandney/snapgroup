@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 /// Monta o subvolume top-level (subvolid=5) num path temporário.
 /// Necessário pra criar/renomear subvolumes irmãos como @, @home — operações
@@ -39,22 +40,15 @@ pub fn umount_toplevel(target: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn create_snapshot(source: &Path, dest: &Path) -> Result<()> {
-    let out = Command::new("btrfs")
-        .args(["subvolume", "snapshot"])
-        .arg(source)
-        .arg(dest)
-        .output()
-        .context("btrfs subvolume snapshot falhou")?;
-    if !out.status.success() {
-        bail!(
-            "snapshot {} -> {}: {}",
-            source.display(),
-            dest.display(),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
+/// Cria um snapshot. O `btrfs` bloqueia mudo enquanto copia metadata no kernel,
+/// então `on_tick` é chamado a cada ~120ms durante o bloqueio pra o caller animar
+/// um spinner (a operação pode demorar em árvores grandes). Em comando rápido,
+/// `on_tick` pode nem rodar — o caller já desenhou o estado inicial.
+pub fn create_snapshot(source: &Path, dest: &Path, on_tick: impl FnMut()) -> Result<()> {
+    let mut cmd = Command::new("btrfs");
+    cmd.args(["subvolume", "snapshot"]).arg(source).arg(dest);
+    crate::proc::run_ticking(cmd, Duration::from_millis(120), on_tick)
+        .with_context(|| format!("snapshot {} -> {}", source.display(), dest.display()))
 }
 
 pub fn delete_subvolume(path: &Path) -> Result<()> {

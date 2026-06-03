@@ -179,7 +179,7 @@ fn sync_inner(
 
         for dest in &group.initramfs_paths {
             panel.start_initramfs(kver, dest);
-            regen_initramfs(&config, kver, restored_root, dest)?;
+            regen_initramfs(&config, kver, restored_root, dest, |l| panel.stream(l))?;
             panel.finish_initramfs();
         }
     }
@@ -521,7 +521,13 @@ fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
     bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
 }
 
-fn regen_initramfs(config: &Path, kver: &str, restored_root: &Path, out: &Path) -> Result<()> {
+fn regen_initramfs(
+    config: &Path,
+    kver: &str,
+    restored_root: &Path,
+    out: &Path,
+    on_line: impl FnMut(&str),
+) -> Result<()> {
     // Gera para um temporário no mesmo diretório e renomeia atomicamente.
     // Escrever direto em `out` deixaria um initramfs parcial no caminho ativo
     // se o mkinitcpio fosse interrompido (SIGKILL no reboot, queda de luz) —
@@ -532,22 +538,16 @@ fn regen_initramfs(config: &Path, kver: &str, restored_root: &Path, out: &Path) 
         .with_context(|| format!("initramfs sem nome de arquivo: {}", out.display()))?;
     let tmp = out.with_file_name(format!(".{}.snapg_tmp", file_name.to_string_lossy()));
 
-    let res = Command::new("mkinitcpio")
-        .args(["--nopost", "-c"])
+    let mut cmd = Command::new("mkinitcpio");
+    cmd.args(["--nopost", "-c"])
         .arg(config)
         .args(["-k", kver, "-r"])
         .arg(restored_root)
         .arg("-g")
-        .arg(&tmp)
-        .output()
-        .context("mkinitcpio falhou")?;
-    if !res.status.success() {
+        .arg(&tmp);
+    if let Err(e) = crate::proc::run_streamed(cmd, on_line) {
         let _ = fs::remove_file(&tmp);
-        bail!(
-            "mkinitcpio {kver} → {}: {}",
-            out.display(),
-            String::from_utf8_lossy(&res.stderr)
-        );
+        return Err(e).with_context(|| format!("mkinitcpio {kver} → {}", out.display()));
     }
 
     fs::rename(&tmp, out).with_context(|| {

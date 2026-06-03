@@ -1,8 +1,14 @@
-use crate::ui::term::{clear_screen, header, line, tree_branch};
+use crate::ui::term::{clear_screen, header, line, tree_branch, truncate_for_terminal};
 use console::style;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 const STEP_COUNT: usize = 5;
+
+/// Intervalo mínimo entre redesenhos durante o stream ao vivo. O mkinitcpio
+/// dispara dezenas de linhas em rajada; sem isso, seriam dezenas de
+/// `clear_screen` por segundo (flicker). 40ms ≈ 25fps, suave e responsivo.
+const LIVE_THROTTLE: Duration = Duration::from_millis(40);
 
 #[derive(Clone, Copy)]
 enum StepStatus {
@@ -19,6 +25,11 @@ pub(crate) struct BootSyncPanel {
     summary: String,
     execution_label: &'static str,
     execution: String,
+    /// Última linha real emitida pelo comando em curso (mkinitcpio etc.). Quando
+    /// `Some`, sobrescreve `execution` na linha de baixo — é o feed ao vivo.
+    /// Volta a `None` ao fim de cada etapa, restaurando a descrição estática.
+    live: Option<String>,
+    last_render: Option<Instant>,
 }
 
 impl BootSyncPanel {
@@ -29,6 +40,21 @@ impl BootSyncPanel {
             summary: String::from("preparando sincronização"),
             execution_label: "executando",
             execution: String::from("analisar /boot"),
+            live: None,
+            last_render: None,
+        }
+    }
+
+    /// Feed ao vivo: registra a linha mais recente do comando e redesenha o
+    /// painel, respeitando o throttle pra não floodar o terminal. Passada como
+    /// callback ao `proc::run_streamed`.
+    pub(crate) fn stream(&mut self, line: &str) {
+        self.live = Some(line.trim_end().to_string());
+        let ready = self
+            .last_render
+            .is_none_or(|t| t.elapsed() >= LIVE_THROTTLE);
+        if ready {
+            self.render();
         }
     }
 
@@ -145,6 +171,7 @@ impl BootSyncPanel {
         self.summary = summary.to_string();
         self.execution_label = "executando";
         self.execution = execution;
+        self.live = None;
         self.steps[idx] = StepStatus::Running;
         self.render();
     }
@@ -153,11 +180,12 @@ impl BootSyncPanel {
         self.current_step = idx + 1;
         self.summary = summary.to_string();
         self.execution_label = "executado";
+        self.live = None;
         self.steps[idx] = StepStatus::Done;
         self.render();
     }
 
-    fn render(&self) {
+    fn render(&mut self) {
         clear_screen();
         header("Sincronização de boot");
         println!();
@@ -186,7 +214,11 @@ impl BootSyncPanel {
         }
         println!();
         line(format_args!("{}", self.execution_label));
-        line(format_args!("{}", self.execution));
+        // A linha viva pode ser longa (mkinitcpio); trunca à largura pra não dar
+        // wrap e quebrar o alinhamento do painel.
+        let exec = self.live.as_deref().unwrap_or(&self.execution);
+        line(format_args!("{}", truncate_for_terminal(exec, 0)));
+        self.last_render = Some(Instant::now());
     }
 
     fn status_text(&self, status: StepStatus) -> String {
