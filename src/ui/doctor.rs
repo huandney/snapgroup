@@ -35,9 +35,16 @@ pub(crate) fn select_undo_done_action() -> Result<UndoDoneAction> {
         style("✓").green().bold()
     ));
     line(format_args!("Regret anterior restaurado, quando existia."));
+    wait_done_action()
+}
+
+/// Espera enter/esc após uma ação terminal cujo status já está na tela (relatório
+/// do doctor, "nada a fazer", "correção não aplicada"). Enter sai; Esc pede o
+/// diagnóstico do sistema atual. Só imprime a dica de teclas — não limpa nem
+/// reescreve o status acima.
+pub(crate) fn wait_done_action() -> Result<UndoDoneAction> {
     println!();
     line(format_args!("{}", style("enter sai · esc mostra diagnóstico").dim()));
-
     loop {
         match console::Term::stdout()
             .read_key()
@@ -119,10 +126,10 @@ pub(crate) fn select_rescue_action(
     }
     choices.extend([
         format!(
-            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot   [só /boot; mantém root e home]"
+            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot · mantém root e home"
         ),
-        "Restaurar só o / (escolher kernel) — mantém home e root".to_string(),
-        "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
+        "Restaurar só o / — escolher kernel · mantém home e root".to_string(),
+        "Mudar o que boota — restore completo · outro snapshot ou desfazer".to_string(),
     ]);
     let items: Vec<String> = choices
     .iter()
