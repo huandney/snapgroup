@@ -228,6 +228,11 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<bool> {
         return Ok(false);
     }
 
+    // Escreve no /boot — serializa com restore/delete/save pelo lock global. Pego
+    // só aqui (não no main, nem antes do confirm): o Doctor inteiro sob lock daria
+    // re-entrância com as opções de resgate que já pegam lock, e travar durante o
+    // confirm interativo prenderia o lock no tempo de decisão do usuário.
+    let _lock = crate::lock::acquire()?;
     boot::sync_fat32_paths(&target.root, &target.boot)?;
     doctor_ui::print_spacer();
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;

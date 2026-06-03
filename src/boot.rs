@@ -71,8 +71,11 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // Exceção: backup remanescente = sync anterior interrompido. Aí o gate é
     // pulado mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho
     // na janela entre copiar o vmlinuz e regenerá-lo. O resync completo o refaz.
+    // Short-circuit: havendo backup remanescente, nem avalia o match do vmlinuz —
+    // essa leitura pode falhar em estado parcial e abortaria o reparo antes de
+    // regenerar. Só checa o match quando NÃO interrompido.
     let interrupted = boot_backup_remnant(boot);
-    if should_skip_sync(interrupted, boot_matches_snapshot(restored_root, &groups)?) {
+    if !interrupted && boot_matches_snapshot(restored_root, &groups)? {
         panel.already_synced();
         return Ok(());
     }
@@ -125,14 +128,6 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
 /// sobrevive a um reboot, ao contrário de qualquer estado em memória.
 fn boot_backup_remnant(boot: &Path) -> bool {
     boot_backup_dir(boot).exists()
-}
-
-/// Decide se o sync pode ser pulado. Só quando nada foi interrompido E o
-/// vmlinuz já casa com o snapshot. Backup remanescente força o caminho completo
-/// mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho na janela
-/// entre copiar o vmlinuz e regenerá-lo.
-fn should_skip_sync(interrupted: bool, vmlinuz_matches: bool) -> bool {
-    !interrupted && vmlinuz_matches
 }
 
 fn sync_inner(
@@ -846,8 +841,7 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
-        kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol, should_skip_sync,
-        subvols_diverge,
+        kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol, subvols_diverge,
     };
     use std::path::Path;
 
@@ -921,18 +915,6 @@ mod tests {
         assert!(!fstab_declares_vfat_boot(&base, &boot));
 
         let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn skips_sync_only_when_clean_and_matching() {
-        // Limpo e vmlinuz casa: nada a fazer, pula o caminho pesado.
-        assert!(should_skip_sync(false, true));
-        // Interrompido nunca pula, mesmo com vmlinuz casando — o initramfs pode
-        // ter ficado velho na janela entre copiar o vmlinuz e regenerá-lo.
-        assert!(!should_skip_sync(true, true));
-        assert!(!should_skip_sync(true, false));
-        // Mismatch de kernel: precisa sincronizar.
-        assert!(!should_skip_sync(false, false));
     }
 
     #[test]
