@@ -67,19 +67,35 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
     // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
     // de interrupção junto. O caminho pesado só roda quando o kernel difere.
-    if boot_matches_snapshot(restored_root, &groups)? {
+    //
+    // Exceção: backup remanescente = sync anterior interrompido. Aí o gate é
+    // pulado mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho
+    // na janela entre copiar o vmlinuz e regenerá-lo. O resync completo o refaz.
+    // Short-circuit: havendo backup remanescente, nem avalia o match do vmlinuz —
+    // essa leitura pode falhar em estado parcial e abortaria o reparo antes de
+    // regenerar. Só checa o match quando NÃO interrompido.
+    let interrupted = boot_backup_remnant(boot);
+    if !interrupted && boot_matches_snapshot(restored_root, &groups)? {
         panel.already_synced();
         return Ok(());
     }
 
     let critical = critical_boot_files(boot, &groups);
     let backup = boot_backup_dir(boot);
-    panel.start_backup(boot, &backup);
-    if let Err(e) = backup_boot_files(boot, &critical) {
-        panel.fail_current("backup falhou");
-        return Err(e);
+    // No resync de interrupção NÃO recriar o backup: o remanescente é o último
+    // estado bom conhecido de /boot (pré-primeira tentativa). `backup_boot_files`
+    // apaga e recria, então sobrescrevê-lo com o /boot meio-sincronizado atual
+    // destruiria o único rollback existente se esta passada também cair.
+    if !interrupted {
+        panel.start_backup(boot, &backup);
+        if let Err(e) = backup_boot_files(boot, &critical) {
+            panel.fail_current("backup falhou");
+            return Err(e);
+        }
+        panel.finish_backup();
+    } else {
+        panel.reuse_backup(&backup);
     }
-    panel.finish_backup();
 
     let result = sync_inner(restored_root, boot, &groups, &mut panel)
         .and_then(|()| {
@@ -95,9 +111,23 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         return Err(e);
     }
 
-    let _ = fs::remove_dir_all(boot_backup_dir(boot));
+    // Sync verificado: /boot está bootável. Remover o backup é só limpeza —
+    // falha aqui não invalida o sync nem pode bloquear o reboot (o caller trata
+    // Err como desync), só avisa. Um backup que sobra vira NeedsSync no próximo
+    // doctor, que reroda este mesmo caminho seguro.
+    if let Err(e) = fs::remove_dir_all(boot_backup_dir(boot)) {
+        crate::ui::boot_sync::print_backup_cleanup_failed(&e);
+    }
     panel.finish_synced();
     Ok(())
+}
+
+/// True se há um backup de boot remanescente. O backup só é removido após o
+/// `verify_synced`, então sua presença significa que um sync começou e não
+/// fechou limpo (queda de energia / interrupção) — o sinal durável que
+/// sobrevive a um reboot, ao contrário de qualquer estado em memória.
+fn boot_backup_remnant(boot: &Path) -> bool {
+    boot_backup_dir(boot).exists()
 }
 
 fn sync_inner(
@@ -180,11 +210,25 @@ pub fn boot_already_synced_paths(candidate_root: &Path, boot: &Path) -> Result<b
     boot_matches_snapshot(candidate_root, &groups)
 }
 
+/// Motivo de um `/boot` FAT32 estar dessincronizado, para a UI explicar a ação.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BootIssue {
+    /// Backup de boot remanescente: um sync anterior começou e não fechou limpo
+    /// (queda de energia / interrupção). O initramfs pode ter ficado velho.
+    InterruptedSync,
+    /// O vmlinuz em /boot diverge do kernel do root alvo.
+    KernelMismatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BootHealth {
     NativeBoot,
     Synced,
-    NeedsSync,
+    NeedsSync(BootIssue),
+    /// O fstab do root alvo declara /boot como FAT32, mas ele aparece com outro
+    /// filesystem — sinal de que /boot não está montado. Não há o que diagnosticar
+    /// ou sincronizar até montá-lo; a UI orienta a recuperação.
+    Unmounted,
 }
 
 #[derive(Debug, Clone)]
@@ -195,9 +239,196 @@ pub struct BootDiagnosis {
     pub health: BootHealth,
 }
 
+/// True se o fstab do root alvo declara o mountpoint de `boot` como vfat.
+/// Distingue um /boot BTRFS nativo de um /boot FAT32 separado apenas desmontado.
+/// Best-effort: fstab ausente/ilegível ou sem a entrada → false (mantém o
+/// caminho atual de diagnóstico em vez de quebrar com erro).
+fn fstab_declares_vfat_boot(root: &Path, boot: &Path) -> bool {
+    let mountpoint = boot_mountpoint_in(root, boot);
+    let Ok(content) = fs::read_to_string(root.join("etc/fstab")) else {
+        return false;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (_spec, mp, fstype) = (fields.next(), fields.next(), fields.next());
+        if mp == Some(mountpoint.as_str())
+            && fstype.is_some_and(|t| t.eq_ignore_ascii_case("vfat"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Mountpoint de `boot` no namespace do root alvo, como apareceria no fstab:
+/// "/boot" tanto para (root=/, boot=/boot) quanto para (root=/mnt, boot=/mnt/boot).
+fn boot_mountpoint_in(root: &Path, boot: &Path) -> String {
+    match boot.strip_prefix(root) {
+        Ok(rel) => format!("/{}", rel.display()),
+        Err(_) => boot.display().to_string(),
+    }
+}
+
+/// Contexto de um boot de resgate: `/` está montado de um subvolume diferente
+/// do que o fstab declara como `/`. Quem deve receber o sync de `/boot` é o
+/// subvol padrão (o que boota), não o snapshot de resgate montado agora.
+#[derive(Debug, Clone)]
+pub struct RescueContext {
+    pub current_subvol: String,
+    pub default_subvol: String,
+    pub device: String,
+}
+
+/// Detecta boot de resgate: compara o subvol montado em `/` (`findmnt FSROOT`)
+/// com o subvol que o fstab declara para `/`. `None` quando casam (boot normal)
+/// ou quando não dá para determinar (sem `subvol=` no fstab — ex.: root direto
+/// em partição). É o mesmo princípio do gate de FAT32 (fstab como verdade),
+/// aplicado ao root: impede o doctor de sincronizar `/boot` para o ambiente de
+/// resgate em vez do `/@` que vai bootar.
+pub fn detect_rescue_boot() -> Result<Option<RescueContext>> {
+    let Some(default) = fstab_root_subvol() else {
+        return Ok(None);
+    };
+    let current = findmnt_field("FSROOT", Path::new("/"))?;
+    if !subvols_diverge(&current, &default) {
+        return Ok(None);
+    }
+    let source = findmnt_field("SOURCE", Path::new("/"))?;
+    let device = source.split('[').next().unwrap_or(&source).trim().to_string();
+    Ok(Some(RescueContext {
+        current_subvol: normalize_subvol(&current),
+        default_subvol: normalize_subvol(&default),
+        device,
+    }))
+}
+
+fn findmnt_field(field: &str, target: &Path) -> Result<String> {
+    let out = Command::new("findmnt")
+        .args(["-no", field, "--target"])
+        .arg(target)
+        .output()
+        .context("findmnt falhou")?;
+    if !out.status.success() {
+        bail!(
+            "findmnt {field} {}: {}",
+            target.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if val.is_empty() {
+        bail!("findmnt {field} vazio para {}", target.display());
+    }
+    Ok(val)
+}
+
+fn fstab_root_subvol() -> Option<String> {
+    let content = fs::read_to_string("/etc/fstab").ok()?;
+    parse_fstab_root_subvol(&content)
+}
+
+/// Subvol que o fstab declara para `/` (normalizado, sem "/" inicial — ex: "@").
+/// É o root que boota por padrão. Serve para operar no `@` certo mesmo de dentro
+/// de um boot de resgate, onde `/` é um snapshot e não o `@`.
+pub fn default_root_subvol() -> Option<String> {
+    fstab_root_subvol().map(|s| normalize_subvol(&s))
+}
+
+/// Extrai o `subvol=` da entrada `/` do fstab. Pura, para teste.
+fn parse_fstab_root_subvol(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (_spec, mp, _fstype, opts) =
+            (fields.next(), fields.next(), fields.next(), fields.next());
+        if mp != Some("/") {
+            continue;
+        }
+        for opt in opts?.split(',') {
+            if let Some(v) = opt.strip_prefix("subvol=") {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Subvol sem a `/` inicial, para comparar fstab ("/@") e FSROOT ("/@/...").
+fn normalize_subvol(s: &str) -> String {
+    s.trim().trim_start_matches('/').to_string()
+}
+
+fn subvols_diverge(current: &str, default: &str) -> bool {
+    normalize_subvol(current) != normalize_subvol(default)
+}
+
+/// Kernel rodando agora (uname -r), de `/proc/sys/kernel/osrelease`.
+pub fn running_kernel() -> Option<String> {
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Versão do kernel no `/boot` ativo, identificada comparando o `vmlinuz` de
+/// `/boot` com o do kernel rodando. `?` se não casar (ex: `/boot` tem outro
+/// kernel que não o em execução) — o nome só sai de uma comparação byte-a-byte,
+/// já que o arquivo não traz a versão.
+pub fn boot_kernel_label(boot: &Path) -> String {
+    boot_kernel_version(boot).unwrap_or_else(|| "?".to_string())
+}
+
+fn boot_kernel_version(boot: &Path) -> Option<String> {
+    let kver = running_kernel()?;
+    let running_vmlinuz = Path::new("/usr/lib/modules").join(&kver).join("vmlinuz");
+    let groups = discover_kernel_groups(boot).ok()?;
+    let boot_vmlinuz = groups.first()?.vmlinuz_paths.first()?;
+    let boot_bytes = fs::read(boot_vmlinuz).ok()?;
+    let running_bytes = fs::read(&running_vmlinuz).ok()?;
+    (boot_bytes == running_bytes).then_some(kver)
+}
+
+/// Kernels presentes em `<root>/usr/lib/modules`, ordenados e juntos por
+/// vírgula — rótulo curto para a UI mostrar a transição (montado vs boota).
+/// `?` quando o diretório não existe ou está vazio.
+pub fn kernel_label(root: &Path) -> String {
+    let modules = root.join("usr/lib/modules");
+    let Ok(entries) = fs::read_dir(&modules) else {
+        return "?".to_string();
+    };
+    let mut kvers: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    kvers.sort();
+    if kvers.is_empty() {
+        return "?".to_string();
+    }
+    kvers.join(", ")
+}
+
 pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     let fstype = boot_fstype(boot)?;
     if !fstype.eq_ignore_ascii_case("vfat") {
+        // /boot FAT32 separado que não está montado: `findmnt --target` resolve
+        // para o mount pai (o root BTRFS), então `fstype` vem "btrfs" e seria
+        // classificado como nativo — falso "nada a fazer". O fstab do root alvo
+        // é a fonte da verdade sobre o que /boot deveria ser.
+        if fstab_declares_vfat_boot(root, boot) {
+            return Ok(BootDiagnosis {
+                fstype,
+                kernel_groups: 0,
+                initramfs_files: 0,
+                health: BootHealth::Unmounted,
+            });
+        }
         if !fstype.eq_ignore_ascii_case("btrfs") {
             bail!(
                 "{} usa filesystem de boot '{fstype}', não suportado pelo doctor",
@@ -220,10 +451,16 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
         .iter()
         .map(|group| group.initramfs_paths.len())
         .sum();
-    let health = if boot_matches_snapshot(root, &groups)? {
+    // Backup remanescente denuncia um sync interrompido antes da comparação de
+    // vmlinuz: na janela entre copiar o vmlinuz e regenerar o initramfs, o
+    // vmlinuz pode já casar enquanto o initramfs segue velho. Tratar como
+    // problema corrigível em vez de confiar no vmlinuz isolado.
+    let health = if boot_backup_remnant(boot) {
+        BootHealth::NeedsSync(BootIssue::InterruptedSync)
+    } else if boot_matches_snapshot(root, &groups)? {
         BootHealth::Synced
     } else {
-        BootHealth::NeedsSync
+        BootHealth::NeedsSync(BootIssue::KernelMismatch)
     };
     Ok(BootDiagnosis {
         fstype,
@@ -602,8 +839,96 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_boot_file, limine_boot_path_from_line};
+    use super::{
+        boot_backup_remnant, boot_mountpoint_in, classify_boot_file, fstab_declares_vfat_boot,
+        kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol, subvols_diverge,
+    };
     use std::path::Path;
+
+    #[test]
+    fn kernel_label_lists_module_dirs() {
+        let base = std::env::temp_dir().join(format!("snapg_kver_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // sem usr/lib/modules → "?"
+        std::fs::create_dir_all(&base).unwrap();
+        assert_eq!(kernel_label(&base), "?");
+        // com um kver
+        std::fs::create_dir_all(base.join("usr/lib/modules/7.0.3-1-cachyos")).unwrap();
+        assert_eq!(kernel_label(&base), "7.0.3-1-cachyos");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parses_fstab_root_subvol() {
+        let fstab = "# /etc/fstab\n\
+             UUID=aaa\t/\tbtrfs\tsubvol=/@,defaults,noatime,compress=zstd:1\t0 0\n\
+             UUID=bbb /boot vfat defaults 0 2\n";
+        assert_eq!(parse_fstab_root_subvol(fstab).as_deref(), Some("/@"));
+        // entrada "/" sem subvol= (root direto em partição) → None
+        assert_eq!(parse_fstab_root_subvol("UUID=aaa / btrfs defaults 0 0\n"), None);
+        // sem entrada "/" → None (não confundir com /home)
+        assert_eq!(
+            parse_fstab_root_subvol("UUID=bbb /home btrfs subvol=/@home 0 0\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn detects_subvol_divergence() {
+        // boot normal: / é o subvol padrão
+        assert!(!subvols_diverge("/@", "/@"));
+        // resgate: snapshot montado em /
+        assert!(subvols_diverge("/@/.snapshots/660/snapshot", "/@"));
+        // normalização tolera a "/" inicial divergente
+        assert!(!subvols_diverge("@", "/@"));
+    }
+
+    #[test]
+    fn boot_mountpoint_relative_to_root() {
+        assert_eq!(boot_mountpoint_in(Path::new("/"), Path::new("/boot")), "/boot");
+        assert_eq!(
+            boot_mountpoint_in(Path::new("/mnt"), Path::new("/mnt/boot")),
+            "/boot"
+        );
+    }
+
+    #[test]
+    fn fstab_vfat_boot_detection() {
+        let base = std::env::temp_dir().join(format!("snapg_fstab_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("etc")).unwrap();
+        let boot = base.join("boot");
+
+        // Sem fstab: não dá pra afirmar nada → false (mantém caminho atual).
+        assert!(!fstab_declares_vfat_boot(&base, &boot));
+
+        // /boot declarado vfat → true (comentários e outras linhas ignorados).
+        std::fs::write(
+            base.join("etc/fstab"),
+            "# /etc/fstab\nUUID=aaa\t/\tbtrfs\tsubvol=/@\t0 0\nUUID=bbb  /boot  vfat  defaults  0 2\n",
+        )
+        .unwrap();
+        assert!(fstab_declares_vfat_boot(&base, &boot));
+
+        // /boot em btrfs (boot dentro do snapshot) → false.
+        std::fs::write(base.join("etc/fstab"), "UUID=bbb /boot btrfs defaults 0 0\n").unwrap();
+        assert!(!fstab_declares_vfat_boot(&base, &boot));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_remnant_reflects_dir_presence() {
+        let base = std::env::temp_dir().join(format!("snapg_test_boot_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        assert!(!boot_backup_remnant(&base));
+        std::fs::create_dir_all(base.join(".snapg_boot_backup")).unwrap();
+        assert!(boot_backup_remnant(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn parses_limine_kernel_path() {

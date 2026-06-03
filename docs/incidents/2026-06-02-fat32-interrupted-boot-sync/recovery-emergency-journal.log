@@ -1,0 +1,2704 @@
+jun 02 15:09:02 cachyos kernel: Linux version 7.0.10-2-cachyos (linux-cachyos@cachyos) (clang version 22.1.5, LLD 22.1.5) #1 SMP PREEMPT_DYNAMIC Thu, 28 May 2026 21:12:58 +0000
+jun 02 15:09:02 cachyos kernel: Command line: quiet nowatchdog splash rw rootflags=subvol=/@ root=UUID=28b7475c-8589-4710-a16c-cfe60b0b1218
+jun 02 15:09:02 cachyos kernel: BIOS-provided physical RAM map:
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000000000000-0x0000000000057fff]  System RAM
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000000058000-0x0000000000058fff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000000059000-0x000000000009dfff]  System RAM
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000000009e000-0x00000000000fffff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000000100000-0x0000000063bcafff]  System RAM
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000063bcb000-0x0000000063bcbfff]  ACPI NVS
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000063bcc000-0x0000000063bccfff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000063bcd000-0x000000006a5cbfff]  System RAM
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006a5cc000-0x000000006aa8dfff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006aa8e000-0x000000006aad4fff]  ACPI data
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006aad5000-0x000000006ab7ffff]  ACPI NVS
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006ab80000-0x000000006b3fefff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006b3ff000-0x000000006b3fffff]  System RAM
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x000000006b400000-0x000000006fffffff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x0000000070000000-0x00000000dfffffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000e0000000-0x00000000efffffff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x00000000f0000000-0x00000000fdffffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000fe000000-0x00000000fe010fff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x00000000fe011000-0x00000000febfffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000fec00000-0x00000000fec00fff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x00000000fec01000-0x00000000fecfffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000fed00000-0x00000000fed00fff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x00000000fed01000-0x00000000fedfffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000fee00000-0x00000000fee00fff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [gap 0x00000000fee01000-0x00000000feffffff]
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x00000000ff000000-0x00000000ffffffff]  device reserved
+jun 02 15:09:02 cachyos kernel: BIOS-e820: [mem 0x0000000100000000-0x000000048effffff]  System RAM
+jun 02 15:09:02 cachyos kernel: NX (Execute Disable) protection: active
+jun 02 15:09:02 cachyos kernel: APIC: Static calls initialized
+jun 02 15:09:02 cachyos kernel: efi: EFI v2.6 by American Megatrends
+jun 02 15:09:02 cachyos kernel: efi: TPMFinalLog=0x6ab50000 ACPI 2.0=0x6aa9c000 ACPI=0x6aa9c000 SMBIOS=0x6b2a7000 SMBIOS 3.0=0x6b2a6000 ESRT=0x66b41f98 TPMEventLog=0x6aa92018 
+jun 02 15:09:02 cachyos kernel: efi: Remove mem29: MMIO range=[0xe0000000-0xefffffff] (256MB) from e820 map
+jun 02 15:09:02 cachyos kernel: e820: remove [mem 0xe0000000-0xefffffff] device reserved
+jun 02 15:09:02 cachyos kernel: efi: Not removing mem30: MMIO range=[0xfe000000-0xfe010fff] (68KB) from e820 map
+jun 02 15:09:02 cachyos kernel: efi: Not removing mem31: MMIO range=[0xfec00000-0xfec00fff] (4KB) from e820 map
+jun 02 15:09:02 cachyos kernel: efi: Not removing mem32: MMIO range=[0xfed00000-0xfed00fff] (4KB) from e820 map
+jun 02 15:09:02 cachyos kernel: efi: Not removing mem33: MMIO range=[0xfee00000-0xfee00fff] (4KB) from e820 map
+jun 02 15:09:02 cachyos kernel: efi: Remove mem34: MMIO range=[0xff000000-0xffffffff] (16MB) from e820 map
+jun 02 15:09:02 cachyos kernel: e820: remove [mem 0xff000000-0xffffffff] device reserved
+jun 02 15:09:02 cachyos kernel: SMBIOS 3.0.0 present.
+jun 02 15:09:02 cachyos kernel: DMI: Razer Blade/Blade, BIOS 5.01 05/27/2019
+jun 02 15:09:02 cachyos kernel: DMI: Memory slots populated: 2/4
+jun 02 15:09:02 cachyos kernel: tsc: Detected 2800.000 MHz processor
+jun 02 15:09:02 cachyos kernel: tsc: Detected 2799.927 MHz TSC
+jun 02 15:09:02 cachyos kernel: e820: update [mem 0x00000000-0x00000fff] System RAM ==> device reserved
+jun 02 15:09:02 cachyos kernel: e820: remove [mem 0x000a0000-0x000fffff] System RAM
+jun 02 15:09:02 cachyos kernel: last_pfn = 0x48f000 max_arch_pfn = 0x400000000
+jun 02 15:09:02 cachyos kernel: MTRR map: 4 entries (3 fixed + 1 variable; max 23), built from 10 variable MTRRs
+jun 02 15:09:02 cachyos kernel: x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+jun 02 15:09:02 cachyos kernel: last_pfn = 0x6b400 max_arch_pfn = 0x400000000
+jun 02 15:09:02 cachyos kernel: esrt: Reserving ESRT space from 0x0000000066b41f98 to 0x0000000066b41fd0.
+jun 02 15:09:02 cachyos kernel: e820: update [mem 0x66b41000-0x66b41fff] System RAM ==> device reserved
+jun 02 15:09:02 cachyos kernel: Using GB pages for direct mapping
+jun 02 15:09:02 cachyos kernel: Secure boot disabled
+jun 02 15:09:02 cachyos kernel: RAMDISK: [mem 0x43600000-0x4b893fff]
+jun 02 15:09:02 cachyos kernel: ACPI: Early table checksum verification disabled
+jun 02 15:09:02 cachyos kernel: ACPI: RSDP 0x000000006AA9C000 000024 (v02 ALASKA)
+jun 02 15:09:02 cachyos kernel: ACPI: XSDT 0x000000006AA9C0C8 00010C (v01 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: FACP 0x000000006AAC4EC0 000114 (v06 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: DSDT 0x000000006AA9C260 028C60 (v02 ALASKA A M I    01072009 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: FACS 0x000000006AB4FF00 000040
+jun 02 15:09:02 cachyos kernel: ACPI: APIC 0x000000006AAC4FD8 0000BC (v03 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: FPDT 0x000000006AAC5098 000044 (v01 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: FIDT 0x000000006AAC50E0 00009C (v01 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: MCFG 0x000000006AAC5180 00003C (v01 ALASKA A M I    01072009 MSFT 00000097)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAC51C0 000359 (v01 SataRe SataTabl 00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: MSDM 0x000000006AAC5520 000055 (v03 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAC5578 003147 (v02 SaSsdt SaSsdt   00003000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAC86C0 00298D (v02 PegSsd PegSsdt  00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: HPET 0x000000006AACB050 000038 (v01 INTEL  KBL      00000001 MSFT 0000005F)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACB088 000DE5 (v02 INTEL  Ther_Rvp 00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACBE70 000937 (v02 INTEL  xh_rvp11 00000000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: UEFI 0x000000006AACC7A8 000042 (v01 ALASKA A M I    00000002      01000013)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACC7F0 000EDE (v02 CpuRef CpuSsdt  00003000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: LPIT 0x000000006AACD6D0 000094 (v01 INTEL  KBL      00000000 MSFT 0000005F)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACD768 000141 (v02 INTEL  HdaDsp   00000000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACD8B0 00029F (v02 INTEL  sensrhub 00000000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AACDB50 003002 (v02 INTEL  PtidDevc 00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAD0B58 000517 (v02 INTEL  TbtTypeC 00000000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: DBGP 0x000000006AAD1070 000034 (v01 INTEL           00000002 MSFT 0000005F)
+jun 02 15:09:02 cachyos kernel: ACPI: DBG2 0x000000006AAD10A8 000054 (v00 INTEL           00000002 MSFT 0000005F)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAD1100 0010B0 (v02 ALASKA UsbCTabl 00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAD21B0 0000AE (v02 SgRef  SgPeg    00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: DMAR 0x000000006AAD2260 0000F0 (v01 INTEL  KBL      00000001 INTL 00000001)
+jun 02 15:09:02 cachyos kernel: ACPI: BGRT 0x000000006AAD2350 000038 (v01 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: TPM2 0x000000006AAD2388 000034 (v03 ALASKA A M I    00000001 AMI  00000000)
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0x000000006AAD23C0 001CC1 (v01 OptRef OptTabl  00001000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: ASF! 0x000000006AAD4088 0000A0 (v32 INTEL   HCG     00000001 TFSM 000F4240)
+jun 02 15:09:02 cachyos kernel: ACPI: WSMT 0x000000006AAD4128 000028 (v01 ALASKA A M I    01072009 AMI  00010013)
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving FACP table memory at [mem 0x6aac4ec0-0x6aac4fd3]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving DSDT table memory at [mem 0x6aa9c260-0x6aac4ebf]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving FACS table memory at [mem 0x6ab4ff00-0x6ab4ff3f]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving APIC table memory at [mem 0x6aac4fd8-0x6aac5093]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving FPDT table memory at [mem 0x6aac5098-0x6aac50db]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving FIDT table memory at [mem 0x6aac50e0-0x6aac517b]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving MCFG table memory at [mem 0x6aac5180-0x6aac51bb]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aac51c0-0x6aac5518]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving MSDM table memory at [mem 0x6aac5520-0x6aac5574]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aac5578-0x6aac86be]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aac86c0-0x6aacb04c]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving HPET table memory at [mem 0x6aacb050-0x6aacb087]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacb088-0x6aacbe6c]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacbe70-0x6aacc7a6]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving UEFI table memory at [mem 0x6aacc7a8-0x6aacc7e9]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacc7f0-0x6aacd6cd]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving LPIT table memory at [mem 0x6aacd6d0-0x6aacd763]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacd768-0x6aacd8a8]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacd8b0-0x6aacdb4e]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aacdb50-0x6aad0b51]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aad0b58-0x6aad106e]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving DBGP table memory at [mem 0x6aad1070-0x6aad10a3]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving DBG2 table memory at [mem 0x6aad10a8-0x6aad10fb]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aad1100-0x6aad21af]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aad21b0-0x6aad225d]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving DMAR table memory at [mem 0x6aad2260-0x6aad234f]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving BGRT table memory at [mem 0x6aad2350-0x6aad2387]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving TPM2 table memory at [mem 0x6aad2388-0x6aad23bb]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving SSDT table memory at [mem 0x6aad23c0-0x6aad4080]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving ASF! table memory at [mem 0x6aad4088-0x6aad4127]
+jun 02 15:09:02 cachyos kernel: ACPI: Reserving WSMT table memory at [mem 0x6aad4128-0x6aad414f]
+jun 02 15:09:02 cachyos kernel: No NUMA configuration found
+jun 02 15:09:02 cachyos kernel: Faking a node at [mem 0x0000000000000000-0x000000048effffff]
+jun 02 15:09:02 cachyos kernel: NODE_DATA(0) allocated [mem 0x48efd3280-0x48effdfff]
+jun 02 15:09:02 cachyos kernel: Reserving Intel graphics memory at [mem 0x6c000000-0x6fffffff]
+jun 02 15:09:02 cachyos kernel: ACPI: PM-Timer IO Port: 0x1808
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x01] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x02] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x03] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x04] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x05] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x06] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x07] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: ACPI: LAPIC_NMI (acpi_id[0x08] high edge lint[0x1])
+jun 02 15:09:02 cachyos kernel: IOAPIC[0]: apic_id 2, version 32, address 0xfec00000, GSI 0-119
+jun 02 15:09:02 cachyos kernel: ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+jun 02 15:09:02 cachyos kernel: ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+jun 02 15:09:02 cachyos kernel: ACPI: Using ACPI (MADT) for SMP configuration information
+jun 02 15:09:02 cachyos kernel: ACPI: HPET id: 0x8086a201 base: 0xfed00000
+jun 02 15:09:02 cachyos kernel: e820: update [mem 0x67514000-0x675cafff] System RAM ==> device reserved
+jun 02 15:09:02 cachyos kernel: TSC deadline timer available
+jun 02 15:09:02 cachyos kernel: CPU topo: Max. logical packages:   1
+jun 02 15:09:02 cachyos kernel: CPU topo: Max. logical nodes:      1
+jun 02 15:09:02 cachyos kernel: CPU topo: Num. nodes per package:  1
+jun 02 15:09:02 cachyos kernel: CPU topo: Max. logical dies:       1
+jun 02 15:09:02 cachyos kernel: CPU topo: Max. dies per package:   1
+jun 02 15:09:02 cachyos kernel: CPU topo: Max. threads per core:   2
+jun 02 15:09:02 cachyos kernel: CPU topo: Num. cores per package:     4
+jun 02 15:09:02 cachyos kernel: CPU topo: Num. threads per package:   8
+jun 02 15:09:02 cachyos kernel: CPU topo: Allowing 8 present CPUs plus 0 hotplug CPUs
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x00058000-0x00058fff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x0009e000-0x000fffff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x63bcb000-0x63bccfff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x66b41000-0x66b41fff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x67514000-0x675cafff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x6a5cc000-0x6b3fefff]
+jun 02 15:09:02 cachyos kernel: PM: hibernation: Registered nosave memory: [mem 0x6b400000-0xffffffff]
+jun 02 15:09:02 cachyos kernel: [gap 0x70000000-0xfdffffff] available for PCI devices
+jun 02 15:09:02 cachyos kernel: Booting paravirtualized kernel on bare hardware
+jun 02 15:09:02 cachyos kernel: clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+jun 02 15:09:02 cachyos kernel: Zone ranges:
+jun 02 15:09:02 cachyos kernel:   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+jun 02 15:09:02 cachyos kernel:   DMA32    [mem 0x0000000001000000-0x00000000ffffffff]
+jun 02 15:09:02 cachyos kernel:   Normal   [mem 0x0000000100000000-0x000000048effffff]
+jun 02 15:09:02 cachyos kernel:   Device   empty
+jun 02 15:09:02 cachyos kernel: Movable zone start for each node
+jun 02 15:09:02 cachyos kernel: Early memory node ranges
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x0000000000001000-0x0000000000057fff]
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x0000000000059000-0x000000000009dfff]
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x0000000000100000-0x0000000063bcafff]
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x0000000063bcd000-0x000000006a5cbfff]
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x000000006b3ff000-0x000000006b3fffff]
+jun 02 15:09:02 cachyos kernel:   node   0: [mem 0x0000000100000000-0x000000048effffff]
+jun 02 15:09:02 cachyos kernel: Initmem setup node 0 [mem 0x0000000000001000-0x000000048effffff]
+jun 02 15:09:02 cachyos kernel: On node 0, zone DMA: 1 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone DMA: 1 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone DMA: 98 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone DMA32: 2 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone DMA32: 3635 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone Normal: 19456 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: On node 0, zone Normal: 4096 pages in unavailable ranges
+jun 02 15:09:02 cachyos kernel: setup_percpu: NR_CPUS:8192 nr_cpumask_bits:8 nr_cpu_ids:8 nr_node_ids:1
+jun 02 15:09:02 cachyos kernel: percpu: Embedded 63 pages/cpu s221184 r8192 d28672 u262144
+jun 02 15:09:02 cachyos kernel: pcpu-alloc: s221184 r8192 d28672 u262144 alloc=1*2097152
+jun 02 15:09:02 cachyos kernel: pcpu-alloc: [0] 0 1 2 3 4 5 6 7 
+jun 02 15:09:02 cachyos kernel: Kernel command line: quiet nowatchdog splash rw rootflags=subvol=/@ root=UUID=28b7475c-8589-4710-a16c-cfe60b0b1218
+jun 02 15:09:02 cachyos kernel: Unknown kernel command line parameters "splash", will be passed to user space.
+jun 02 15:09:02 cachyos kernel: random: crng init done
+jun 02 15:09:02 cachyos kernel: printk: log buffer data + meta data: 131072 + 557056 = 688128 bytes
+jun 02 15:09:02 cachyos kernel: Dentry cache hash table entries: 2097152 (order: 12, 16777216 bytes, linear)
+jun 02 15:09:02 cachyos kernel: Inode-cache hash table entries: 1048576 (order: 11, 8388608 bytes, linear)
+jun 02 15:09:02 cachyos kernel: software IO TLB: area num 8.
+jun 02 15:09:02 cachyos kernel: Fallback order for Node 0: 0 
+jun 02 15:09:02 cachyos kernel: Built 1 zonelists, mobility grouping on.  Total pages: 4167015
+jun 02 15:09:02 cachyos kernel: Policy zone: Normal
+jun 02 15:09:02 cachyos kernel: mem auto-init: stack:all(zero), heap alloc:on, heap free:off
+jun 02 15:09:02 cachyos kernel: SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=8, Nodes=1
+jun 02 15:09:02 cachyos kernel: Kernel/User page tables isolation: enabled
+jun 02 15:09:02 cachyos kernel: ftrace: allocating 56711 entries in 222 pages
+jun 02 15:09:02 cachyos kernel: ftrace: allocated 222 pages with 6 groups
+jun 02 15:09:02 cachyos kernel: Dynamic Preempt: full
+jun 02 15:09:02 cachyos kernel: rcu: Preemptible hierarchical RCU implementation.
+jun 02 15:09:02 cachyos kernel: rcu:         RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=8.
+jun 02 15:09:02 cachyos kernel: rcu:         RCU priority boosting: priority 1 delay 500 ms.
+jun 02 15:09:02 cachyos kernel:         Trampoline variant of Tasks RCU enabled.
+jun 02 15:09:02 cachyos kernel:         Rude variant of Tasks RCU enabled.
+jun 02 15:09:02 cachyos kernel:         Tracing variant of Tasks RCU enabled.
+jun 02 15:09:02 cachyos kernel: rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+jun 02 15:09:02 cachyos kernel: rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=8
+jun 02 15:09:02 cachyos kernel: RCU Tasks: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+jun 02 15:09:02 cachyos kernel: RCU Tasks Rude: Setting shift to 3 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=8.
+jun 02 15:09:02 cachyos kernel: NR_IRQS: 524544, nr_irqs: 2048, preallocated irqs: 16
+jun 02 15:09:02 cachyos kernel: rcu: srcu_init: Setting srcu_struct sizes based on contention.
+jun 02 15:09:02 cachyos kernel: kfence: initialized - using 2097152 bytes for 255 objects at 0x(____ptrval____)-0x(____ptrval____)
+jun 02 15:09:02 cachyos kernel: Console: colour dummy device 80x25
+jun 02 15:09:02 cachyos kernel: printk: legacy console [tty0] enabled
+jun 02 15:09:02 cachyos kernel: ACPI: Core revision 20251212
+jun 02 15:09:02 cachyos kernel: hpet: HPET dysfunctional in PC10. Force disabled.
+jun 02 15:09:02 cachyos kernel: APIC: Switch to symmetric I/O mode setup
+jun 02 15:09:02 cachyos kernel: DMAR: Host address width 39
+jun 02 15:09:02 cachyos kernel: DMAR: DRHD base: 0x000000fed90000 flags: 0x0
+jun 02 15:09:02 cachyos kernel: DMAR: dmar0: reg_base_addr fed90000 ver 1:0 cap 1c0000c40660462 ecap 19e2ff0505e
+jun 02 15:09:02 cachyos kernel: DMAR: DRHD base: 0x000000fed91000 flags: 0x1
+jun 02 15:09:02 cachyos kernel: DMAR: dmar1: reg_base_addr fed91000 ver 1:0 cap d2008c40660462 ecap f050da
+jun 02 15:09:02 cachyos kernel: DMAR: RMRR base: 0x0000006a9e7000 end: 0x0000006aa06fff
+jun 02 15:09:02 cachyos kernel: DMAR: RMRR base: 0x0000006b800000 end: 0x0000006fffffff
+jun 02 15:09:02 cachyos kernel: DMAR: ANDD device: 1 name: \_SB.PCI0.I2C0
+jun 02 15:09:02 cachyos kernel: DMAR: ANDD device: 9 name: \_SB.PCI0.UA00
+jun 02 15:09:02 cachyos kernel: DMAR-IR: IOAPIC id 2 under DRHD base  0xfed91000 IOMMU 1
+jun 02 15:09:02 cachyos kernel: DMAR-IR: HPET id 0 under DRHD base 0xfed91000
+jun 02 15:09:02 cachyos kernel: DMAR-IR: Queued invalidation will be enabled to support x2apic and Intr-remapping.
+jun 02 15:09:02 cachyos kernel: DMAR-IR: Enabled IRQ remapping in x2apic mode
+jun 02 15:09:02 cachyos kernel: x2apic enabled
+jun 02 15:09:02 cachyos kernel: APIC: Switched APIC routing to: cluster x2apic
+jun 02 15:09:02 cachyos kernel: clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x285bfbafad2, max_idle_ns: 440795215530 ns
+jun 02 15:09:02 cachyos kernel: Calibrating delay loop (skipped), value calculated using timer frequency.. 5599.85 BogoMIPS (lpj=2799927)
+jun 02 15:09:02 cachyos kernel: x86/cpu: SGX disabled or unsupported by BIOS.
+jun 02 15:09:02 cachyos kernel: CPU0: Thermal monitoring enabled (TM1)
+jun 02 15:09:02 cachyos kernel: Last level iTLB entries: 4KB 64, 2MB 8, 4MB 8
+jun 02 15:09:02 cachyos kernel: Last level dTLB entries: 4KB 64, 2MB 32, 4MB 32, 1GB 4
+jun 02 15:09:02 cachyos kernel: process: using mwait in idle threads
+jun 02 15:09:02 cachyos kernel: mitigations: Enabled attack vectors: user_kernel, user_user, guest_host, guest_guest, SMT mitigations: auto
+jun 02 15:09:02 cachyos kernel: Speculative Store Bypass: Mitigation: Speculative Store Bypass disabled via prctl
+jun 02 15:09:02 cachyos kernel: SRBDS: Mitigation: Microcode
+jun 02 15:09:02 cachyos kernel: Spectre V2 : Mitigation: IBRS
+jun 02 15:09:02 cachyos kernel: RETBleed: Mitigation: IBRS
+jun 02 15:09:02 cachyos kernel: Spectre V2 : User space: Mitigation: STIBP via prctl
+jun 02 15:09:02 cachyos kernel: MDS: Mitigation: Clear CPU buffers
+jun 02 15:09:02 cachyos kernel: MMIO Stale Data: Mitigation: Clear CPU buffers
+jun 02 15:09:02 cachyos kernel: VMSCAPE: Mitigation: IBPB before exit to userspace
+jun 02 15:09:02 cachyos kernel: Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+jun 02 15:09:02 cachyos kernel: Spectre V2 : Spectre v2 / SpectreRSB: Filling RSB on context switch and VMEXIT
+jun 02 15:09:02 cachyos kernel: Spectre V2 : mitigation: Enabling conditional Indirect Branch Prediction Barrier
+jun 02 15:09:02 cachyos kernel: GDS: Mitigation: Microcode
+jun 02 15:09:02 cachyos kernel: x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+jun 02 15:09:02 cachyos kernel: x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+jun 02 15:09:02 cachyos kernel: x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+jun 02 15:09:02 cachyos kernel: x86/fpu: Supporting XSAVE feature 0x008: 'MPX bounds registers'
+jun 02 15:09:02 cachyos kernel: x86/fpu: Supporting XSAVE feature 0x010: 'MPX CSR'
+jun 02 15:09:02 cachyos kernel: x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+jun 02 15:09:02 cachyos kernel: x86/fpu: xstate_offset[3]:  832, xstate_sizes[3]:   64
+jun 02 15:09:02 cachyos kernel: x86/fpu: xstate_offset[4]:  896, xstate_sizes[4]:   64
+jun 02 15:09:02 cachyos kernel: x86/fpu: Enabled xstate features 0x1f, context size is 960 bytes, using 'compacted' format.
+jun 02 15:09:02 cachyos kernel: Freeing SMP alternatives memory: 64K
+jun 02 15:09:02 cachyos kernel: pid_max: default: 32768 minimum: 301
+jun 02 15:09:02 cachyos kernel: landlock: Up and running.
+jun 02 15:09:02 cachyos kernel: Yama: becoming mindful.
+jun 02 15:09:02 cachyos kernel: LSM support for eBPF active
+jun 02 15:09:02 cachyos kernel: Mount-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+jun 02 15:09:02 cachyos kernel: Mountpoint-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+jun 02 15:09:02 cachyos kernel: VFS: Finished mounting rootfs on nullfs
+jun 02 15:09:02 cachyos kernel: smpboot: CPU0: Intel(R) Core(TM) i7-7700HQ CPU @ 2.80GHz (family: 0x6, model: 0x9e, stepping: 0x9)
+jun 02 15:09:02 cachyos kernel: Performance Events: PEBS fmt3+, Skylake events, 32-deep LBR, full-width counters, Intel PMU driver.
+jun 02 15:09:02 cachyos kernel: ... version:                   4
+jun 02 15:09:02 cachyos kernel: ... bit width:                 48
+jun 02 15:09:02 cachyos kernel: ... generic counters:          4
+jun 02 15:09:02 cachyos kernel: ... generic bitmap:            000000000000000f
+jun 02 15:09:02 cachyos kernel: ... fixed-purpose counters:    3
+jun 02 15:09:02 cachyos kernel: ... fixed-purpose bitmap:      0000000000000007
+jun 02 15:09:02 cachyos kernel: ... value mask:                0000ffffffffffff
+jun 02 15:09:02 cachyos kernel: ... max period:                00007fffffffffff
+jun 02 15:09:02 cachyos kernel: ... global_ctrl mask:          000000070000000f
+jun 02 15:09:02 cachyos kernel: signal: max sigframe size: 2032
+jun 02 15:09:02 cachyos kernel: Estimated ratio of average max frequency by base frequency (times 1024): 1243
+jun 02 15:09:02 cachyos kernel: rcu: Hierarchical SRCU implementation.
+jun 02 15:09:02 cachyos kernel: rcu:         Max phase no-delay instances is 400.
+jun 02 15:09:02 cachyos kernel: Timer migration: 1 hierarchy levels; 8 children per group; 1 crossnode level
+jun 02 15:09:02 cachyos kernel: smp: Bringing up secondary CPUs ...
+jun 02 15:09:02 cachyos kernel: smpboot: x86: Booting SMP configuration:
+jun 02 15:09:02 cachyos kernel: .... node  #0, CPUs:      #1 #2 #3 #4 #5 #6 #7
+jun 02 15:09:02 cachyos kernel: MDS CPU bug present and SMT on, data leak possible. See https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/mds.html for more details.
+jun 02 15:09:02 cachyos kernel: MMIO Stale Data CPU bug present and SMT on, data leak possible. See https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/processor_mmio_stale_data.html for more details.
+jun 02 15:09:02 cachyos kernel: VMSCAPE: SMT on, STIBP is required for full protection. See https://www.kernel.org/doc/html/latest/admin-guide/hw-vuln/vmscape.html for more details.
+jun 02 15:09:02 cachyos kernel: smp: Brought up 1 node, 8 CPUs
+jun 02 15:09:02 cachyos kernel: smpboot: Total of 8 processors activated (44798.83 BogoMIPS)
+jun 02 15:09:02 cachyos kernel: Memory: 15976684K/16668060K available (22332K kernel code, 2964K rwdata, 16456K rodata, 4708K init, 4436K bss, 678120K reserved, 0K cma-reserved)
+jun 02 15:09:02 cachyos kernel: devtmpfs: initialized
+jun 02 15:09:02 cachyos kernel: x86/mm: Memory block size: 128MB
+jun 02 15:09:02 cachyos kernel: ACPI: PM: Registering ACPI NVS region [mem 0x63bcb000-0x63bcbfff] (4096 bytes)
+jun 02 15:09:02 cachyos kernel: ACPI: PM: Registering ACPI NVS region [mem 0x6aad5000-0x6ab7ffff] (700416 bytes)
+jun 02 15:09:02 cachyos kernel: clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+jun 02 15:09:02 cachyos kernel: posixtimers hash table entries: 4096 (order: 4, 65536 bytes, linear)
+jun 02 15:09:02 cachyos kernel: futex hash table entries: 2048 (131072 bytes on 1 NUMA nodes, total 128 KiB, linear).
+jun 02 15:09:02 cachyos kernel: PM: RTC time: 19:09:00, date: 2026-06-02
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_NETLINK/PF_ROUTE protocol family
+jun 02 15:09:02 cachyos kernel: DMA: preallocated 2048 KiB GFP_KERNEL pool for atomic allocations
+jun 02 15:09:02 cachyos kernel: DMA: preallocated 2048 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+jun 02 15:09:02 cachyos kernel: DMA: preallocated 2048 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+jun 02 15:09:02 cachyos kernel: audit: initializing netlink subsys (disabled)
+jun 02 15:09:02 cachyos kernel: audit: type=2000 audit(1780427340.011:1): state=initialized audit_enabled=0 res=1
+jun 02 15:09:02 cachyos kernel: thermal_sys: Registered thermal governor 'fair_share'
+jun 02 15:09:02 cachyos kernel: thermal_sys: Registered thermal governor 'bang_bang'
+jun 02 15:09:02 cachyos kernel: thermal_sys: Registered thermal governor 'step_wise'
+jun 02 15:09:02 cachyos kernel: thermal_sys: Registered thermal governor 'user_space'
+jun 02 15:09:02 cachyos kernel: thermal_sys: Registered thermal governor 'power_allocator'
+jun 02 15:09:02 cachyos kernel: cpuidle: using governor ladder
+jun 02 15:09:02 cachyos kernel: cpuidle: using governor menu
+jun 02 15:09:02 cachyos kernel: efi: Freeing EFI boot services memory: 125964K
+jun 02 15:09:02 cachyos kernel: ACPI FADT declares the system doesn't support PCIe ASPM, so disable it
+jun 02 15:09:02 cachyos kernel: acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+jun 02 15:09:02 cachyos kernel: PCI: ECAM [mem 0xe0000000-0xefffffff] (base 0xe0000000) for domain 0000 [bus 00-ff]
+jun 02 15:09:02 cachyos kernel: PCI: Using configuration type 1 for base access
+jun 02 15:09:02 cachyos kernel: kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+jun 02 15:09:02 cachyos kernel: HugeTLB: registered 1.00 GiB page size, pre-allocated 0 pages
+jun 02 15:09:02 cachyos kernel: HugeTLB: 16380 KiB vmemmap can be freed for a 1.00 GiB page
+jun 02 15:09:02 cachyos kernel: HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+jun 02 15:09:02 cachyos kernel: HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+jun 02 15:09:02 cachyos kernel: raid6: skipped pq benchmark and selected avx2x4
+jun 02 15:09:02 cachyos kernel: raid6: using avx2x2 recovery algorithm
+jun 02 15:09:02 cachyos kernel: ACPI: Added _OSI(Module Device)
+jun 02 15:09:02 cachyos kernel: ACPI: Added _OSI(Processor Device)
+jun 02 15:09:02 cachyos kernel: ACPI: Added _OSI(Processor Aggregator Device)
+jun 02 15:09:02 cachyos kernel: ACPI: 14 ACPI AML tables successfully acquired and loaded
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_: platform _OSC: OS support mask [006e7eff]
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_: platform _OSC: OS control mask [006e7eff]
+jun 02 15:09:02 cachyos kernel: ACPI: Dynamic OEM Table Load:
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0xFFFF8D6CC1658800 0003FF (v02 PmRef  Cpu0Cst  00003001 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: Dynamic OEM Table Load:
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0xFFFF8D6CC1660800 000651 (v02 PmRef  Cpu0Ist  00003000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: Dynamic OEM Table Load:
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0xFFFF8D6CC1664000 00065C (v02 PmRef  ApIst    00003000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: Dynamic OEM Table Load:
+jun 02 15:09:02 cachyos kernel: ACPI: SSDT 0xFFFF8D6CC0F77800 00018A (v02 PmRef  ApCst    00003000 INTL 20160422)
+jun 02 15:09:02 cachyos kernel: ACPI: EC: EC started
+jun 02 15:09:02 cachyos kernel: ACPI: EC: interrupt blocked
+jun 02 15:09:02 cachyos kernel: ACPI: EC: EC_CMD/EC_SC=0x66, EC_DATA=0x62
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.LPCB.EC0_: Boot DSDT EC used to handle transactions
+jun 02 15:09:02 cachyos kernel: ACPI: Interpreter enabled
+jun 02 15:09:02 cachyos kernel: ACPI: PM: (supports S0 S3 S4 S5)
+jun 02 15:09:02 cachyos kernel: ACPI: Using IOAPIC for interrupt routing
+jun 02 15:09:02 cachyos kernel: PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+jun 02 15:09:02 cachyos kernel: PCI: Using E820 reservations for host bridge windows
+jun 02 15:09:02 cachyos kernel: ACPI: Enabled 7 GPEs in block 00 to 7F
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.PEG0.PG00: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.PEG1.PG01: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.PEG2.PG02: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP09.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP10.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP11.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP12.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP13.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP01.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP02.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP03.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP04.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP05.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP06.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP07.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP08.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP17.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP18.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP19.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP20.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP14.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP15.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.RP16.PXSX.WRST: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_TZ_.FN00: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_TZ_.FN01: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_TZ_.FN02: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_TZ_.FN03: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: \_TZ_.FN04: New power resource
+jun 02 15:09:02 cachyos kernel: ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-fe])
+jun 02 15:09:02 cachyos kernel: acpi PNP0A08:00: _OSC: OS supports [ExtendedConfig ASPM ClockPM Segments MSI EDR HPX-Type3]
+jun 02 15:09:02 cachyos kernel: acpi PNP0A08:00: _OSC: platform does not support [PCIeHotplug SHPCHotplug PME]
+jun 02 15:09:02 cachyos kernel: acpi PNP0A08:00: _OSC: OS now controls [AER PCIeCapability LTR DPC]
+jun 02 15:09:02 cachyos kernel: acpi PNP0A08:00: FADT indicates ASPM is unsupported, using BIOS configuration
+jun 02 15:09:02 cachyos kernel: PCI host bridge to bus 0000:00
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000fffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [mem 0x70000000-0xdfffffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [mem 0xfd000000-0xfe7fffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: root bus resource [bus 00-fe]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:00.0: [8086:5910] type 00 class 0x060000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0: [8086:1901] type 01 class 0x060400 PCIe Root Port
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0: PCI bridge to [bus 01]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [io  0xe000-0xefff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [mem 0xdc000000-0xdd0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [mem 0xb0000000-0xc1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0: PME# supported from D0 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: [8086:591b] type 00 class 0x030000 PCIe Root Complex Integrated Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: BAR 0 [mem 0xdb000000-0xdbffffff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: BAR 2 [mem 0x70000000-0x7fffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: BAR 4 [io  0xf000-0xf03f]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:14.0: [8086:a12f] type 00 class 0x0c0330 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:14.0: BAR 0 [mem 0xdd110000-0xdd11ffff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:14.0: PME# supported from D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:14.2: [8086:a131] type 00 class 0x118000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:14.2: BAR 0 [mem 0xdd12c000-0xdd12cfff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:15.0: [8086:a160] type 00 class 0x118000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:15.0: BAR 0 [mem 0xdd12b000-0xdd12bfff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:16.0: [8086:a13a] type 00 class 0x078000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:16.0: BAR 0 [mem 0xdd12a000-0xdd12afff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:16.0: PME# supported from D3hot
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: [8086:a110] type 01 class 0x060400 PCIe Root Port
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: PCI bridge to [bus 02-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0:   bridge window [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: PME# supported from D0 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5: [8086:a115] type 01 class 0x060400 PCIe Root Port
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5: PCI bridge to [bus 3b]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5:   bridge window [mem 0xdd200000-0xdd3fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5: PME# supported from D0 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0: [8086:a11c] type 01 class 0x060400 PCIe Root Port
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0: PCI bridge to [bus 3c]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0:   bridge window [mem 0xdd400000-0xdd4fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0: PME# supported from D0 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1e.0: [8086:a127] type 00 class 0x118000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1e.0: BAR 0 [mem 0xdd129000-0xdd129fff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.0: [8086:a152] type 00 class 0x060100 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.2: [8086:a121] type 00 class 0x058000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.2: BAR 0 [mem 0xdd124000-0xdd127fff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.3: [8086:a171] type 00 class 0x040300 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.3: BAR 0 [mem 0xdd120000-0xdd123fff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.3: BAR 4 [mem 0xdd100000-0xdd10ffff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.3: PME# supported from D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.4: [8086:a123] type 00 class 0x0c0500 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.4: BAR 0 [mem 0xdd128000-0xdd1280ff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.4: BAR 4 [io  0xf040-0xf05f]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: [10de:1c20] type 00 class 0x030000 PCIe Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: BAR 0 [mem 0xdc000000-0xdcffffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: BAR 1 [mem 0xb0000000-0xbfffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: BAR 3 [mem 0xc0000000-0xc1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: BAR 5 [io  0xe000-0xe07f]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: ROM [mem 0xdd000000-0xdd07ffff pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: Enabling HDA controller
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.1: [10de:10f1] type 00 class 0x040300 PCIe Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.1: BAR 0 [mem 0xdd080000-0xdd083fff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0: PCI bridge to [bus 01]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: [8086:15da] type 01 class 0x060400 PCIe Switch Upstream Port
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: PCI bridge to [bus 03-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0:   bridge window [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: enabling Extended Tags
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: supports D1 D2
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: PME# supported from D0 D1 D2 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: PCI bridge to [bus 02-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: [8086:15da] type 01 class 0x060400 PCIe Switch Downstream Port
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: PCI bridge to [bus 04]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0:   bridge window [mem 0xda000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: enabling Extended Tags
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: supports D1 D2
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: PME# supported from D0 D1 D2 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: [8086:15da] type 01 class 0x060400 PCIe Switch Downstream Port
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: PCI bridge to [bus 05-39]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0:   bridge window [mem 0xc4000000-0xd9efffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: enabling Extended Tags
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: supports D1 D2
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: PME# supported from D0 D1 D2 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: [8086:15da] type 01 class 0x060400 PCIe Switch Downstream Port
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: PCI bridge to [bus 3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0:   bridge window [mem 0xd9f00000-0xd9ffffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: enabling Extended Tags
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: supports D1 D2
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: PME# supported from D0 D1 D2 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: PCI bridge to [bus 03-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: PCI bridge to [bus 04]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: PCI bridge to [bus 05-39]
+jun 02 15:09:02 cachyos kernel: pci 0000:3a:00.0: [8086:15db] type 00 class 0x0c0330 PCIe Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:3a:00.0: BAR 0 [mem 0xd9f00000-0xd9f0ffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:3a:00.0: enabling Extended Tags
+jun 02 15:09:02 cachyos kernel: pci 0000:3a:00.0: supports D1 D2
+jun 02 15:09:02 cachyos kernel: pci 0000:3a:00.0: PME# supported from D0 D1 D2 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: PCI bridge to [bus 3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:3b:00.0: [168c:003e] type 00 class 0x028000 PCIe Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:3b:00.0: BAR 0 [mem 0xdd200000-0xdd3fffff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:3b:00.0: PME# supported from D0 D3hot D3cold
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5: PCI bridge to [bus 3b]
+jun 02 15:09:02 cachyos kernel: pci 0000:3c:00.0: [144d:a808] type 00 class 0x010802 PCIe Endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:3c:00.0: BAR 0 [mem 0xdd400000-0xdd403fff 64bit]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0: PCI bridge to [bus 3c]
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKA configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKE configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKF configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKG configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: PCI: Interrupt link LNKH configured for IRQ 11
+jun 02 15:09:02 cachyos kernel: ACPI: EC: interrupt unblocked
+jun 02 15:09:02 cachyos kernel: ACPI: EC: event unblocked
+jun 02 15:09:02 cachyos kernel: ACPI: EC: EC_CMD/EC_SC=0x66, EC_DATA=0x62
+jun 02 15:09:02 cachyos kernel: ACPI: EC: GPE=0x3
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.LPCB.EC0_: Boot DSDT EC initialization complete
+jun 02 15:09:02 cachyos kernel: ACPI: \_SB_.PCI0.LPCB.EC0_: EC: Used to handle transactions and events
+jun 02 15:09:02 cachyos kernel: iommu: Default domain type: Translated
+jun 02 15:09:02 cachyos kernel: iommu: DMA domain TLB invalidation policy: lazy mode
+jun 02 15:09:02 cachyos kernel: SCSI subsystem initialized
+jun 02 15:09:02 cachyos kernel: libata version 3.00 loaded.
+jun 02 15:09:02 cachyos kernel: ACPI: bus type USB registered
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver usbfs
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver hub
+jun 02 15:09:02 cachyos kernel: usbcore: registered new device driver usb
+jun 02 15:09:02 cachyos kernel: EDAC MC: Ver: 3.0.0
+jun 02 15:09:02 cachyos kernel: efivars: Registered efivars operations
+jun 02 15:09:02 cachyos kernel: NetLabel: Initializing
+jun 02 15:09:02 cachyos kernel: NetLabel:  domain hash size = 128
+jun 02 15:09:02 cachyos kernel: NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+jun 02 15:09:02 cachyos kernel: NetLabel:  unlabeled traffic allowed by default
+jun 02 15:09:02 cachyos kernel: mctp: management component transport protocol core
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_MCTP protocol family
+jun 02 15:09:02 cachyos kernel: PCI: Using ACPI for IRQ routing
+jun 02 15:09:02 cachyos kernel: PCI: pci_cache_line_size set to 64 bytes
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x00058000-0x0005ffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x0009e000-0x0009ffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x63bcb000-0x63ffffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x66b41000-0x67ffffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x67514000-0x67ffffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x6a5cc000-0x6bffffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x6b400000-0x6bffffff]
+jun 02 15:09:02 cachyos kernel: e820: register RAM buffer resource [mem 0x48f000000-0x48fffffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: vgaarb: setting as boot VGA device
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: vgaarb: bridge control possible
+jun 02 15:09:02 cachyos kernel: pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: vgaarb: bridge control possible
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.0: vgaarb: VGA device added: decodes=io+mem,owns=none,locks=none
+jun 02 15:09:02 cachyos kernel: vgaarb: loaded
+jun 02 15:09:02 cachyos kernel: clocksource: Switched to clocksource tsc-early
+jun 02 15:09:02 cachyos kernel: VFS: Disk quotas dquot_6.6.0
+jun 02 15:09:02 cachyos kernel: VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x002e-0x002f]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x004e-0x004f]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0061]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0063]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0065]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0067]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0070]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0080]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x0092]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Skipped [io  0x00b2-0x00b3]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Reserved [io  0x0680-0x069f]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Reserved [io  0xffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Reserved [io  0xffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Reserved [io  0xffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Could not reserve [io  0x1800-0x18fe]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:00: Reserved [io  0x164e-0x164f]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:01: Reserved [io  0x0800-0x087f]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xfed10000-0xfed17fff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xfed18000-0xfed18fff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xfed19000-0xfed19fff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xe0000000-0xefffffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xfed20000-0xfed3ffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Could not reserve [mem 0xfed90000-0xfed93fff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xfed45000-0xfed8ffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xff000000-0xffffffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Could not reserve [mem 0xfee00000-0xfeefffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:02: Reserved [mem 0xdffe0000-0xdfffffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfd000000-0xfdabffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfdad0000-0xfdadffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfdb00000-0xfdffffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Could not reserve [mem 0xfe000000-0xfe01ffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfe036000-0xfe03bfff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfe03d000-0xfe3fffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:03: Reserved [mem 0xfe410000-0xfe7fffff]
+jun 02 15:09:02 cachyos kernel: acpi PNP0C02:04: Reserved [io  0xff00-0xfffe]
+jun 02 15:09:02 cachyos kernel: pnp: PnP ACPI init
+jun 02 15:09:02 cachyos kernel: pnp: PnP ACPI: found 1 devices
+jun 02 15:09:02 cachyos kernel: clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_INET protocol family
+jun 02 15:09:02 cachyos kernel: IP idents hash table entries: 262144 (order: 9, 2097152 bytes, linear)
+jun 02 15:09:02 cachyos kernel: tcp_listen_portaddr_hash hash table entries: 8192 (order: 5, 131072 bytes, linear)
+jun 02 15:09:02 cachyos kernel: Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+jun 02 15:09:02 cachyos kernel: TCP established hash table entries: 131072 (order: 8, 1048576 bytes, linear)
+jun 02 15:09:02 cachyos kernel: TCP bind hash table entries: 65536 (order: 9, 2097152 bytes, linear)
+jun 02 15:09:02 cachyos kernel: TCP: Hash tables configured (established 131072 bind 65536)
+jun 02 15:09:02 cachyos kernel: MPTCP token hash table entries: 16384 (order: 7, 393216 bytes, linear)
+jun 02 15:09:02 cachyos kernel: UDP hash table entries: 8192 (order: 7, 524288 bytes, linear)
+jun 02 15:09:02 cachyos kernel: UDP-Lite hash table entries: 8192 (order: 7, 524288 bytes, linear)
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_UNIX/PF_LOCAL protocol family
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_XDP protocol family
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: bridge window [io  0x1000-0x0fff] to [bus 05-39] add_size 1000
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: bridge window [io  0x1000-0x0fff] to [bus 03-3a] add_size 1000
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: bridge window [io  0x1000-0x0fff] to [bus 02-3a] add_size 2000
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: bridge window [io  0x2000-0x3fff]: assigned
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0: PCI bridge to [bus 01]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [io  0xe000-0xefff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [mem 0xdc000000-0xdd0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:01.0:   bridge window [mem 0xb0000000-0xc1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: bridge window [io  0x2000-0x2fff]: assigned
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: bridge window [io  0x2000-0x2fff]: assigned
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0: PCI bridge to [bus 04]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:00.0:   bridge window [mem 0xda000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0: PCI bridge to [bus 05-39]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0:   bridge window [io  0x2000-0x2fff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0:   bridge window [mem 0xc4000000-0xd9efffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:01.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0: PCI bridge to [bus 3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:03:02.0:   bridge window [mem 0xd9f00000-0xd9ffffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: PCI bridge to [bus 03-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0:   bridge window [io  0x2000-0x2fff]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0:   bridge window [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0: PCI bridge to [bus 02-3a]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0:   bridge window [io  0x2000-0x3fff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0:   bridge window [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.0:   bridge window [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5: PCI bridge to [bus 3b]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1c.5:   bridge window [mem 0xdd200000-0xdd3fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0: PCI bridge to [bus 3c]
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1d.0:   bridge window [mem 0xdd400000-0xdd4fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000fffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: resource 7 [mem 0x70000000-0xdfffffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:00: resource 8 [mem 0xfd000000-0xfe7fffff window]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:01: resource 0 [io  0xe000-0xefff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:01: resource 1 [mem 0xdc000000-0xdd0fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:01: resource 2 [mem 0xb0000000-0xc1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:02: resource 0 [io  0x2000-0x3fff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:02: resource 1 [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:02: resource 2 [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:03: resource 0 [io  0x2000-0x2fff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:03: resource 1 [mem 0xc4000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:03: resource 2 [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:04: resource 1 [mem 0xda000000-0xda0fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:05: resource 0 [io  0x2000-0x2fff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:05: resource 1 [mem 0xc4000000-0xd9efffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:05: resource 2 [mem 0x80000000-0xa1ffffff 64bit pref]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:3a: resource 1 [mem 0xd9f00000-0xd9ffffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:3b: resource 1 [mem 0xdd200000-0xdd3fffff]
+jun 02 15:09:02 cachyos kernel: pci_bus 0000:3c: resource 1 [mem 0xdd400000-0xdd4fffff]
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.1: extending delay after power-on from D3hot to 20 msec
+jun 02 15:09:02 cachyos kernel: pci 0000:01:00.1: D0 power state depends on 0000:01:00.0
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: CLS mismatch (64 != 128), using 64 bytes
+jun 02 15:09:02 cachyos kernel: pci 0000:02:00.0: enabling device (0006 -> 0007)
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.1: [8086:a120] type 00 class 0x058000 conventional PCI endpoint
+jun 02 15:09:02 cachyos kernel: pci 0000:00:1f.1: BAR 0 [mem 0xfd000000-0xfdffffff 64bit]
+jun 02 15:09:02 cachyos kernel: DMAR: ACPI device "device:7f" under DMAR at fed91000 as 00:15.0
+jun 02 15:09:02 cachyos kernel: DMAR: ACPI device "device:80" under DMAR at fed91000 as 00:1e.0
+jun 02 15:09:02 cachyos kernel: PCI-DMA: Using software bounce buffering for IO (SWIOTLB)
+jun 02 15:09:02 cachyos kernel: software IO TLB: mapped [mem 0x000000005e854000-0x0000000062854000] (64MB)
+jun 02 15:09:02 cachyos kernel: Trying to unpack rootfs image as initramfs...
+jun 02 15:09:02 cachyos kernel: Initialise system trusted keyrings
+jun 02 15:09:02 cachyos kernel: Key type blacklist registered
+jun 02 15:09:02 cachyos kernel: workingset: timestamp_bits=36 max_order=22 bucket_order=0
+jun 02 15:09:02 cachyos kernel: fuse: init (API version 7.45)
+jun 02 15:09:02 cachyos kernel: integrity: Platform Keyring initialized
+jun 02 15:09:02 cachyos kernel: integrity: Machine keyring initialized
+jun 02 15:09:02 cachyos kernel: xor: automatically using best checksumming function   avx       
+jun 02 15:09:02 cachyos kernel: Key type asymmetric registered
+jun 02 15:09:02 cachyos kernel: Asymmetric key parser 'x509' registered
+jun 02 15:09:02 cachyos kernel: Block layer SCSI generic (bsg) driver version 0.4 loaded (major 245)
+jun 02 15:09:02 cachyos kernel: io scheduler mq-deadline registered
+jun 02 15:09:02 cachyos kernel: io scheduler kyber registered
+jun 02 15:09:02 cachyos kernel: Adaptive Deadline I/O Scheduler 3.2.0 by Masahito Suzuki
+jun 02 15:09:02 cachyos kernel: io scheduler adios registered
+jun 02 15:09:02 cachyos kernel: io scheduler bfq registered
+jun 02 15:09:02 cachyos kernel: ledtrig-cpu: registered to indicate activity on CPUs
+jun 02 15:09:02 cachyos kernel: pcieport 0000:00:1c.0: AER: enabled with IRQ 121
+jun 02 15:09:02 cachyos kernel: pcieport 0000:00:1c.5: AER: enabled with IRQ 122
+jun 02 15:09:02 cachyos kernel: pcieport 0000:00:1d.0: AER: enabled with IRQ 123
+jun 02 15:09:02 cachyos kernel: pcieport 0000:03:01.0: enabling device (0006 -> 0007)
+jun 02 15:09:02 cachyos kernel: ACPI: AC: AC Adapter [AC0] (on-line)
+jun 02 15:09:02 cachyos kernel: input: Lid Switch as /devices/pci0000:00/0000:00:1f.0/PNP0C09:01/PNP0C0D:00/input/input0
+jun 02 15:09:02 cachyos kernel: ACPI: button: Lid Switch [LID0]
+jun 02 15:09:02 cachyos kernel: input: Sleep Button as /devices/platform/PNP0C0E:00/input/input1
+jun 02 15:09:02 cachyos kernel: ACPI: button: Sleep Button [SLPB]
+jun 02 15:09:02 cachyos kernel: input: Power Button as /devices/platform/PNP0C0C:00/input/input2
+jun 02 15:09:02 cachyos kernel: ACPI: button: Power Button [PWRB]
+jun 02 15:09:02 cachyos kernel: input: Power Button as /devices/platform/LNXPWRBN:00/input/input3
+jun 02 15:09:02 cachyos kernel: ACPI: button: Power Button [PWRF]
+jun 02 15:09:02 cachyos kernel: Monitor-Mwait will be used to enter C-1 state
+jun 02 15:09:02 cachyos kernel: Monitor-Mwait will be used to enter C-2 state
+jun 02 15:09:02 cachyos kernel: Monitor-Mwait will be used to enter C-3 state
+jun 02 15:09:02 cachyos kernel: acpi LNXTHERM:00: registered as thermal_zone0
+jun 02 15:09:02 cachyos kernel: ACPI: thermal: Thermal Zone [TZ00] (28 C)
+jun 02 15:09:02 cachyos kernel: acpi LNXTHERM:01: registered as thermal_zone1
+jun 02 15:09:02 cachyos kernel: ACPI: thermal: Thermal Zone [TZ01] (30 C)
+jun 02 15:09:02 cachyos kernel: Serial: 8250/16550 driver, 32 ports, IRQ sharing enabled
+jun 02 15:09:02 cachyos kernel: hpet_acpi_add: no address or irqs in _CRS
+jun 02 15:09:02 cachyos kernel: Non-volatile memory driver v1.3
+jun 02 15:09:02 cachyos kernel: Linux agpgart interface v0.103
+jun 02 15:09:02 cachyos kernel: tpm_tis MSFT0101:00: 2.0 TPM (device-id 0x1A, rev-id 16)
+jun 02 15:09:02 cachyos kernel: ACPI: battery: Slot [BAT0] (battery present)
+jun 02 15:09:02 cachyos kernel: Freeing initrd memory: 133712K
+jun 02 15:09:02 cachyos kernel: ACPI: bus type drm_connector registered
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: new USB bus registered, assigned bus number 1
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: hcc params 0x200077c1 hci version 0x100 quirks 0x0000000001109810
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: new USB bus registered, assigned bus number 2
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:00:14.0: Host supports USB 3.0 SuperSpeed
+jun 02 15:09:02 cachyos kernel: usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 7.00
+jun 02 15:09:02 cachyos kernel: usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+jun 02 15:09:02 cachyos kernel: usb usb1: Product: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: usb usb1: Manufacturer: Linux 7.0.10-2-cachyos xhci-hcd
+jun 02 15:09:02 cachyos kernel: usb usb1: SerialNumber: 0000:00:14.0
+jun 02 15:09:02 cachyos kernel: hub 1-0:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 1-0:1.0: 16 ports detected
+jun 02 15:09:02 cachyos kernel: usb usb2: New USB device found, idVendor=1d6b, idProduct=0003, bcdDevice= 7.00
+jun 02 15:09:02 cachyos kernel: usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+jun 02 15:09:02 cachyos kernel: usb usb2: Product: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: usb usb2: Manufacturer: Linux 7.0.10-2-cachyos xhci-hcd
+jun 02 15:09:02 cachyos kernel: usb usb2: SerialNumber: 0000:00:14.0
+jun 02 15:09:02 cachyos kernel: hub 2-0:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 2-0:1.0: 8 ports detected
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: new USB bus registered, assigned bus number 3
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: hcc params 0x200077c1 hci version 0x110 quirks 0x0000000200009810
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: new USB bus registered, assigned bus number 4
+jun 02 15:09:02 cachyos kernel: xhci_hcd 0000:3a:00.0: Host supports USB 3.1 Enhanced SuperSpeed
+jun 02 15:09:02 cachyos kernel: usb usb3: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 7.00
+jun 02 15:09:02 cachyos kernel: usb usb3: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+jun 02 15:09:02 cachyos kernel: usb usb3: Product: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: usb usb3: Manufacturer: Linux 7.0.10-2-cachyos xhci-hcd
+jun 02 15:09:02 cachyos kernel: usb usb3: SerialNumber: 0000:3a:00.0
+jun 02 15:09:02 cachyos kernel: hub 3-0:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 3-0:1.0: 2 ports detected
+jun 02 15:09:02 cachyos kernel: usb usb4: New USB device found, idVendor=1d6b, idProduct=0003, bcdDevice= 7.00
+jun 02 15:09:02 cachyos kernel: usb usb4: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+jun 02 15:09:02 cachyos kernel: usb usb4: Product: xHCI Host Controller
+jun 02 15:09:02 cachyos kernel: usb usb4: Manufacturer: Linux 7.0.10-2-cachyos xhci-hcd
+jun 02 15:09:02 cachyos kernel: usb usb4: SerialNumber: 0000:3a:00.0
+jun 02 15:09:02 cachyos kernel: hub 4-0:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 4-0:1.0: 2 ports detected
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver usbserial_generic
+jun 02 15:09:02 cachyos kernel: usbserial: USB Serial support registered for generic
+jun 02 15:09:02 cachyos kernel: i8042: PNP: No PS/2 controller found.
+jun 02 15:09:02 cachyos kernel: rtc_cmos 00:00: RTC can wake from S4
+jun 02 15:09:02 cachyos kernel: rtc_cmos 00:00: registered as rtc0
+jun 02 15:09:02 cachyos kernel: rtc_cmos 00:00: setting system clock to 2026-06-02T19:09:01 UTC (1780427341)
+jun 02 15:09:02 cachyos kernel: rtc_cmos 00:00: alarms up to one month, y3k, 242 bytes nvram
+jun 02 15:09:02 cachyos kernel: intel_pstate: Intel P-state driver initializing
+jun 02 15:09:02 cachyos kernel: intel_pstate: Disabling energy efficiency optimization
+jun 02 15:09:02 cachyos kernel: intel_pstate: HWP enabled
+jun 02 15:09:02 cachyos kernel: simple-framebuffer simple-framebuffer.0: [drm] Registered 1 planes with drm panic
+jun 02 15:09:02 cachyos kernel: [drm] Initialized simpledrm 1.0.0 for simple-framebuffer.0 on minor 0
+jun 02 15:09:02 cachyos kernel: fbcon: Deferring console take-over
+jun 02 15:09:02 cachyos kernel: simple-framebuffer simple-framebuffer.0: [drm] fb0: simpledrmdrmfb frame buffer device
+jun 02 15:09:02 cachyos kernel: hid: raw HID events driver (C) Jiri Kosina
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver usbhid
+jun 02 15:09:02 cachyos kernel: usbhid: USB HID core driver
+jun 02 15:09:02 cachyos kernel: drop_monitor: Initializing network drop monitor service
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_INET6 protocol family
+jun 02 15:09:02 cachyos kernel: Segment Routing with IPv6
+jun 02 15:09:02 cachyos kernel: RPL Segment Routing with IPv6
+jun 02 15:09:02 cachyos kernel: In-situ OAM (IOAM) with IPv6
+jun 02 15:09:02 cachyos kernel: NET: Registered PF_PACKET protocol family
+jun 02 15:09:02 cachyos kernel: ENERGY_PERF_BIAS: Set to 'normal', was 'performance'
+jun 02 15:09:02 cachyos kernel: microcode: Current revision: 0x000000f8
+jun 02 15:09:02 cachyos kernel: microcode: Updated early from: 0x000000b4
+jun 02 15:09:02 cachyos kernel: IPI shorthand broadcast: enabled
+jun 02 15:09:02 cachyos kernel: Piece-Of-Cake (POC) CPU Selector 2.6.1 by Masahito Suzuki [CTZ: HW (TZCNT), PTSelect: HW (PDEP)]
+jun 02 15:09:02 cachyos kernel: sched_clock: Marking stable (739000731, 6251914)->(850005470, -104752825)
+jun 02 15:09:02 cachyos kernel: registered taskstats version 1
+jun 02 15:09:02 cachyos kernel: Loading compiled-in X.509 certificates
+jun 02 15:09:02 cachyos kernel: Loaded X.509 cert 'Build time autogenerated kernel key: 84dd77a3c944bddcf06672db6043c6cd48c013e4'
+jun 02 15:09:02 cachyos kernel: zswap: loaded using pool zstd
+jun 02 15:09:02 cachyos kernel: Demotion targets for Node 0: null
+jun 02 15:09:02 cachyos kernel: Key type .fscrypt registered
+jun 02 15:09:02 cachyos kernel: Key type fscrypt-provisioning registered
+jun 02 15:09:02 cachyos kernel: Btrfs loaded, zoned=yes, fsverity=yes
+jun 02 15:09:02 cachyos kernel: Key type big_key registered
+jun 02 15:09:02 cachyos kernel: integrity: Loading X.509 certificate: UEFI:db
+jun 02 15:09:02 cachyos kernel: integrity: Loaded X.509 cert 'Microsoft Corporation UEFI CA 2011: 13adbf4309bd82709c8cd54f316ed522988a1bd4'
+jun 02 15:09:02 cachyos kernel: integrity: Loading X.509 certificate: UEFI:db
+jun 02 15:09:02 cachyos kernel: integrity: Loaded X.509 cert 'Microsoft Windows Production PCA 2011: a92902398e16c49778cd90f99e4f9ae17c55af53'
+jun 02 15:09:02 cachyos kernel: integrity: Loading X.509 certificate: UEFI:db
+jun 02 15:09:02 cachyos kernel: integrity: Loaded X.509 cert 'Microsoft UEFI CA 2023: 81aa6b3244c935bce0d6628af39827421e32497d'
+jun 02 15:09:02 cachyos kernel: integrity: Loading X.509 certificate: UEFI:db
+jun 02 15:09:02 cachyos kernel: integrity: Loaded X.509 cert 'Microsoft Option ROM UEFI CA 2023: 514fbf937fa46fb57bf07af8bed84b3b864b1711'
+jun 02 15:09:02 cachyos kernel: PM:   Magic number: 14:780:191
+jun 02 15:09:02 cachyos kernel: acpi device:1d: hash matches
+jun 02 15:09:02 cachyos kernel: RAS: Correctable Errors collector initialized.
+jun 02 15:09:02 cachyos kernel: clk: Disabling unused clocks
+jun 02 15:09:02 cachyos kernel: PM: genpd: Disabling unused power domains
+jun 02 15:09:02 cachyos kernel: Freeing unused decrypted memory: 2028K
+jun 02 15:09:02 cachyos kernel: Freeing unused kernel image (initmem) memory: 4708K
+jun 02 15:09:02 cachyos kernel: Write protecting the kernel read-only data: 40960k
+jun 02 15:09:02 cachyos kernel: Freeing unused kernel image (text/rodata gap) memory: 192K
+jun 02 15:09:02 cachyos kernel: Freeing unused kernel image (rodata/data gap) memory: 1976K
+jun 02 15:09:02 cachyos kernel: x86/mm: Checked W+X mappings: passed, no W+X pages found.
+jun 02 15:09:02 cachyos kernel: rodata_test: all tests were successful
+jun 02 15:09:02 cachyos kernel: x86/mm: Checking user space page tables
+jun 02 15:09:02 cachyos kernel: x86/mm: Checked W+X mappings: passed, no W+X pages found.
+jun 02 15:09:02 cachyos kernel: Run /init as init process
+jun 02 15:09:02 cachyos kernel:   with arguments:
+jun 02 15:09:02 cachyos kernel:     /init
+jun 02 15:09:02 cachyos kernel:     splash
+jun 02 15:09:02 cachyos kernel:   with environment:
+jun 02 15:09:02 cachyos kernel:     HOME=/
+jun 02 15:09:02 cachyos kernel:     TERM=linux
+jun 02 15:09:02 cachyos systemd[1]: Successfully made /usr/ read-only.
+jun 02 15:09:02 cachyos kernel: usb 1-1: new high-speed USB device number 2 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 3-1: new high-speed USB device number 2 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 3-1: New USB device found, idVendor=05e3, idProduct=0610, bcdDevice= 6.63
+jun 02 15:09:02 cachyos kernel: usb 3-1: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:02 cachyos kernel: usb 3-1: Product: USB2.1 Hub
+jun 02 15:09:02 cachyos kernel: usb 3-1: Manufacturer: GenesysLogic
+jun 02 15:09:02 cachyos kernel: hub 3-1:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 3-1:1.0: 4 ports detected
+jun 02 15:09:02 cachyos kernel: usb 1-1: New USB device found, idVendor=0bc2, idProduct=ab44, bcdDevice=48.85
+jun 02 15:09:02 cachyos kernel: usb 1-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+jun 02 15:09:02 cachyos kernel: usb 1-1: Product: Backup+ Hub
+jun 02 15:09:02 cachyos kernel: usb 1-1: Manufacturer: Seagate
+jun 02 15:09:02 cachyos kernel: usb 1-1: SerialNumber: 01CB7392B2J5
+jun 02 15:09:02 cachyos kernel: hub 1-1:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 1-1:1.0: 3 ports detected
+jun 02 15:09:02 cachyos kernel: usb 4-1: new SuperSpeed USB device number 2 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 2-1: new SuperSpeed USB device number 2 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 4-1: New USB device found, idVendor=05e3, idProduct=0626, bcdDevice= 6.63
+jun 02 15:09:02 cachyos kernel: usb 4-1: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:02 cachyos kernel: usb 4-1: Product: USB3.1 Hub
+jun 02 15:09:02 cachyos kernel: usb 4-1: Manufacturer: GenesysLogic
+jun 02 15:09:02 cachyos kernel: hub 4-1:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 4-1:1.0: 4 ports detected
+jun 02 15:09:02 cachyos kernel: usb 2-1: New USB device found, idVendor=0bc2, idProduct=ab45, bcdDevice=48.85
+jun 02 15:09:02 cachyos kernel: usb 2-1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+jun 02 15:09:02 cachyos kernel: usb 2-1: Product: Backup+ Hub
+jun 02 15:09:02 cachyos kernel: usb 2-1: Manufacturer: Seagate
+jun 02 15:09:02 cachyos kernel: usb 2-1: SerialNumber: 01CB7392B2J5
+jun 02 15:09:02 cachyos kernel: hub 2-1:1.0: USB hub found
+jun 02 15:09:02 cachyos kernel: hub 2-1:1.0: 3 ports detected
+jun 02 15:09:02 cachyos systemd[1]: systemd 260.2-2-arch running in system mode (+PAM +AUDIT -SELINUX +APPARMOR -IMA +IPE +SMACK +SECCOMP +GCRYPT +GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF +XKBCOMMON +UTMP +LIBARCHIVE)
+jun 02 15:09:02 cachyos systemd[1]: Detected architecture x86-64.
+jun 02 15:09:02 cachyos systemd[1]: Running in initrd.
+jun 02 15:09:02 cachyos systemd[1]: Initializing machine ID from random generator.
+jun 02 15:09:02 cachyos systemd[1]: Queued start job for default target Initrd Default Target.
+jun 02 15:09:02 cachyos systemd[1]: Expecting device /dev/disk/by-uuid/28b7475c-8589-4710-a16c-cfe60b0b1218...
+jun 02 15:09:02 cachyos systemd[1]: Reached target Path Units.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Slice Units.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Swaps.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Timer Units.
+jun 02 15:09:02 cachyos systemd[1]: Listening on Journal Socket (/dev/log).
+jun 02 15:09:02 cachyos systemd[1]: Listening on Journal Sockets.
+jun 02 15:09:02 cachyos systemd[1]: Listening on udev Control Socket.
+jun 02 15:09:02 cachyos systemd[1]: Listening on udev Kernel Socket.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Socket Units.
+jun 02 15:09:02 cachyos systemd[1]: Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/7.0.10-2-cachyos/modules.devname
+jun 02 15:09:02 cachyos systemd[1]: Starting Journal Service...
+jun 02 15:09:02 cachyos systemd[1]: Starting Load Kernel Modules...
+jun 02 15:09:02 cachyos systemd[1]: TPM PCR Barrier (initrd) skipped, unmet condition check ConditionSecurity=measured-uki
+jun 02 15:09:02 cachyos systemd[1]: Starting Create Static Device Nodes in /dev...
+jun 02 15:09:02 cachyos systemd[1]: Starting Coldplug All udev Devices...
+jun 02 15:09:02 cachyos systemd[1]: Starting Virtual Console Setup...
+jun 02 15:09:02 cachyos systemd[1]: Finished Load Kernel Modules.
+jun 02 15:09:02 cachyos systemd[1]: Finished Create Static Device Nodes in /dev.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Preparation for Local File Systems.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Local File Systems.
+jun 02 15:09:02 cachyos systemd[1]: Starting Rule-based Manager for Device Events and Files...
+jun 02 15:09:02 cachyos systemd-journald[124]: Collecting audit messages is disabled.
+jun 02 15:09:02 cachyos systemd[1]: Finished Virtual Console Setup.
+jun 02 15:09:02 cachyos systemd[1]: Started Rule-based Manager for Device Events and Files.
+jun 02 15:09:02 cachyos kernel: usb 1-4: new full-speed USB device number 3 using xhci_hcd
+jun 02 15:09:02 cachyos systemd-journald[124]: Journal started
+░░ Subject: O jornal foi inciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O processo jornal do sistema foi iniciado, arquivos foram abertos e está
+░░ pronto para processar requisições.
+jun 02 15:09:02 cachyos systemd-journald[124]: Runtime Journal (/run/log/journal/8c9374cb78da456f81acb1a6a6653c95) is 8M, max 317.5M, 309.5M free.
+░░ Subject: Disk space used by the journal
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Runtime Journal (/run/log/journal/8c9374cb78da456f81acb1a6a6653c95) is currently using 8M.
+░░ Maximum allowed usage is set to 317.5M.
+░░ Leaving at least 158.7M free (of currently available 3G of disk space).
+░░ Enforced usage limit is thus 317.5M, of which 309.5M are still available.
+░░ 
+░░ The limits controlling how much disk space is used by the journal may
+░░ be configured with SystemMaxUse=, SystemKeepFree=, SystemMaxFileSize=,
+░░ RuntimeMaxUse=, RuntimeKeepFree=, RuntimeMaxFileSize= settings in
+░░ /etc/systemd/journald.conf. See journald.conf(5) for details.
+jun 02 15:09:02 cachyos systemd-vconsole-setup[128]: Configuration of first virtual console was skipped, ignoring remaining ones.
+jun 02 15:09:02 cachyos systemd-udevd[132]: Using default interface naming scheme 'v260'.
+jun 02 15:09:02 cachyos systemd[1]: Started Journal Service.
+jun 02 15:09:02 cachyos systemd[1]: Starting Create System Files and Directories...
+░░ Subject: Unidade systemd-tmpfiles-setup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup.service está sendo iniciada.
+jun 02 15:09:02 cachyos systemd[1]: Finished Create System Files and Directories.
+░░ Subject: Unidade systemd-tmpfiles-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: new full-speed USB device number 3 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 1-4: New USB device found, idVendor=0cf3, idProduct=e300, bcdDevice= 0.01
+jun 02 15:09:02 cachyos kernel: usb 1-4: New USB device strings: Mfr=0, Product=0, SerialNumber=0
+jun 02 15:09:02 cachyos kernel: tsc: Refined TSC clocksource calibration: 2807.999 MHz
+jun 02 15:09:02 cachyos kernel: clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x2879c523a63, max_idle_ns: 440795252908 ns
+jun 02 15:09:02 cachyos kernel: clocksource: Switched to clocksource tsc
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: New USB device found, idVendor=056a, idProduct=0374, bcdDevice= 1.11
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: Product: Intuos S
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: Manufacturer: Wacom Co.,Ltd.
+jun 02 15:09:02 cachyos kernel: usb 3-1.3: SerialNumber: 0LH00R2010173
+jun 02 15:09:02 cachyos kernel: hid-generic 0003:056A:0374.0001: hiddev96,hidraw0: USB HID v1.10 Device [Wacom Co.,Ltd. Intuos S] on usb-0000:3a:00.0-1.3/input0
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: new SuperSpeed USB device number 3 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: New USB device found, idVendor=0bc2, idProduct=ab38, bcdDevice= 1.00
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: New USB device strings: Mfr=2, Product=3, SerialNumber=1
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: Product: Backup+ Hub BK
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: Manufacturer: Seagate
+jun 02 15:09:02 cachyos kernel: usb 2-1.1: SerialNumber: NA8TPY5Y
+jun 02 15:09:02 cachyos systemd[1]: Finished Coldplug All udev Devices.
+░░ Subject: Unidade systemd-udev-trigger.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udev-trigger.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Reached target System Initialization.
+░░ Subject: Unidade sysinit.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sysinit.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Starting Show Plymouth Boot Screen...
+░░ Subject: Unidade plymouth-start.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-start.service está sendo iniciada.
+jun 02 15:09:02 cachyos systemd[1]: Received SIGRTMIN+20 from PID 146 (plymouthd).
+jun 02 15:09:02 cachyos kernel: usb 3-1.4: new full-speed USB device number 4 using xhci_hcd
+jun 02 15:09:02 cachyos systemd[1]: Received SIGRTMIN+20 from PID 146 (plymouthd).
+jun 02 15:09:02 cachyos systemd[1]: Started Show Plymouth Boot Screen.
+░░ Subject: Unidade plymouth-start.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-start.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Started Forward Password Requests to Plymouth Directory Watch.
+░░ Subject: Unidade systemd-ask-password-plymouth.path concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-ask-password-plymouth.path concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Basic System.
+░░ Subject: Unidade basic.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade basic.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Starting Early Battery Level Check...
+░░ Subject: Unidade systemd-battery-check.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-battery-check.service está sendo iniciada.
+jun 02 15:09:02 cachyos systemd[1]: Finished Early Battery Level Check.
+░░ Subject: Unidade systemd-battery-check.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-battery-check.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Started Display Boot-Time Emergency Messages In Full Screen.
+░░ Subject: Unidade systemd-bsod.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-bsod.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos kernel: wmi_bus wmi_bus-PNP0C14:03: [Firmware Bug]: WMTF method block execution control method not found
+jun 02 15:09:02 cachyos kernel: intel-lpss 0000:00:15.0: enabling device (0000 -> 0002)
+jun 02 15:09:02 cachyos kernel: idma64 idma64.0: Found Intel integrated DMA 64-bit
+jun 02 15:09:02 cachyos kernel: intel-lpss 0000:00:1e.0: enabling device (0000 -> 0002)
+jun 02 15:09:02 cachyos kernel: idma64 idma64.1: Found Intel integrated DMA 64-bit
+jun 02 15:09:02 cachyos kernel: usb 1-5: new full-speed USB device number 4 using xhci_hcd
+jun 02 15:09:02 cachyos kernel: Key type psk registered
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver usb-storage
+jun 02 15:09:02 cachyos systemd[1]: systemd-vconsole-setup.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-vconsole-setup.service has successfully entered the 'dead' state.
+jun 02 15:09:02 cachyos systemd[1]: Stopped Virtual Console Setup.
+░░ Subject: A unidade systemd-vconsole-setup.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu o desligamento.
+jun 02 15:09:02 cachyos systemd[1]: Stopping Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo desligado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo desligada.
+jun 02 15:09:02 cachyos systemd[1]: Starting Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo iniciada.
+jun 02 15:09:02 cachyos kernel: scsi host0: uas
+jun 02 15:09:02 cachyos kernel: usbcore: registered new interface driver uas
+jun 02 15:09:02 cachyos kernel: scsi 0:0:0:0: Direct-Access     Seagate  Backup+ Hub BK   D781 PQ: 0 ANSI: 6
+jun 02 15:09:02 cachyos kernel: nvme nvme0: pci function 0000:3c:00.0
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] 11721045167 512-byte logical blocks: (6.00 TB/5.46 TiB)
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] 4096-byte physical blocks
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Write Protect is off
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Mode Sense: 4f 00 00 00
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Write cache: enabled, read cache: enabled, doesn't support DPO or FUA
+jun 02 15:09:02 cachyos kernel: nvme nvme0: missing or invalid SUBNQN field.
+jun 02 15:09:02 cachyos kernel: nvme nvme0: D3 entry latency set to 8 seconds
+jun 02 15:09:02 cachyos systemd-vconsole-setup[191]: All allocated virtual consoles are busy, will not configure key mapping and font.
+jun 02 15:09:02 cachyos kernel: nvme nvme0: 8/0/0 default/read/poll queues
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Preferred minimum I/O size 4096 bytes
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Optimal transfer size 33553920 bytes not a multiple of preferred minimum block size (4096 bytes)
+jun 02 15:09:02 cachyos systemd[1]: Finished Virtual Console Setup.
+░░ Subject: Unidade systemd-vconsole-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos kernel: usb 3-1.4: New USB device found, idVendor=03f0, idProduct=0591, bcdDevice=21.22
+jun 02 15:09:02 cachyos kernel: usb 3-1.4: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:02 cachyos kernel: usb 3-1.4: Product: HyperX Alloy Origins
+jun 02 15:09:02 cachyos kernel: usb 3-1.4: Manufacturer: HP, Inc
+jun 02 15:09:02 cachyos kernel:  nvme0n1: p1 p2 p3 p4 p5 p6
+jun 02 15:09:02 cachyos kernel: input: HP, Inc HyperX Alloy Origins as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.0/0003:03F0:0591.0002/input/input4
+jun 02 15:09:02 cachyos kernel:  sda: sda1 sda2 sda3
+jun 02 15:09:02 cachyos kernel: sd 0:0:0:0: [sda] Attached SCSI disk
+jun 02 15:09:02 cachyos kernel: usb 1-5: New USB device found, idVendor=046d, idProduct=c547, bcdDevice= 4.02
+jun 02 15:09:02 cachyos kernel: usb 1-5: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:02 cachyos kernel: usb 1-5: Product: USB Receiver
+jun 02 15:09:02 cachyos kernel: usb 1-5: Manufacturer: Logitech
+jun 02 15:09:02 cachyos kernel: input: Logitech USB Receiver as /devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5:1.0/0003:046D:C547.0003/input/input5
+jun 02 15:09:02 cachyos systemd[1]: Found device Samsung SSD 970 EVO Plus 1TB Linux.
+░░ Subject: Unidade dev-disk-by\x2duuid-28b7475c\x2d8589\x2d4710\x2da16c\x2dcfe60b0b1218.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2duuid-28b7475c\x2d8589\x2d4710\x2da16c\x2dcfe60b0b1218.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:02 cachyos systemd[1]: Reached target Initrd Root Device.
+░░ Subject: Unidade initrd-root-device.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-root-device.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:03F0:0591.0002: input,hidraw1: USB HID v1.11 Keyboard [HP, Inc HyperX Alloy Origins] on usb-0000:3a:00.0-1.4/input0
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:046D:C547.0003: input,hidraw2: USB HID v1.11 Mouse [Logitech USB Receiver] on usb-0000:00:14.0-5/input0
+jun 02 15:09:03 cachyos kernel: input: Logitech USB Receiver Keyboard as /devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5:1.1/0003:046D:C547.0005/input/input9
+jun 02 15:09:03 cachyos kernel: input: HP, Inc HyperX Alloy Origins Mouse as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.1/0003:03F0:0591.0004/input/input6
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: [drm] Found kabylake (device ID 591b) integrated display version 9.00 stepping C0
+jun 02 15:09:03 cachyos systemd[1]: Mounting /sysroot...
+░░ Subject: Unidade sysroot.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sysroot.mount está sendo iniciada.
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: vgaarb: deactivate vga console
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=none:owns=io+mem
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: [drm] Finished loading DMC firmware i915/kbl_dmc_ver1_04.bin (v1.4)
+jun 02 15:09:03 cachyos kernel: BTRFS: device label Linux devid 1 transid 52290 /dev/nvme0n1p4 (259:4) scanned by mount (202)
+jun 02 15:09:03 cachyos kernel: BTRFS info (device nvme0n1p4): first mount of filesystem 28b7475c-8589-4710-a16c-cfe60b0b1218
+jun 02 15:09:03 cachyos kernel: BTRFS info (device nvme0n1p4): using crc32c checksum algorithm
+jun 02 15:09:03 cachyos kernel: BTRFS info (device nvme0n1p4): enabling ssd optimizations
+jun 02 15:09:03 cachyos kernel: BTRFS info (device nvme0n1p4): turning on async discard
+jun 02 15:09:03 cachyos kernel: BTRFS info (device nvme0n1p4): enabling free space tree
+jun 02 15:09:03 cachyos systemd[1]: Mounted /sysroot.
+░░ Subject: Unidade sysroot.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sysroot.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos systemd[1]: Reached target Initrd Root File System.
+░░ Subject: Unidade initrd-root-fs.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-root-fs.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos systemd[1]: Starting Mountpoints Configured in the Real Root...
+░░ Subject: Unidade initrd-parse-etc.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-parse-etc.service está sendo iniciada.
+jun 02 15:09:03 cachyos systemd[1]: initrd-parse-etc.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit initrd-parse-etc.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Finished Mountpoints Configured in the Real Root.
+░░ Subject: Unidade initrd-parse-etc.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-parse-etc.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos systemd[1]: initrd-parse-etc.service: Triggering OnSuccess= dependencies.
+jun 02 15:09:03 cachyos systemd[1]: Reached target Initrd File Systems.
+░░ Subject: Unidade initrd-fs.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-fs.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos systemd[1]: Reached target Initrd Default Target.
+░░ Subject: Unidade initrd.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos systemd[1]: Starting Cleaning Up and Shutting Down Daemons...
+░░ Subject: Unidade initrd-cleanup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-cleanup.service está sendo iniciada.
+jun 02 15:09:03 cachyos kernel: input: HP, Inc HyperX Alloy Origins System Control as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.1/0003:03F0:0591.0004/input/input7
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:046D:C547.0005: input,hidraw3: USB HID v1.11 Keyboard [Logitech USB Receiver] on usb-0000:00:14.0-5/input1
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:046D:C547.0006: hiddev97,hidraw4: USB HID v1.11 Device [Logitech USB Receiver] on usb-0000:00:14.0-5/input2
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Initrd Default Target.
+░░ Subject: A unidade initrd.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Basic System.
+░░ Subject: A unidade basic.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade basic.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Initrd Root Device.
+░░ Subject: A unidade initrd-root-device.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-root-device.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Path Units.
+░░ Subject: A unidade paths.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade paths.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Slice Units.
+░░ Subject: A unidade slices.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade slices.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Socket Units.
+░░ Subject: A unidade sockets.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sockets.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target System Initialization.
+░░ Subject: A unidade sysinit.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sysinit.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Swaps.
+░░ Subject: A unidade swap.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade swap.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Timer Units.
+░░ Subject: A unidade timers.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade timers.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Starting Plymouth switch root service...
+░░ Subject: Unidade plymouth-switch-root.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-switch-root.service está sendo iniciada.
+jun 02 15:09:03 cachyos systemd[1]: Stopping Display Boot-Time Emergency Messages In Full Screen...
+░░ Subject: Unidade systemd-bsod.service sendo desligado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-bsod.service está sendo desligada.
+jun 02 15:09:03 cachyos systemd[1]: systemd-modules-load.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-modules-load.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Stopped Load Kernel Modules.
+░░ Subject: A unidade systemd-modules-load.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-modules-load.service concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: systemd-tmpfiles-setup.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-tmpfiles-setup.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Stopped Create System Files and Directories.
+░░ Subject: A unidade systemd-tmpfiles-setup.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup.service concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Local File Systems.
+░░ Subject: A unidade local-fs.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade local-fs.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopped target Preparation for Local File Systems.
+░░ Subject: A unidade local-fs-pre.target concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade local-fs-pre.target concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: systemd-udev-trigger.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-udev-trigger.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Stopped Coldplug All udev Devices.
+░░ Subject: A unidade systemd-udev-trigger.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udev-trigger.service concluiu o desligamento.
+jun 02 15:09:03 cachyos systemd[1]: Stopping Rule-based Manager for Device Events and Files...
+░░ Subject: Unidade systemd-udevd.service sendo desligado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udevd.service está sendo desligada.
+jun 02 15:09:03 cachyos systemd[1]: systemd-bsod.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-bsod.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Stopped Display Boot-Time Emergency Messages In Full Screen.
+░░ Subject: A unidade systemd-bsod.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-bsod.service concluiu o desligamento.
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: [drm] Registered 3 planes with drm panic
+jun 02 15:09:03 cachyos systemd[1]: initrd-cleanup.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit initrd-cleanup.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Finished Cleaning Up and Shutting Down Daemons.
+░░ Subject: Unidade initrd-cleanup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-cleanup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos kernel: [drm] Initialized i915 1.6.0 for 0000:00:02.0 on minor 1
+jun 02 15:09:03 cachyos systemd[1]: systemd-battery-check.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-battery-check.service has successfully entered the 'dead' state.
+jun 02 15:09:03 cachyos systemd[1]: Stopped Early Battery Level Check.
+░░ Subject: A unidade systemd-battery-check.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-battery-check.service concluiu o desligamento.
+jun 02 15:09:03 cachyos kernel: ACPI: video: Video Device [GFX0] (multi-head: yes  rom: no  post: no)
+jun 02 15:09:03 cachyos kernel: input: Video Bus as /devices/pci0000:00/acpi.video_bus.0/input/input11
+jun 02 15:09:03 cachyos systemd[1]: Finished Plymouth switch root service.
+░░ Subject: Unidade plymouth-switch-root.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-switch-root.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:03 cachyos kernel: input: HP, Inc HyperX Alloy Origins Consumer Control as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.1/0003:03F0:0591.0004/input/input8
+jun 02 15:09:03 cachyos kernel: ACPI: video: Video Device [PEGP] (multi-head: no  rom: yes  post: no)
+jun 02 15:09:03 cachyos kernel: input: Video Bus as /devices/pci0000:00/0000:00:01.0/acpi.video_bus.1/input/input12
+jun 02 15:09:03 cachyos kernel: input: HP, Inc HyperX Alloy Origins as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.1/0003:03F0:0591.0004/input/input10
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:03F0:0591.0004: input,hiddev98,hidraw5: USB HID v1.11 Mouse [HP, Inc HyperX Alloy Origins] on usb-0000:3a:00.0-1.4/input1
+jun 02 15:09:03 cachyos kernel: input: HP, Inc HyperX Alloy Origins as /devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4/3-1.4:1.2/0003:03F0:0591.0007/input/input13
+jun 02 15:09:03 cachyos kernel: fbcon: i915drmfb (fb0) is primary device
+jun 02 15:09:03 cachyos kernel: fbcon: Deferring console take-over
+jun 02 15:09:03 cachyos kernel: i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:03F0:0591.0007: input,hidraw6: USB HID v1.11 Keyboard [HP, Inc HyperX Alloy Origins] on usb-0000:3a:00.0-1.4/input2
+jun 02 15:09:03 cachyos kernel: usbhid 3-1.4:1.3: couldn't find an input interrupt endpoint
+jun 02 15:09:03 cachyos kernel: usb 1-6: new full-speed USB device number 5 using xhci_hcd
+jun 02 15:09:03 cachyos kernel: usb 1-6: New USB device found, idVendor=0a12, idProduct=4010, bcdDevice=17.69
+jun 02 15:09:03 cachyos kernel: usb 1-6: New USB device strings: Mfr=0, Product=0, SerialNumber=0
+jun 02 15:09:03 cachyos kernel: hub 1-6:1.0: USB hub found
+jun 02 15:09:03 cachyos kernel: hub 1-6:1.0: 4 ports detected
+jun 02 15:09:03 cachyos kernel: usb 1-7: new high-speed USB device number 6 using xhci_hcd
+jun 02 15:09:03 cachyos kernel: usb 1-6.1: new full-speed USB device number 7 using xhci_hcd
+jun 02 15:09:03 cachyos kernel: usb 1-7: New USB device found, idVendor=0bda, idProduct=579f, bcdDevice= 0.02
+jun 02 15:09:03 cachyos kernel: usb 1-7: New USB device strings: Mfr=3, Product=1, SerialNumber=2
+jun 02 15:09:03 cachyos kernel: usb 1-7: Product: USB Camera
+jun 02 15:09:03 cachyos kernel: usb 1-7: Manufacturer: 11121119-000JT51GE
+jun 02 15:09:03 cachyos kernel: usb 1-7: SerialNumber: 200901010001
+jun 02 15:09:03 cachyos kernel: usb 1-6.1: New USB device found, idVendor=0a12, idProduct=4007, bcdDevice=22.51
+jun 02 15:09:03 cachyos kernel: usb 1-6.1: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:03 cachyos kernel: usb 1-6.1: Product: FIIO BR13 (UAC1.0)
+jun 02 15:09:03 cachyos kernel: usb 1-6.1: Manufacturer: FIIO
+jun 02 15:09:03 cachyos kernel: input: FIIO FIIO BR13 (UAC1.0) as /devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.1/1-6.1:1.0/0003:0A12:4007.0008/input/input14
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:0A12:4007.0008: input,hidraw7: USB HID v1.11 Device [FIIO FIIO BR13 (UAC1.0)] on usb-0000:00:14.0-6.1/input0
+jun 02 15:09:03 cachyos kernel: hid-generic 0003:0A12:4007.0009: hiddev99,hidraw8: USB HID v1.11 Device [FIIO FIIO BR13 (UAC1.0)] on usb-0000:00:14.0-6.1/input1
+jun 02 15:09:03 cachyos kernel: usb 1-8: new full-speed USB device number 8 using xhci_hcd
+jun 02 15:09:03 cachyos kernel: usb 1-8: New USB device found, idVendor=1532, idProduct=0224, bcdDevice= 2.00
+jun 02 15:09:03 cachyos kernel: usb 1-8: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+jun 02 15:09:03 cachyos kernel: usb 1-8: Product: Razer Blade
+jun 02 15:09:03 cachyos kernel: usb 1-8: Manufacturer: Razer
+jun 02 15:09:03 cachyos kernel: input: Razer Razer Blade as /devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.0/0003:1532:0224.000A/input/input15
+jun 02 15:09:04 cachyos kernel: hid-generic 0003:1532:0224.000A: input,hidraw9: USB HID v1.11 Keyboard [Razer Razer Blade] on usb-0000:00:14.0-8/input0
+jun 02 15:09:04 cachyos kernel: input: Razer Razer Blade Keyboard as /devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.1/0003:1532:0224.000B/input/input16
+jun 02 15:09:04 cachyos kernel: input: Razer Razer Blade as /devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.1/0003:1532:0224.000B/input/input17
+jun 02 15:09:04 cachyos kernel: hid-generic 0003:1532:0224.000B: input,hidraw10: USB HID v1.11 Keyboard [Razer Razer Blade] on usb-0000:00:14.0-8/input1
+jun 02 15:09:04 cachyos kernel: input: Razer Razer Blade as /devices/pci0000:00/0000:00:14.0/usb1/1-8/1-8:1.2/0003:1532:0224.000C/input/input18
+jun 02 15:09:04 cachyos kernel: hid-generic 0003:1532:0224.000C: input,hidraw11: USB HID v1.11 Mouse [Razer Razer Blade] on usb-0000:00:14.0-8/input2
+jun 02 15:09:04 cachyos systemd[1]: systemd-udevd.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-udevd.service has successfully entered the 'dead' state.
+jun 02 15:09:04 cachyos systemd[1]: Stopped Rule-based Manager for Device Events and Files.
+░░ Subject: A unidade systemd-udevd.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udevd.service concluiu o desligamento.
+jun 02 15:09:04 cachyos systemd[1]: systemd-udevd.service: Consumed 1.472s CPU time over 2.053s wall clock time, 29.5M memory peak.
+░░ Subject: Resources consumed by unit runtime
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-udevd.service completed and consumed the indicated resources.
+jun 02 15:09:04 cachyos systemd[1]: systemd-udevd-control.socket: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-udevd-control.socket has successfully entered the 'dead' state.
+jun 02 15:09:04 cachyos systemd[1]: Closed udev Control Socket.
+░░ Subject: A unidade systemd-udevd-control.socket concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udevd-control.socket concluiu o desligamento.
+jun 02 15:09:04 cachyos systemd[1]: Starting Cleanup udev Database...
+░░ Subject: Unidade initrd-udevadm-cleanup-db.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-udevadm-cleanup-db.service está sendo iniciada.
+jun 02 15:09:04 cachyos systemd[1]: systemd-tmpfiles-setup-dev.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-tmpfiles-setup-dev.service has successfully entered the 'dead' state.
+jun 02 15:09:04 cachyos systemd[1]: Stopped Create Static Device Nodes in /dev.
+░░ Subject: A unidade systemd-tmpfiles-setup-dev.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup-dev.service concluiu o desligamento.
+jun 02 15:09:04 cachyos systemd[1]: initrd-udevadm-cleanup-db.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit initrd-udevadm-cleanup-db.service has successfully entered the 'dead' state.
+jun 02 15:09:04 cachyos systemd[1]: Finished Cleanup udev Database.
+░░ Subject: Unidade initrd-udevadm-cleanup-db.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-udevadm-cleanup-db.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:04 cachyos systemd[1]: Reached target Switch Root.
+░░ Subject: Unidade initrd-switch-root.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-switch-root.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:04 cachyos systemd[1]: Starting Switch Root...
+░░ Subject: Unidade initrd-switch-root.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade initrd-switch-root.service está sendo iniciada.
+jun 02 15:09:04 cachyos systemd[1]: Switching root.
+jun 02 15:09:04 cachyos systemd-journald[124]: Journal stopped
+░░ Subject: O jornal foi interrompido
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O processo do jornal do sistema foi desligado e todos os arquivos de jornal
+░░ do sistema foram fechados.
+jun 02 15:09:05 Razer-Blazer systemd-journald[124]: Received SIGTERM from PID 1 (systemd).
+jun 02 15:09:05 Razer-Blazer systemd[1]: systemd 260.1-2-arch running in system mode (+PAM +AUDIT -SELINUX +APPARMOR -IMA +IPE +SMACK +SECCOMP +GCRYPT +GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK +BTF +XKBCOMMON +UTMP +LIBARCHIVE)
+jun 02 15:09:05 Razer-Blazer systemd[1]: Detected architecture x86-64.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Hostname set to <Razer-Blazer>.
+jun 02 15:09:05 Razer-Blazer systemd[1]: bpf-restrict-fs: LSM BPF program attached
+jun 02 15:09:05 Razer-Blazer zram_generator::generator[268]: modprobe "zram" failed, ignoring: code exit status: 1
+jun 02 15:09:05 Razer-Blazer (generato[249]: '/usr/lib/systemd/system-generators/zram-generator' failed with exit status 1.
+jun 02 15:09:05 Razer-Blazer systemd[1]: initrd-switch-root.service: Deactivated successfully.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Stopped Switch Root.
+jun 02 15:09:05 Razer-Blazer systemd[1]: systemd-journald.service: Scheduled restart job, restart counter is at 1.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/dirmngr.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/getty.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/gpg-agent.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/gpg-agent-browser.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/gpg-agent-extra.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/gpg-agent-ssh.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/keyboxd.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/modprobe.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/systemd-fsck.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice Slice /system/systemd-zram-setup.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Created slice User and Session Slice.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Dispatch Password Requests to Console Directory Watch skipped, unmet condition check ConditionPathExists=!/run/plymouth/pid
+jun 02 15:09:05 Razer-Blazer systemd[1]: Started Forward Password Requests to Wall Directory Watch.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Set up automount Arbitrary Executable File Formats File System Automount Point.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Expecting device /dev/disk/by-diskseq/2-part5...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Expecting device /dev/disk/by-uuid/009D3C8B6A789B95...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Expecting device /dev/disk/by-uuid/28b7475c-8589-4710-a16c-cfe60b0b1218...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Expecting device /dev/disk/by-uuid/6D6D-4B74...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Expecting device /dev/zram0...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Login Prompts.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Image Downloads.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Stopped target Switch Root.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Stopped target Initrd File Systems.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Stopped target Initrd Root File System.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Local Integrity Protected Volumes.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Remote File Systems.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Slice Units.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Local Verity Protected Volumes.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Device-mapper event daemon FIFOs.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on LVM2 poll daemon socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Query the User Interactively for a Password.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Process Core Dump Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Credential Encryption/Decryption.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Factory Reset Management.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Console Output Muting Service Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: TPM PCR Measurements skipped, unmet condition check ConditionSecurity=measured-uki
+jun 02 15:09:05 Razer-Blazer systemd[1]: Make TPM PCR Policy skipped, unmet condition check ConditionSecurity=measured-uki
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Disk Repartitioning Service Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Resolve Monitor Varlink Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on Resolve Service Varlink Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on udev Control Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on udev Varlink Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Listening on User Database Manager Socket.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting Huge Pages File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting POSIX Message Queue File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting Kernel Debug File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting Kernel Trace File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Create List of Static Device Nodes skipped, unmet condition check ConditionFileNotEmpty=/lib/modules/7.0.10-2-cachyos/modules.devname
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Load Kernel Module configfs skipped, unmet condition check ConditionKernelModuleLoaded=!configfs
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting Kernel Configuration File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Load Kernel Module drm skipped, unmet condition check ConditionKernelModuleLoaded=!drm
+jun 02 15:09:05 Razer-Blazer systemd[1]: Load Kernel Module fuse skipped, unmet condition check ConditionKernelModuleLoaded=!fuse
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting FUSE Control File System...
+jun 02 15:09:05 Razer-Blazer systemd[1]: plymouth-switch-root.service: Deactivated successfully.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Stopped Plymouth switch root service.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Clear Stale Hibernate Storage Info skipped, unmet condition check ConditionPathExists=/sys/firmware/efi/efivars/HibernateLocation-8cf2644b-4b0b-428f-9387-6d876050dc67
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Journal Service...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Load Kernel Modules...
+jun 02 15:09:05 Razer-Blazer systemd[1]: TPM PCR Machine ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Remount Root and Kernel File Systems...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Create Static Device Nodes in /dev gracefully...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Early TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Load udev Rules from Credentials...
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Coldplug All udev Devices...
+jun 02 15:09:05 Razer-Blazer systemd-journald[499]: Collecting audit messages is disabled.
+jun 02 15:09:05 Razer-Blazer systemd-journald[499]: Journal started
+░░ Subject: O jornal foi inciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O processo jornal do sistema foi iniciado, arquivos foram abertos e está
+░░ pronto para processar requisições.
+jun 02 15:09:05 Razer-Blazer systemd-journald[499]: Runtime Journal (/run/log/journal/0262533c4ca04359a5f379b8e3f83042) is 8M, max 317.5M, 309.5M free.
+░░ Subject: Disk space used by the journal
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Runtime Journal (/run/log/journal/0262533c4ca04359a5f379b8e3f83042) is currently using 8M.
+░░ Maximum allowed usage is set to 317.5M.
+░░ Leaving at least 158.7M free (of currently available 3G of disk space).
+░░ Enforced usage limit is thus 317.5M, of which 309.5M are still available.
+░░ 
+░░ The limits controlling how much disk space is used by the journal may
+░░ be configured with SystemMaxUse=, SystemKeepFree=, SystemMaxFileSize=,
+░░ RuntimeMaxUse=, RuntimeKeepFree=, RuntimeMaxFileSize= settings in
+░░ /etc/systemd/journald.conf. See journald.conf(5) for details.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Queued start job for default target Graphical Interface.
+jun 02 15:09:05 Razer-Blazer systemd[1]: systemd-journald.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-journald.service has successfully entered the 'dead' state.
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Using 5 probe threads
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Failed to find module 'crypto_user'
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Failed to find module 'i2c_dev'
+jun 02 15:09:05 Razer-Blazer lvm[490]:   /dev/mapper/control: open failed: Dispositivo inexistente
+jun 02 15:09:05 Razer-Blazer lvm[490]:   Failure to communicate with kernel device-mapper driver.
+jun 02 15:09:05 Razer-Blazer lvm[490]:   Check that device-mapper is available in the kernel.
+jun 02 15:09:05 Razer-Blazer lvm[490]:   Incompatible libdevmapper 1.02.214 (2026-04-28) and kernel driver (unknown version).
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Failed to find module 'ntsync'
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Failed to find module 'nvidia_uvm'
+jun 02 15:09:05 Razer-Blazer systemd-modules-load[502]: Failed to find module 'pkcs8_key_parser'
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted Huge Pages File System.
+░░ Subject: Unidade dev-hugepages.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-hugepages.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted POSIX Message Queue File System.
+░░ Subject: Unidade dev-mqueue.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-mqueue.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Started Journal Service.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted Kernel Debug File System.
+░░ Subject: Unidade sys-kernel-debug.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sys-kernel-debug.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted Kernel Trace File System.
+░░ Subject: Unidade sys-kernel-tracing.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sys-kernel-tracing.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Monitoring of LVM2 mirrors, snapshots etc. using dmeventd or progress polling.
+░░ Subject: Unidade lvm2-monitor.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade lvm2-monitor.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted Kernel Configuration File System.
+░░ Subject: Unidade sys-kernel-config.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sys-kernel-config.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted FUSE Control File System.
+░░ Subject: Unidade sys-fs-fuse-connections.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sys-fs-fuse-connections.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Load Kernel Modules.
+░░ Subject: Unidade systemd-modules-load.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-modules-load.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Load udev Rules from Credentials.
+░░ Subject: Unidade systemd-udev-load-credentials.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udev-load-credentials.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Apply Kernel Variables...
+░░ Subject: Unidade systemd-sysctl.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-sysctl.service está sendo iniciada.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting User Database Manager...
+░░ Subject: Unidade systemd-userdbd.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-userdbd.service está sendo iniciada.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Apply Kernel Variables.
+░░ Subject: Unidade systemd-sysctl.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-sysctl.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: proc-sys-fs-binfmt_misc.automount: Got automount request for /proc/sys/fs/binfmt_misc, triggered by 564 ((systemd-userd))
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounting Arbitrary Executable File Formats File System...
+░░ Subject: Unidade proc-sys-fs-binfmt_misc.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade proc-sys-fs-binfmt_misc.mount está sendo iniciada.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting CLI Netfilter Manager...
+░░ Subject: Unidade ufw.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade ufw.service está sendo iniciada.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Mounted Arbitrary Executable File Formats File System.
+░░ Subject: Unidade proc-sys-fs-binfmt_misc.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade proc-sys-fs-binfmt_misc.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer ufw-init[581]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[584]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[589]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[594]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[596]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer kernel: BTRFS info (device nvme0n1p4 state M): use zstd compression, level 1
+jun 02 15:09:05 Razer-Blazer ufw-init[598]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Remount Root and Kernel File Systems.
+░░ Subject: Unidade systemd-remount-fs.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-remount-fs.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Rebuild Hardware Database skipped, unmet condition check ConditionNeedsUpdate=/etc
+░░ Subject: Unidade systemd-hwdb-update.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-hwdb-update.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Starting Load/Save OS Random Seed...
+░░ Subject: Unidade systemd-random-seed.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-random-seed.service está sendo iniciada.
+jun 02 15:09:05 Razer-Blazer systemd[1]: TPM SRK Setup skipped, unmet condition check ConditionSecurity=measured-uki
+░░ Subject: Unidade systemd-tpm2-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tpm2-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: TPM PCR NvPCR Initialization Separator skipped, unmet condition check ConditionSecurity=measured-uki
+░░ Subject: Unidade systemd-pcrnvdone.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-pcrnvdone.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Reached target Local Encrypted Volumes.
+░░ Subject: Unidade cryptsetup.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade cryptsetup.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: TPM NvPCR Product ID Measurement skipped, unmet condition check ConditionSecurity=measured-uki
+░░ Subject: Unidade systemd-pcrproduct.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-pcrproduct.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer ufw-init[606]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[609]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[612]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[615]: iptables-restore/1.8.13 (nf_tables) Failed to initialize nft: Protocol not supported
+jun 02 15:09:05 Razer-Blazer ufw-init[620]: Problem loading ipv6 (skipping)
+jun 02 15:09:05 Razer-Blazer ufw-init[620]: Problem running '/etc/ufw/before.rules'
+jun 02 15:09:05 Razer-Blazer ufw-init[620]: Problem running '/etc/ufw/after.rules'
+jun 02 15:09:05 Razer-Blazer ufw-init[620]: Problem running '/etc/ufw/user.rules'
+jun 02 15:09:05 Razer-Blazer systemd[1]: Started User Database Manager.
+░░ Subject: Unidade systemd-userdbd.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-userdbd.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:05 Razer-Blazer systemd[1]: ufw.service: Main process exited, code=exited, status=1/FAILURE
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An ExecStart= process belonging to unit ufw.service has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 1.
+jun 02 15:09:05 Razer-Blazer systemd[1]: ufw.service: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit ufw.service has entered the 'failed' state with result 'exit-code'.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Failed to start CLI Netfilter Manager.
+░░ Subject: A unidade ufw.service falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade ufw.service falhou.
+░░ 
+░░ O resultado é failed.
+jun 02 15:09:05 Razer-Blazer systemd[1]: Finished Load/Save OS Random Seed.
+░░ Subject: Unidade systemd-random-seed.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-random-seed.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Create Static Device Nodes in /dev gracefully.
+░░ Subject: Unidade systemd-tmpfiles-setup-dev-early.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup-dev-early.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Create System Users skipped, no trigger condition checks were met.
+░░ Subject: Unidade systemd-sysusers.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-sysusers.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Journal Log Access Socket...
+░░ Subject: Unidade systemd-journalctl.socket sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-journalctl.socket está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Network Name Resolution...
+░░ Subject: Unidade systemd-resolved.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-resolved.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Network Time Synchronization...
+░░ Subject: Unidade systemd-timesyncd.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-timesyncd.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Create Static Device Nodes in /dev...
+░░ Subject: Unidade systemd-tmpfiles-setup-dev.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup-dev.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Listening on Journal Log Access Socket.
+░░ Subject: Unidade systemd-journalctl.socket concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-journalctl.socket concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Create Static Device Nodes in /dev.
+░░ Subject: Unidade systemd-tmpfiles-setup-dev.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup-dev.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Preparation for Local File Systems.
+░░ Subject: Unidade local-fs-pre.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade local-fs-pre.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Repartition Root Disk skipped, no trigger condition checks were met.
+░░ Subject: Unidade systemd-repart.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-repart.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Rule-based Manager for Device Events and Files...
+░░ Subject: Unidade systemd-udevd.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udevd.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Started Network Time Synchronization.
+░░ Subject: Unidade systemd-timesyncd.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-timesyncd.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target System Time Set.
+░░ Subject: Unidade time-set.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade time-set.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: Positive Trust Anchors:
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: . IN DS 20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: . IN DS 38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: Negative trust anchors: home.arpa 10.in-addr.arpa 16.172.in-addr.arpa 17.172.in-addr.arpa 18.172.in-addr.arpa 19.172.in-addr.arpa 20.172.in-addr.arpa 21.172.in-addr.arpa 22.172.in-addr.arpa 23.172.in-addr.arpa 24.172.in-addr.arpa 25.172.in-addr.arpa 26.172.in-addr.arpa 27.172.in-addr.arpa 28.172.in-addr.arpa 29.172.in-addr.arpa 30.172.in-addr.arpa 31.172.in-addr.arpa 170.0.0.192.in-addr.arpa 171.0.0.192.in-addr.arpa 168.192.in-addr.arpa d.f.ip6.arpa ipv4only.arpa resolver.arpa corp home internal intranet lan local private test
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: Using system hostname 'Razer-Blazer'.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Started Network Name Resolution.
+░░ Subject: Unidade systemd-resolved.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-resolved.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-resolved[636]: Switching to fallback DNS server 9.9.9.9#dns.quad9.net.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Host and Network Name Lookups.
+░░ Subject: Unidade nss-lookup.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade nss-lookup.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-udevd[659]: Using default interface naming scheme 'v260'.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Started Rule-based Manager for Device Events and Files.
+░░ Subject: Unidade systemd-udevd.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udevd.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Coldplug All udev Devices.
+░░ Subject: Unidade systemd-udev-trigger.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-udev-trigger.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Load Kernel Module configfs skipped, unmet condition check ConditionKernelModuleLoaded=!configfs
+░░ Subject: Unidade modprobe@configfs.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade modprobe@configfs.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Load Kernel Module fuse skipped, unmet condition check ConditionKernelModuleLoaded=!fuse
+░░ Subject: Unidade modprobe@fuse.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade modprobe@fuse.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer mtp-probe[698]: checking bus 1, device 8: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8"
+jun 02 15:09:06 Razer-Blazer mtp-probe[700]: checking bus 3, device 4: "/sys/devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4"
+jun 02 15:09:06 Razer-Blazer mtp-probe[699]: checking bus 1, device 4: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5"
+jun 02 15:09:06 Razer-Blazer mtp-probe[699]: bus: 1, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[698]: bus: 1, device: 8 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[697]: checking bus 1, device 6: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-7"
+jun 02 15:09:06 Razer-Blazer mtp-probe[697]: bus: 1, device: 6 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[700]: bus: 3, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd[1]: Created slice Slice /system/systemd-backlight.
+░░ Subject: Unidade system-systemd\x2dbacklight.slice concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade system-systemd\x2dbacklight.slice concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Load/Save Screen Backlight Brightness of backlight:intel_backlight...
+░░ Subject: Unidade systemd-backlight@backlight:intel_backlight.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-backlight@backlight:intel_backlight.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer mtp-probe[717]: checking bus 1, device 6: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-7"
+jun 02 15:09:06 Razer-Blazer mtp-probe[717]: bus: 1, device: 6 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[721]: checking bus 1, device 7: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.1"
+jun 02 15:09:06 Razer-Blazer mtp-probe[721]: bus: 1, device: 7 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Load/Save Screen Backlight Brightness of backlight:intel_backlight.
+░░ Subject: Unidade systemd-backlight@backlight:intel_backlight.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-backlight@backlight:intel_backlight.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Condition check resulted in /dev/tpmrm0 being skipped.
+░░ Subject: Unidade dev-tpmrm0.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-tpmrm0.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Expecting device /dev/tpm0...
+░░ Subject: Unidade dev-tpm0.device sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-tpm0.device está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Condition check resulted in Samsung SSD 970 EVO Plus 1TB EFI being skipped.
+░░ Subject: Unidade dev-disk-by\x2duuid-6D6D\x2d4B74.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2duuid-6D6D\x2d4B74.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Condition check resulted in Samsung SSD 970 EVO Plus 1TB Cargo being skipped.
+░░ Subject: Unidade dev-disk-by\x2duuid-009D3C8B6A789B95.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2duuid-009D3C8B6A789B95.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Found device Samsung SSD 970 EVO Plus 1TB Linux.
+░░ Subject: Unidade dev-disk-by\x2duuid-28b7475c\x2d8589\x2d4710\x2da16c\x2dcfe60b0b1218.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2duuid-28b7475c\x2d8589\x2d4710\x2da16c\x2dcfe60b0b1218.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Condition check resulted in Samsung SSD 970 EVO Plus 1TB Swap being skipped.
+░░ Subject: Unidade dev-disk-by\x2ddiskseq-2\x2dpart5.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2ddiskseq-2\x2dpart5.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Activating swap Swap Partition...
+░░ Subject: Unidade dev-disk-by\x2ddiskseq-2\x2dpart5.swap sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2ddiskseq-2\x2dpart5.swap está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer mtp-probe[753]: checking bus 1, device 4: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5"
+jun 02 15:09:06 Razer-Blazer mtp-probe[753]: bus: 1, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting File System Check on /dev/disk/by-uuid/6D6D-4B74...
+░░ Subject: Unidade systemd-fsck@dev-disk-by\x2duuid-6D6D\x2d4B74.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-fsck@dev-disk-by\x2duuid-6D6D\x2d4B74.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer kernel: Adding 16777212k swap on /dev/nvme0n1p5.  Priority:-1 extents:1 across:16777212k SS
+jun 02 15:09:06 Razer-Blazer mtp-probe[757]: checking bus 3, device 4: "/sys/devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4"
+jun 02 15:09:06 Razer-Blazer mtp-probe[757]: bus: 3, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[761]: checking bus 1, device 7: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.1"
+jun 02 15:09:06 Razer-Blazer systemd[1]: Activated swap Swap Partition.
+░░ Subject: Unidade dev-disk-by\x2ddiskseq-2\x2dpart5.swap concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-disk-by\x2ddiskseq-2\x2dpart5.swap concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer mtp-probe[761]: bus: 1, device: 7 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[762]: checking bus 1, device 8: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8"
+jun 02 15:09:06 Razer-Blazer mtp-probe[762]: bus: 1, device: 8 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[794]: checking bus 1, device 8: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8"
+jun 02 15:09:06 Razer-Blazer mtp-probe[794]: bus: 1, device: 8 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[796]: checking bus 3, device 4: "/sys/devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.4"
+jun 02 15:09:06 Razer-Blazer mtp-probe[796]: bus: 3, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[799]: checking bus 1, device 4: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5"
+jun 02 15:09:06 Razer-Blazer mtp-probe[799]: bus: 1, device: 4 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]: fsck.fat 4.2 (2021-01-31)
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]: There are differences between boot sector and its backup.
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]: This is mostly harmless. Differences: (offset:original/backup)
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]:   65:00/01
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]:   Not automatically fixing this.
+jun 02 15:09:06 Razer-Blazer systemd-fsck[760]: /dev/nvme0n1p1: 209 files, 160784/1046526 clusters
+jun 02 15:09:06 Razer-Blazer mtp-probe[806]: checking bus 1, device 7: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.1"
+jun 02 15:09:06 Razer-Blazer mtp-probe[806]: bus: 1, device: 7 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[815]: checking bus 2, device 3: "/sys/devices/pci0000:00/0000:00:14.0/usb2/2-1/2-1.1"
+jun 02 15:09:06 Razer-Blazer mtp-probe[815]: bus: 2, device: 3 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished File System Check on /dev/disk/by-uuid/6D6D-4B74.
+░░ Subject: Unidade systemd-fsck@dev-disk-by\x2duuid-6D6D\x2d4B74.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-fsck@dev-disk-by\x2duuid-6D6D\x2d4B74.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer mtp-probe[834]: checking bus 1, device 6: "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-7"
+jun 02 15:09:06 Razer-Blazer mtp-probe[834]: bus: 1, device: 6 was not an MTP device
+jun 02 15:09:06 Razer-Blazer mtp-probe[848]: checking bus 3, device 3: "/sys/devices/pci0000:00/0000:00:1c.0/0000:02:00.0/0000:03:02.0/0000:3a:00.0/usb3/3-1/3-1.3"
+jun 02 15:09:06 Razer-Blazer mtp-probe[848]: bus: 3, device: 3 was not an MTP device
+jun 02 15:09:06 Razer-Blazer systemd[1]: boot.mount: Directory /boot to mount over is not empty, mounting anyway.
+░░ Subject: Ponto de montagem não está vazio
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O diretório /boot está especificado como ponto de montagem (o segundo campo
+░░ no /etc/fstab ou campo Where= no arquivo de unidade do systemd) e não está
+░░ vazio.  Isso não interfere com a montagem, mas os arquivos pré-existentes
+░░ neste diretório se tornaram inacessívels. Para ver aqueles arquivos, sobre os
+░░ quais foi realizada a montagem, por favor monte manualmente o sistema de
+░░ arquivos subjacente para uma localização secundária.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /boot...
+░░ Subject: Unidade boot.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade boot.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /home...
+░░ Subject: Unidade home.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade home.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /mnt/cargo...
+░░ Subject: Unidade mnt-cargo.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade mnt-cargo.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: root.mount: Directory /root to mount over is not empty, mounting anyway.
+░░ Subject: Ponto de montagem não está vazio
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O diretório /root está especificado como ponto de montagem (o segundo campo
+░░ no /etc/fstab ou campo Where= no arquivo de unidade do systemd) e não está
+░░ vazio.  Isso não interfere com a montagem, mas os arquivos pré-existentes
+░░ neste diretório se tornaram inacessívels. Para ver aqueles arquivos, sobre os
+░░ quais foi realizada a montagem, por favor monte manualmente o sistema de
+░░ arquivos subjacente para uma localização secundária.
+jun 02 15:09:06 Razer-Blazer mount[850]: mount: /boot: tipo de sistema de arquivos desconhecido "vfat".
+jun 02 15:09:06 Razer-Blazer mount[850]:        dmesg(1) pode ter mais informação após uma chamada a montar o sistema falhada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /root...
+░░ Subject: Unidade root.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade root.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /srv...
+░░ Subject: Unidade srv.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade srv.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: var-cache.mount: Directory /var/cache to mount over is not empty, mounting anyway.
+░░ Subject: Ponto de montagem não está vazio
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O diretório /var/cache está especificado como ponto de montagem (o segundo campo
+░░ no /etc/fstab ou campo Where= no arquivo de unidade do systemd) e não está
+░░ vazio.  Isso não interfere com a montagem, mas os arquivos pré-existentes
+░░ neste diretório se tornaram inacessívels. Para ver aqueles arquivos, sobre os
+░░ quais foi realizada a montagem, por favor monte manualmente o sistema de
+░░ arquivos subjacente para uma localização secundária.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /var/cache...
+░░ Subject: Unidade var-cache.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-cache.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Virtual Machine and Container Storage (Compatibility) skipped, unmet condition check ConditionPathExists=/var/lib/machines.raw
+░░ Subject: Unidade var-lib-machines.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-lib-machines.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Listening on Disk Image Download Service Socket.
+░░ Subject: Unidade systemd-importd.socket concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-importd.socket concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:06 Razer-Blazer systemd[1]: var-log.mount: Directory /var/log to mount over is not empty, mounting anyway.
+░░ Subject: Ponto de montagem não está vazio
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O diretório /var/log está especificado como ponto de montagem (o segundo campo
+░░ no /etc/fstab ou campo Where= no arquivo de unidade do systemd) e não está
+░░ vazio.  Isso não interfere com a montagem, mas os arquivos pré-existentes
+░░ neste diretório se tornaram inacessívels. Para ver aqueles arquivos, sobre os
+░░ quais foi realizada a montagem, por favor monte manualmente o sistema de
+░░ arquivos subjacente para uma localização secundária.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /var/log...
+░░ Subject: Unidade var-log.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-log.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer ntfs-3g[869]: Version 2022.10.3 external FUSE 29
+jun 02 15:09:06 Razer-Blazer ntfs-3g[869]: Mounted /dev/nvme0n1p3 (Read-Write, label "Cargo", NTFS 3.1)
+jun 02 15:09:06 Razer-Blazer ntfs-3g[869]: Cmdline options: rw,uid=1000,gid=1000,umask=022
+jun 02 15:09:06 Razer-Blazer ntfs-3g[869]: Mount options: allow_other,nonempty,relatime,rw,default_permissions,fsname=/dev/nvme0n1p3,blkdev,blksize=4096
+jun 02 15:09:06 Razer-Blazer ntfs-3g[869]: Global ownership and permissions enforced, configuration type 7
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounting /var/tmp...
+░░ Subject: Unidade var-tmp.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-tmp.mount está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: boot.mount: Mount process exited, code=exited, status=32/n/a
+░░ Subject: Unit process exited
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ An n/a= process belonging to unit boot.mount has exited.
+░░ 
+░░ The process' exit code is 'exited' and its exit status is 32.
+jun 02 15:09:06 Razer-Blazer systemd[1]: boot.mount: Failed with result 'exit-code'.
+░░ Subject: Unit failed
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit boot.mount has entered the 'failed' state with result 'exit-code'.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Failed to mount /boot.
+░░ Subject: A unidade boot.mount falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade boot.mount falhou.
+░░ 
+░░ O resultado é failed.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Dependency failed for Local File Systems.
+░░ Subject: A unidade local-fs.target falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade local-fs.target falhou.
+░░ 
+░░ O resultado é dependency.
+jun 02 15:09:06 Razer-Blazer systemd[1]: local-fs.target: Job local-fs.target/start failed with result 'dependency'.
+jun 02 15:09:06 Razer-Blazer systemd[1]: local-fs.target: Triggering OnFailure= dependencies.
+jun 02 15:09:06 Razer-Blazer nfsrahead[873]: skipping non-NFS device btrfs-1
+jun 02 15:09:06 Razer-Blazer nfsrahead[872]: skipping non-NFS device 8:0
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /home.
+░░ Subject: Unidade home.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade home.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /mnt/cargo.
+░░ Subject: Unidade mnt-cargo.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade mnt-cargo.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /root.
+░░ Subject: Unidade root.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade root.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /srv.
+░░ Subject: Unidade srv.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade srv.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /var/cache.
+░░ Subject: Unidade var-cache.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-cache.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /var/log.
+░░ Subject: Unidade var-log.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-log.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Mounted /var/tmp.
+░░ Subject: Unidade var-tmp.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade var-tmp.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Condition check resulted in /dev/tpm0 being skipped.
+░░ Subject: Unidade dev-tpm0.device concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-tpm0.device concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer nfsrahead[876]: skipping non-NFS device 259:0
+jun 02 15:09:06 Razer-Blazer systemd[1]: systemd-ask-password-wall.path: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-ask-password-wall.path has successfully entered the 'dead' state.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Stopped Forward Password Requests to Wall Directory Watch.
+░░ Subject: A unidade systemd-ask-password-wall.path concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-ask-password-wall.path concluiu o desligamento.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Timer Units.
+░░ Subject: Unidade timers.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade timers.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Listening on Boot Loader Control Service Socket.
+░░ Subject: Unidade systemd-bootctl.socket concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-bootctl.socket concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Listening on System Extension Image Management.
+░░ Subject: Unidade systemd-sysext.socket concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-sysext.socket concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Flush Journal to Persistent Storage...
+░░ Subject: Unidade systemd-journal-flush.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-journal-flush.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Network.
+░░ Subject: Unidade network.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade network.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Network is Online.
+░░ Subject: Unidade network-online.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade network-online.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Path Units.
+░░ Subject: Unidade paths.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade paths.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer nfsrahead[888]: skipping non-NFS device 259:3-fuseblk
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Trusted Platform Module.
+░░ Subject: Unidade tpm2.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade tpm2.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Socket Units.
+░░ Subject: Unidade sockets.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade sockets.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Started Emergency Shell.
+░░ Subject: Unidade emergency.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade emergency.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Reached target Emergency Mode.
+░░ Subject: Unidade emergency.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade emergency.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Tell Plymouth To Write Out Runtime Data...
+░░ Subject: Unidade plymouth-read-write.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-read-write.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Set Up Additional Binary Formats skipped, no trigger condition checks were met.
+░░ Subject: Unidade systemd-binfmt.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-binfmt.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-journald[499]: Time spent on flushing to /var/log/journal/0262533c4ca04359a5f379b8e3f83042 is 13.886ms for 1335 entries.
+jun 02 15:09:06 Razer-Blazer systemd-journald[499]: System Journal (/var/log/journal/0262533c4ca04359a5f379b8e3f83042) is 43.8M, max 50M, 6.1M free.
+░░ Subject: Disk space used by the journal
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ System Journal (/var/log/journal/0262533c4ca04359a5f379b8e3f83042) is currently using 43.8M.
+░░ Maximum allowed usage is set to 50M.
+░░ Leaving at least 4G free (of currently available 401.7G of disk space).
+░░ Enforced usage limit is thus 50M, of which 6.1M are still available.
+░░ 
+░░ The limits controlling how much disk space is used by the journal may
+░░ be configured with SystemMaxUse=, SystemKeepFree=, SystemMaxFileSize=,
+░░ RuntimeMaxUse=, RuntimeKeepFree=, RuntimeMaxFileSize= settings in
+░░ /etc/systemd/journald.conf. See journald.conf(5) for details.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Update Boot Loader Random Seed...
+░░ Subject: Unidade systemd-boot-random-seed.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-boot-random-seed.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd-journald[499]: Received client request to flush runtime journal.
+jun 02 15:09:06 Razer-Blazer systemd[1]: TPM PCR Barrier (Initialization) skipped, unmet condition check ConditionSecurity=measured-uki
+░░ Subject: Unidade systemd-pcrphase-sysinit.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-pcrphase-sysinit.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Load JSON user/group Records from Credentials...
+░░ Subject: Unidade systemd-userdb-load-credentials.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-userdb-load-credentials.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer bootctl[896]: No ESP found, not initializing random seed.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Flush Journal to Persistent Storage.
+░░ Subject: Unidade systemd-journal-flush.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-journal-flush.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Update Boot Loader Random Seed.
+░░ Subject: Unidade systemd-boot-random-seed.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-boot-random-seed.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Load JSON user/group Records from Credentials.
+░░ Subject: Unidade systemd-userdb-load-credentials.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-userdb-load-credentials.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Create System Files and Directories...
+░░ Subject: Unidade systemd-tmpfiles-setup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: systemd-vconsole-setup.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-vconsole-setup.service has successfully entered the 'dead' state.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Stopped Virtual Console Setup.
+░░ Subject: A unidade systemd-vconsole-setup.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu o desligamento.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Stopping Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo desligado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo desligada.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Starting Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo iniciada.
+jun 02 15:09:06 Razer-Blazer systemd-vconsole-setup[945]: All allocated virtual consoles are busy, will not configure key mapping and font.
+jun 02 15:09:06 Razer-Blazer systemd[1]: Finished Virtual Console Setup.
+░░ Subject: Unidade systemd-vconsole-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:06 Razer-Blazer systemd-timesyncd[638]: Network configuration changed, trying to establish connection.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Finished Create System Files and Directories.
+░░ Subject: Unidade systemd-tmpfiles-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-tmpfiles-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Rebuild Dynamic Linker Cache skipped, no trigger condition checks were met.
+░░ Subject: Unidade ldconfig.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade ldconfig.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Initial Setup skipped, unmet condition check ConditionFirstBoot=yes
+░░ Subject: Unidade systemd-firstboot.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-firstboot.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: First Boot Complete skipped, unmet condition check ConditionFirstBoot=yes
+░░ Subject: Unidade first-boot-complete.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade first-boot-complete.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Rebuild Journal Catalog skipped, unmet condition check ConditionNeedsUpdate=/var
+░░ Subject: Unidade systemd-journal-catalog-update.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-journal-catalog-update.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Save Transient machine-id to Disk skipped, unmet condition check ConditionPathIsMountPoint=/etc/machine-id
+░░ Subject: Unidade systemd-machine-id-commit.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-machine-id-commit.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Update is Completed skipped, no trigger condition checks were met.
+░░ Subject: Unidade systemd-update-done.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-update-done.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Starting Record System Boot/Shutdown in UTMP...
+░░ Subject: Unidade systemd-update-utmp.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-update-utmp.service está sendo iniciada.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Finished Record System Boot/Shutdown in UTMP.
+░░ Subject: Unidade systemd-update-utmp.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-update-utmp.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:07 Razer-Blazer systemd[1]: Received SIGRTMIN+20 from PID 146 (plymouthd).
+jun 02 15:09:07 Razer-Blazer systemd[1]: Finished Tell Plymouth To Write Out Runtime Data.
+░░ Subject: Unidade plymouth-read-write.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade plymouth-read-write.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:09:16 Razer-Blazer systemd[1]: Received SIGRTMIN+21 from PID 146 (plymouthd).
+jun 02 15:09:16 Razer-Blazer kernel: fbcon: Taking over console
+jun 02 15:09:16 Razer-Blazer systemd[1]: systemd-vconsole-setup.service: Deactivated successfully.
+░░ Subject: Unit succeeded
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ The unit systemd-vconsole-setup.service has successfully entered the 'dead' state.
+jun 02 15:09:16 Razer-Blazer systemd[1]: Stopped Virtual Console Setup.
+░░ Subject: A unidade systemd-vconsole-setup.service concluiu o desligamento
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu o desligamento.
+jun 02 15:09:16 Razer-Blazer systemd[1]: Stopping Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo desligado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo desligada.
+jun 02 15:09:16 Razer-Blazer systemd[1]: Starting Virtual Console Setup...
+░░ Subject: Unidade systemd-vconsole-setup.service sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service está sendo iniciada.
+jun 02 15:09:16 Razer-Blazer kernel: Console: switching to colour frame buffer device 240x67
+jun 02 15:09:16 Razer-Blazer systemd-vconsole-setup[966]: Configuration of first virtual console was skipped, ignoring remaining ones.
+jun 02 15:09:16 Razer-Blazer systemd[1]: Finished Virtual Console Setup.
+░░ Subject: Unidade systemd-vconsole-setup.service concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-vconsole-setup.service concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:10:35 Razer-Blazer systemd[1]: dev-zram0.device: Job dev-zram0.device/start timed out.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Timed out waiting for device /dev/zram0.
+░░ Subject: A unidade dev-zram0.device falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-zram0.device falhou.
+░░ 
+░░ O resultado é timeout.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Dependency failed for Compressed Swap on /dev/zram0.
+░░ Subject: A unidade dev-zram0.swap falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade dev-zram0.swap falhou.
+░░ 
+░░ O resultado é dependency.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Dependency failed for Create swap on /dev/zram0.
+░░ Subject: A unidade systemd-zram-setup@zram0.service falhou
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade systemd-zram-setup@zram0.service falhou.
+░░ 
+░░ O resultado é dependency.
+jun 02 15:10:35 Razer-Blazer systemd[1]: systemd-zram-setup@zram0.service: Job systemd-zram-setup@zram0.service/start failed with result 'dependency'.
+jun 02 15:10:35 Razer-Blazer systemd[1]: dev-zram0.swap: Job dev-zram0.swap/start failed with result 'dependency'.
+jun 02 15:10:35 Razer-Blazer systemd[1]: dev-zram0.device: Job dev-zram0.device/start failed with result 'timeout'.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Reached target Swaps.
+░░ Subject: Unidade swap.target concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade swap.target concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:10:35 Razer-Blazer systemd[1]: tmp.mount: Directory /tmp to mount over is not empty, mounting anyway.
+░░ Subject: Ponto de montagem não está vazio
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ O diretório /tmp está especificado como ponto de montagem (o segundo campo
+░░ no /etc/fstab ou campo Where= no arquivo de unidade do systemd) e não está
+░░ vazio.  Isso não interfere com a montagem, mas os arquivos pré-existentes
+░░ neste diretório se tornaram inacessívels. Para ver aqueles arquivos, sobre os
+░░ quais foi realizada a montagem, por favor monte manualmente o sistema de
+░░ arquivos subjacente para uma localização secundária.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Mounting /tmp...
+░░ Subject: Unidade tmp.mount sendo iniciado
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade tmp.mount está sendo iniciada.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Mounted /tmp.
+░░ Subject: Unidade tmp.mount concluiu a inicialização
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ A unidade tmp.mount concluiu a inicialização.
+░░ 
+░░ The start-up result is done.
+jun 02 15:10:35 Razer-Blazer systemd[1]: Startup finished in 6.505s (firmware) + 1.930s (loader) + 840ms (kernel) + 2.836s (initrd) + 1min 31.528s (userspace) = 1min 43.641s.
+░░ Subject: Inicialização do sistema foi concluída
+░░ Defined-By: systemd
+░░ Support: https://lists.freedesktop.org/mailman/listinfo/systemd-devel
+░░ 
+░░ Todos os serviços do sistema necessários que estão enfileirados para
+░░ executar na inicialização do sistema, foram iniciados com sucesso. Note
+░░ que isso não significa que a máquina está ociosa, pois os serviços podem
+░░ ainda estar ocupados com a inicialização completa.
+░░ 
+░░ Inicialização do kernel precisou 840586 microssegundos.
+░░ 
+░░ Disco de RAM inicial precisou de 2836884 microssegundos.
+░░ 
+░░ Inicialização do espaço do usuário precisou de 91528487 microssegundos.

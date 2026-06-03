@@ -1,6 +1,8 @@
-use crate::boot::{BootDiagnosis, BootHealth};
+use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
-use crate::ui::term::{THEME, clear_screen, header, line, title, tree_branch, tree_stem};
+use crate::ui::term::{
+    THEME, clear_screen, header, line, path, title, tree_branch, tree_stem, truncate_for_terminal,
+};
 use anyhow::{Context, Result};
 use console::style;
 use std::path::Path;
@@ -33,6 +35,115 @@ pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
 }
 
+/// Menu de resolução no resgate. As duas pontas do desync são `"/boot"` e `"/"`.
+/// Cada item diz o que mexe. ESC retorna `None` (volta/sai). Índice 0 = ajustar
+/// `"/boot"`; demais = abrir o restore.
+pub(crate) fn select_rescue_action(
+    ctx: &RescueContext,
+    current_kernel: &str,
+    default_kernel: &str,
+    boot_kernel: &str,
+) -> Result<Option<usize>> {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} os kernels de {} e do {} não estão sincronizados",
+        style("!").yellow().bold(),
+        path("/boot"),
+        path("/")
+    ));
+    println!(
+        "{} {:<COL$} {}  kernel {}  (resgate)",
+        tree_branch(false),
+        "montado",
+        path(&ctx.current_subvol),
+        current_kernel
+    );
+    println!(
+        "{} {:<COL$} {}  kernel {}",
+        tree_branch(false),
+        "boota",
+        path(&ctx.default_subvol),
+        default_kernel
+    );
+    println!(
+        "{} {:<COL$} {} {}  kernel {} (difere do {})",
+        tree_branch(true),
+        "boot",
+        style("✗").red().bold(),
+        path("/boot"),
+        boot_kernel,
+        path("/")
+    );
+    println!();
+    // Itens em texto plano e truncados à largura do terminal. Cor/ANSI dentro de
+    // um item do Select quebra a medição de largura, e item que dá wrap faz o
+    // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
+    // linhas de diagnóstico acima, impressas direto.
+    let items: Vec<String> = [
+        format!(
+            "Manter o root atual (kernel {default_kernel}) — ajusta o /boot   [só /boot; mantém root e home]"
+        ),
+        "Restaurar só o / (escolher kernel) — mantém home e root".to_string(),
+        "Mudar o que boota — restore completo (outro instantâneo ou desfazer)".to_string(),
+    ]
+    .iter()
+    .map(|t| truncate_for_terminal(t, 4))
+    .collect();
+    dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Como resolver?")
+        .items(&items)
+        .default(0)
+        .clear(true)
+        .report(true)
+        .interact_opt()
+        .context("seleção cancelada")
+}
+
+pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {
+    eprintln!(
+        "  {} não foi possível montar o root padrão para resolver automaticamente: {error:#}",
+        style("!").yellow().bold()
+    );
+    eprintln!("  seguindo com instrução manual:");
+    println!();
+}
+
+pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
+    clear_screen();
+    header("Diagnóstico de boot");
+    line(format_args!(
+        "{} você está num snapshot de resgate",
+        style("!").yellow().bold()
+    ));
+    println!("{} {:<COL$} {}", tree_branch(false), "montado em /", ctx.current_subvol);
+    println!(
+        "{} {:<COL$} {} (conforme fstab)",
+        tree_branch(false),
+        "boota",
+        ctx.default_subvol
+    );
+    println!(
+        "{} {:<COL$} sincronizar /boot daqui miraria o root errado",
+        tree_branch(true),
+        "risco"
+    );
+    println!();
+    println!("  monte o root padrão e rode o doctor contra ele:");
+    println!(
+        "    {}",
+        style(format!(
+            "mount -o subvol=/{} {} /mnt/at",
+            ctx.default_subvol, ctx.device
+        ))
+        .bold()
+    );
+    println!(
+        "    {}",
+        style("snapg doctor --root /mnt/at --boot /boot --apply").bold()
+    );
+}
+
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
     clear_screen();
     header("Diagnóstico de boot");
@@ -47,8 +158,8 @@ fn print_target(target: &DoctorTarget) {
         style("·").dim(),
         target.label
     ));
-    println!("{} root  {}", tree_branch(false), target.root.display());
-    println!("{} boot  {}", tree_branch(false), target.boot.display());
+    println!("{} root  {}", tree_branch(false), path(&target.root_display));
+    println!("{} boot  {}", tree_branch(false), path(&target.boot.display().to_string()));
 }
 
 pub(crate) fn print_no_action_needed() {
@@ -59,8 +170,8 @@ pub(crate) fn print_suggested_sync(target: &DoctorTarget) {
     println!();
     line(format_args!(
         "ação sugerida: sincronizar {} com {}",
-        target.boot.display(),
-        target.root.display()
+        path(&target.boot.display().to_string()),
+        path(&target.root_display)
     ));
 }
 
@@ -107,7 +218,7 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
                 "estado"
             );
         }
-        BootHealth::NeedsSync => {
+        BootHealth::NeedsSync(BootIssue::KernelMismatch) => {
             println!(
                 "{} {:<COL$} {} dessincronizado com o root alvo",
                 tree_branch(true),
@@ -115,5 +226,37 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
                 style("✗").red().bold()
             );
         }
+        BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
+            println!(
+                "{} {:<COL$} {} sincronização incompleta (backup de boot remanescente)",
+                tree_branch(true),
+                "estado",
+                style("✗").red().bold()
+            );
+        }
+        BootHealth::Unmounted => print_unmounted(root),
     }
+}
+
+/// /boot deveria ser FAT32 (fstab) mas não está montado. Não dá pra diagnosticar
+/// nem sincronizar daqui; orienta montar ou recuperar por Live ISO.
+fn print_unmounted(root: &Path) {
+    let boot = root.join("boot");
+    println!(
+        "{} {:<COL$} {} /boot não está montado (fstab declara FAT32)",
+        tree_branch(true),
+        "estado",
+        style("✗").red().bold()
+    );
+    println!();
+    println!("  monte-o e rode de novo:  {}", style(format!("mount {}", boot.display())).bold());
+    println!();
+    println!("  se o kernel atual não montar vfat (emergency shell), use uma Live ISO:");
+    println!("    1. boot pela Live ISO");
+    println!("    2. monte o root BTRFS em /mnt");
+    println!("    3. monte a partição FAT32 em /mnt/boot");
+    println!(
+        "    4. {}",
+        style("snapg doctor --root /mnt --boot /mnt/boot --apply").bold()
+    );
 }

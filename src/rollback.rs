@@ -275,6 +275,72 @@ fn cleanup_preps(preps: &[Prep], toplevel: &Path) {
 
 /// Fase 2: faz os renames que efetivam o rollback. Apenas metadata, atômico
 /// por syscall. Falha aqui é rara (mesma fs, sem IO).
+/// Rollback do root para `src`, com o subvol ativo **explícito** (`root_subvol`,
+/// ex: "@") em vez de derivado do mount vivo. Num boot de resgate `/` é um
+/// snapshot, não o `@` que boota — o caminho normal arquivaria o subvol errado.
+/// Reusa o mesmo rename-dance e regret do fluxo normal, só com o alvo fixo. Caso
+/// de um membro só, então sem a máquina de revert-partial multi-membro.
+pub fn rollback_root_explicit(toplevel: &Path, root_subvol: &str, src: &Path) -> Result<Done> {
+    let current_subvol = root_subvol.to_string();
+    let backup_subvol = regret_name(&current_subvol);
+
+    // Slot de regret ocupado: move pra aside (preserva o undo anterior até o novo
+    // commitar) ou para se houver aside órfão de tentativa interrompida.
+    let regret_path = toplevel.join(&backup_subvol);
+    let aside_name = regret_aside_name(&current_subvol);
+    let aside_path = toplevel.join(&aside_name);
+    let asided = if regret_path.exists() {
+        if aside_path.exists() {
+            bail!(
+                "aside órfão em {} — tentativa anterior interrompida; resolva manualmente",
+                aside_path.display()
+            );
+        }
+        fs::rename(&regret_path, &aside_path)
+            .with_context(|| format!("mover regret {backup_subvol} pra aside {aside_name}"))?;
+        true
+    } else {
+        false
+    };
+
+    // Fase 1: cópia writable do snapshot. Falha aqui = nada commitado; restaura
+    // o aside e sai limpo.
+    let intermediate = toplevel.join(prep_intermediate_name(&current_subvol));
+    if intermediate.exists() {
+        let _ = btrfs::delete_subvolume(&intermediate);
+    }
+    if let Err(e) = btrfs::create_snapshot(src, &intermediate) {
+        if asided {
+            let _ = fs::rename(&aside_path, &regret_path);
+        }
+        return Err(e).with_context(|| format!("criar cópia writable de {}", src.display()));
+    }
+
+    // Fase 2: rename-dance (live→regret, prep→live, fix .snapshots). commit_prep
+    // já reverte seus próprios passos em falha; aqui só restauramos o aside.
+    let prep = Prep {
+        config: "root".to_string(),
+        mountpoint: "/".to_string(),
+        current_subvol,
+        backup_subvol,
+    };
+    let done = match commit_prep(&prep, toplevel) {
+        Ok(d) => d,
+        Err(e) => {
+            if asided {
+                let _ = fs::rename(&aside_path, &regret_path);
+            }
+            return Err(e);
+        }
+    };
+
+    // Commit OK: o regret anterior (asided) virou obsoleto. Best-effort.
+    if asided {
+        let _ = btrfs::delete_subvolume(&aside_path);
+    }
+    Ok(done)
+}
+
 fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
     let intermediate = toplevel.join(prep_intermediate_name(&p.current_subvol));
     let current = toplevel.join(&p.current_subvol);

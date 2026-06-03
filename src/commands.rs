@@ -6,7 +6,7 @@ use crate::rollback::{self, RollbackError};
 use crate::ui::restore::{RegretEntry, RegretInfo, RestorePlan, select_restore_plan};
 use crate::snapper;
 use crate::ui::snapshots;
-use crate::ui::term::clear_screen;
+use crate::ui::term::{clear_screen, confirm};
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
@@ -74,6 +74,62 @@ pub fn restore() -> Result<()> {
     result
 }
 
+/// Restaura só o `/` para um snapshot escolhido, preservando `home`/`root_home`.
+/// O doctor usa isto para "manter o kernel do `/boot`" ajustando a outra ponta
+/// (o `/`). Varre os snapshots de root direto do toplevel (funciona inclusive
+/// num boot de resgate) e reverte com o subvol-alvo `@` explícito.
+pub fn restore_root_only() -> Result<()> {
+    let root_subvol = boot::default_root_subvol()
+        .context("não foi possível determinar o subvol de / pelo fstab")?;
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = restore_root_only_inner(&mount_path, &root_subvol);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
+    let snaps = scan_root_snapshots(mount_path, root_subvol)?;
+    if snaps.is_empty() {
+        crate::ui::restore::print_no_root_snapshots();
+        return Ok(());
+    }
+
+    // Deduplica por kernel: o propósito da Opção C é casar o root com o kernel do
+    // /boot, e todos os snapshots de um mesmo kernel bootam igual. `snaps` vem
+    // ordenado por número desc, então o primeiro de cada kernel é o mais recente.
+    // Escolher um ponto-no-tempo específico é assunto do restore completo.
+    let mut seen = std::collections::HashSet::new();
+    let rows: Vec<crate::ui::restore::RootSnapshotRow> = snaps
+        .iter()
+        .filter(|s| seen.insert(s.kernel.clone()))
+        .map(|s| crate::ui::restore::RootSnapshotRow {
+            number: s.number,
+            date: s.date.clone(),
+            kernel: s.kernel.clone(),
+            name: s.name.clone(),
+        })
+        .collect();
+
+    let current_kernel = boot::running_kernel().unwrap_or_default();
+    let Some(number) = crate::ui::restore::select_root_snapshot(&rows, &current_kernel)? else {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    };
+
+    if !confirm(&format!(
+        "Restaurar o / para o snapshot #{number}? Troca o root que boota (home e /root ficam intactos)."
+    ))? {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    }
+
+    execute_restore_root_to_snapshot(mount_path, root_subvol, number)
+}
+
 /// Descobre regrets existentes no toplevel.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
@@ -135,6 +191,97 @@ fn root_member(group: &Group) -> Result<Option<&Member>> {
         }
     }
     Ok(None)
+}
+
+/// Um snapshot de root varrido direto do toplevel (`@/.snapshots/N/snapshot`),
+/// sem snapper — funciona inclusive de dentro de um boot de resgate.
+struct RootSnap {
+    number: u32,
+    kernel: String,
+    date: String,
+    /// Nome do backup, se foi feito pelo snapgroup (descrição do `info.xml`).
+    name: Option<String>,
+}
+
+/// Varre os snapshots de root no toplevel, contornando a cegueira do snapper num
+/// boot de resgate (`/.snapshots` do snapshot está vazio). Lê kernel e data
+/// direto do subvol, e o nome do backup do `info.xml` (só quando é snapgroup).
+fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSnap>> {
+    let dir = toplevel.join(root_subvol).join(".snapshots");
+    let mut snaps = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("ler {}", dir.display()))? {
+        let entry = entry?;
+        let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let src = entry.path().join("snapshot");
+        if !src.join("usr/lib/modules").exists() {
+            continue; // não é um snapshot de root válido
+        }
+        snaps.push(RootSnap {
+            number,
+            kernel: boot::kernel_label(&src),
+            date: btrfs::subvol_creation_time(&src).unwrap_or_default(),
+            name: snapgroup_backup_name(&entry.path().join("info.xml")),
+        });
+    }
+    // Mais recente primeiro.
+    snaps.sort_by_key(|s| std::cmp::Reverse(s.number));
+    Ok(snaps)
+}
+
+/// Nome de um backup feito pelo snapgroup: a `<description>` do `info.xml`, mas
+/// só quando o snapshot tem `snapgroup-id` no userdata (senão é timeline/pacman,
+/// sem nome útil). Extração mínima de string — sem crate de XML. `None` se não
+/// for snapgroup, o arquivo não existir, ou a descrição for vazia.
+fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
+    let content = fs::read_to_string(info_xml).ok()?;
+    if !content.contains("snapgroup-id") {
+        return None;
+    }
+    let open = "<description>";
+    let close = "</description>";
+    let start = content.find(open)? + open.len();
+    let rest = &content[start..];
+    let end = rest.find(close)?;
+    let val = rest[..end].trim();
+    (!val.is_empty()).then(|| val.to_string())
+}
+
+/// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
+/// explícito (`@` do fstab) — preserva `home` e `root_home`. O sync pós-rollback
+/// garante consistência do `/boot`: no-op se o snapshot já casa com o `/boot`,
+/// senão reescreve. Em falha de sync, bloqueia o reboot (não bricka).
+fn execute_restore_root_to_snapshot(
+    toplevel: &Path,
+    root_subvol: &str,
+    number: u32,
+) -> Result<()> {
+    let src = toplevel
+        .join(root_subvol)
+        .join(".snapshots")
+        .join(number.to_string())
+        .join("snapshot");
+
+    let done = rollback::rollback_root_explicit(toplevel, root_subvol, &src)
+        .with_context(|| format!("rollback de / para o snapshot #{number}"))?;
+    crate::ui::restore::print_root_restore_done(number, &done);
+
+    let restored_root = toplevel.join(root_subvol);
+    if let Err(e) = boot::sync_fat32(&restored_root) {
+        return abort_reboot_boot_desync(
+            &restored_root,
+            e,
+            "verifique /boot manualmente (vmlinuz/initramfs vs /usr/lib/modules \
+             do root) antes de reiniciar; não reinicie enquanto não corresponderem.",
+        );
+    }
+
+    prompt_reboot()
 }
 
 /// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
@@ -504,3 +651,4 @@ fn prompt_reboot() -> Result<()> {
     }
     Ok(())
 }
+

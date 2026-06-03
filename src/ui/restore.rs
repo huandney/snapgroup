@@ -142,8 +142,88 @@ pub(crate) fn select_restore_action(
     Ok(actions.remove(selection))
 }
 
+/// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
+/// anotado para o usuário escolher o que casa com o `/boot`.
+pub(crate) struct RootSnapshotRow {
+    pub(crate) number: u32,
+    pub(crate) date: String,
+    pub(crate) kernel: String,
+    /// Nome do backup quando feito pelo snapgroup (ex: "Atual 2").
+    pub(crate) name: Option<String>,
+}
+
+/// Picker para "restaurar só o /": lista os kernels disponíveis (deduplicados),
+/// com o nome do backup snapgroup quando houver e a data esmaecida. Retorna o
+/// número do snapshot escolhido (o mais recente daquele kernel), ou `None` no ESC.
+pub(crate) fn select_root_snapshot(
+    rows: &[RootSnapshotRow],
+    current_kernel: &str,
+) -> Result<Option<u32>> {
+    let mut items: Vec<String> = Vec::new();
+    let max = (console::Term::stdout().size().1 as usize).saturating_sub(4);
+
+    clear_screen();
+    header("Restaurar só o / — qual kernel?");
+
+    for r in rows {
+        let marked = if r.kernel == current_kernel {
+            format!("{} (atual)", r.kernel)
+        } else {
+            r.kernel.clone()
+        };
+        let kver = format!("{marked:<26}");
+        let name = format!("{:<16}", r.name.as_deref().unwrap_or("—"));
+        let date = short_datetime(&r.date);
+        let plain = format!("kernel {kver} {name} {date}");
+        // Dim na data só quando a linha plana cabe (ANSI dentro de item do Select
+        // quebra a medição/wrap). Se não couber, cai no plano truncado.
+        let item = if plain.chars().count() <= max {
+            format!("kernel {kver} {name} {}", style(date).dim())
+        } else {
+            truncate_for_terminal(&plain, 4)
+        };
+        items.push(item);
+    }
+
+    let Some(selection) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("Qual kernel manter no /")
+        .items(&items)
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(rows[selection].number))
+}
+
 pub(crate) fn print_no_restore_points() {
     println!("nenhum checkpoint ou regret encontrado — nada pra restaurar");
+}
+
+pub(crate) fn print_no_root_snapshots() {
+    clear_screen();
+    header("Restaurar só o /");
+    println!();
+    line(format_args!(
+        "{} nenhum snapshot de / disponível aqui",
+        style("✗").red().bold()
+    ));
+    line(format_args!(
+        "um boot de resgate não enxerga os snapshots do config root: eles ficam"
+    ));
+    line(format_args!(
+        "fora da visão do snapshot atual. Restaurar o / precisa de um boot normal."
+    ));
+    println!();
+    line(format_args!("{}", style("enter para voltar").dim()));
+    // Pausa até Enter — sem isso o loop do doctor limparia a tela e a mensagem
+    // sumiria antes de ser lida.
+    let mut discard = String::new();
+    let _ = std::io::stdin().read_line(&mut discard);
 }
 
 pub(crate) fn print_cancelled() {
@@ -165,6 +245,15 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
 
 pub(crate) fn print_cancelled_boot_risk() {
     println!("cancelado (risco de dessincronização de boot)");
+}
+
+pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {
+    println!(
+        "{} / restaurado para o snapshot #{} (home e /root intactos)",
+        style("✓").green().bold(),
+        number
+    );
+    println!("    root anterior arquivado como {}", done.backup_subvol);
 }
 
 pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback::Done]) {

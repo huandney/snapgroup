@@ -49,6 +49,9 @@ const HEADER_COLOR: u8 = 173;
 const REGRET_COLOR: u8 = 109;
 /// Cor de marca: mais forte que os cabeçalhos, mas sem usar verde/vermelho de status.
 const BRAND_COLOR: u8 = 214;
+/// Azul dessaturado para destacar paths (/boot, /, /@) sem aspas — diferencia o
+/// token do texto sem poluir o visual.
+const PATH_COLOR: u8 = 110;
 /// Versão exibida na UI. O manifesto fica plain (X.Y.Z) pelo esquema de release;
 /// o sufixo de pré-lançamento mora só aqui.
 pub const DISPLAY_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-beta");
@@ -129,6 +132,12 @@ pub fn tree_stem(last: bool) -> &'static str {
 /// o verde de sucesso.
 pub fn regret_title(s: &str) -> console::StyledObject<&str> {
     console::style(s).color256(REGRET_COLOR).bold()
+}
+
+/// Path destacado em cor própria (sem aspas), para diferenciar tokens como
+/// /boot, / e /@ do texto ao redor.
+pub fn path(s: &str) -> console::StyledObject<&str> {
+    console::style(s).color256(PATH_COLOR)
 }
 
 /// Pergunta de confirmação em negrito. Reservado pras decisões consequentes
