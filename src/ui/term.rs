@@ -12,7 +12,19 @@ use std::time::Duration;
 /// `finish_and_clear` ao terminar. Indentado pra casar com o `CONTENT_INDENT`.
 pub fn spinner(message: String) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::with_template("   {spinner} {wide_msg}").unwrap());
+    // Spinner na cor de marca dos cabeçalhos (trigo, HEADER_COLOR), pra casar
+    // com o `▪ Sincronização de boot` no topo.
+    let template = format!("   {{spinner:.{HEADER_COLOR}}} {{wide_msg}}");
+    pb.set_style(
+        ProgressStyle::with_template(&template)
+            .unwrap()
+            // Braille girando (suave, sentido horário). O último frame é o
+            // "concluído" do indicatif — irrelevante aqui porque finalizamos com
+            // finish_and_clear, mas é exigido pela API.
+            .tick_strings(&[
+                "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", "⠿",
+            ]),
+    );
     pb.enable_steady_tick(Duration::from_millis(120));
     pb.set_message(message);
     pb
@@ -235,4 +247,17 @@ pub fn confirm(prompt: &str) -> Result<bool> {
         .interact_opt()
         .context("seleção cancelada")?;
     Ok(matches!(choice, Some(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinner_template_is_valid() {
+        // O template é parseado em runtime; sem este teste, uma cor 256 ou
+        // placeholder inválido viraria panic no `unwrap` só durante um restore.
+        let template = format!("   {{spinner:.{HEADER_COLOR}}} {{wide_msg}}");
+        assert!(ProgressStyle::with_template(&template).is_ok());
+    }
 }
