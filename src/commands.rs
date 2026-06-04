@@ -15,6 +15,12 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone, Copy)]
+enum RestoreRegretPolicy {
+    Update,
+    PreserveExisting,
+}
+
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
     let desc = description.unwrap_or_else(|| format!("snapg save {id}"));
@@ -58,21 +64,32 @@ fn kill_regrets(configs: &[String]) -> Result<()> {
 }
 
 pub fn restore() -> Result<()> {
+    restore_with_policy(RestoreRegretPolicy::Update)
+}
+
+pub fn restore_preserving_regret() -> Result<()> {
+    restore_with_policy(RestoreRegretPolicy::PreserveExisting)
+}
+
+fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada");
     }
 
-    let groups = group::list_groups()?;
-
     // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
+
+    let mut groups = group::list_groups()?;
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = restore_inner(&groups, &configs, &mount_path);
+    let result = (|| -> Result<()> {
+        augment_root_member_from_toplevel(&mut groups, &configs, &mount_path)?;
+        restore_inner(&groups, &configs, &mount_path, regret_policy)
+    })();
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
@@ -247,7 +264,12 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
     }))
 }
 
-fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Result<()> {
+fn restore_inner(
+    groups: &[Group],
+    configs: &[String],
+    mount_path: &Path,
+    regret_policy: RestoreRegretPolicy,
+) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
 
     if groups.is_empty() && regret.is_none() {
@@ -270,10 +292,54 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
             Ok(())
         }
         Some(RestorePlan::Checkpoint(selected)) => {
-            execute_restore_checkpoint(&selected, mount_path)
+            execute_restore_checkpoint(&selected, mount_path, regret_policy)
         }
         Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
+}
+
+fn augment_root_member_from_toplevel(
+    groups: &mut Vec<Group>,
+    configs: &[String],
+    toplevel: &Path,
+) -> Result<()> {
+    let Some((root_config, root_subvol)) = root_config_and_subvol(configs)? else {
+        return Ok(());
+    };
+
+    for member in scan_root_members_from_toplevel(toplevel, &root_subvol, &root_config)? {
+        let Some(id) = group::extract_id(&member.snapshot) else {
+            continue;
+        };
+        match groups.iter_mut().find(|g| g.id == id) {
+            Some(g) => {
+                if !g.members.iter().any(|m| m.config == root_config) {
+                    g.members.push(member);
+                    g.members.sort_by(|a, b| a.config.cmp(&b.config));
+                }
+            }
+            None => groups.push(Group {
+                id,
+                members: vec![member],
+            }),
+        }
+    }
+
+    groups.sort_by_key(|g| std::cmp::Reverse(g.id));
+    Ok(())
+}
+
+fn root_config_and_subvol(configs: &[String]) -> Result<Option<(String, String)>> {
+    for cfg in configs {
+        let mp = snapper::config_subvolume(cfg)?;
+        if mp == "/" {
+            let Some(root_subvol) = boot::default_root_subvol() else {
+                return Ok(None);
+            };
+            return Ok(Some((cfg.clone(), root_subvol)));
+        }
+    }
+    Ok(None)
 }
 
 fn group_kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<group::GroupId, String> {
@@ -350,22 +416,146 @@ fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSna
     Ok(snaps)
 }
 
+fn scan_root_members_from_toplevel(
+    toplevel: &Path,
+    root_subvol: &str,
+    root_config: &str,
+) -> Result<Vec<Member>> {
+    let dir = toplevel.join(root_subvol).join(".snapshots");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut members = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("ler {}", dir.display()))? {
+        let entry = entry?;
+        let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let src = entry.path().join("snapshot");
+        if !src.join("usr/lib/modules").exists() {
+            continue;
+        }
+        let Some(snapshot) = snapshot_from_info_xml(&entry.path().join("info.xml"), &src, number)?
+        else {
+            continue;
+        };
+        members.push(Member {
+            config: root_config.to_string(),
+            snapshot,
+        });
+    }
+    Ok(members)
+}
+
+fn snapshot_from_info_xml(
+    info_xml: &Path,
+    snapshot_path: &Path,
+    number: u32,
+) -> Result<Option<snapper::Snapshot>> {
+    let content = fs::read_to_string(info_xml).with_context(|| format!("ler {}", info_xml.display()))?;
+    let Some(group_id) = snapgroup_id_from_info_xml(&content) else {
+        return Ok(None);
+    };
+    let mut userdata = serde_json::Map::new();
+    userdata.insert(
+        "snapgroup-id".to_string(),
+        serde_json::Value::String(group_id),
+    );
+    Ok(Some(snapper::Snapshot {
+        number,
+        kind: xml_text(&content, "type").unwrap_or_default(),
+        date: xml_text(&content, "date")
+            .unwrap_or_else(|| btrfs::subvol_creation_time(snapshot_path).unwrap_or_default()),
+        user: xml_text(&content, "user").unwrap_or_default(),
+        description: xml_text(&content, "description").unwrap_or_default(),
+        cleanup: xml_text(&content, "cleanup").unwrap_or_default(),
+        userdata: Some(serde_json::Value::Object(userdata)),
+    }))
+}
+
 /// Nome de um backup feito pelo snapgroup: a `<description>` do `info.xml`, mas
 /// só quando o snapshot tem `snapgroup-id` no userdata (senão é timeline/pacman,
 /// sem nome útil). Extração mínima de string — sem crate de XML. `None` se não
 /// for snapgroup, o arquivo não existir, ou a descrição for vazia.
 fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
     let content = fs::read_to_string(info_xml).ok()?;
-    if !content.contains("snapgroup-id") {
+    snapgroup_id_from_info_xml(&content)?;
+    xml_text(&content, "description").filter(|val| !val.is_empty())
+}
+
+fn snapgroup_id_from_info_xml(content: &str) -> Option<String> {
+    for block in xml_blocks(content, "userdata") {
+        let Some(key) = xml_text(block, "key") else {
+            continue;
+        };
+        if key != "snapgroup-id" {
+            continue;
+        }
+        let value = xml_text(block, "value")?;
+        if is_digits(&value) {
+            return Some(value);
+        }
         return None;
     }
-    let open = "<description>";
-    let close = "</description>";
-    let start = content.find(open)? + open.len();
+
+    snapgroup_id_from_inline_userdata(content)
+}
+
+fn snapgroup_id_from_inline_userdata(content: &str) -> Option<String> {
+    let marker = "snapgroup-id=";
+    let start = content.find(marker)? + marker.len();
+    let id: String = content[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    is_digits(&id).then_some(id)
+}
+
+fn is_digits(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
+}
+
+fn xml_blocks<'a>(content: &'a str, tag: &str) -> Vec<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut blocks = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find(&open) {
+        rest = &rest[start + open.len()..];
+        let Some(end) = rest.find(&close) else {
+            break;
+        };
+        blocks.push(&rest[..end]);
+        rest = &rest[end + close.len()..];
+    }
+    blocks
+}
+
+fn xml_text(content: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = content.find(&open)? + open.len();
     let rest = &content[start..];
-    let end = rest.find(close)?;
-    let val = rest[..end].trim();
-    (!val.is_empty()).then(|| val.to_string())
+    let end = rest.find(&close)?;
+    Some(unescape_xml(rest[..end].trim()))
+}
+
+fn unescape_xml(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
@@ -383,11 +573,12 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
+    let label = btrfs::now_local_label().context("obter label de tempo")?;
     let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
-    let result = rollback::rollback_root_explicit(toplevel, root_subvol, &src);
+    let result = rollback::rollback_root_explicit_preserving_regret(toplevel, root_subvol, &src, &label);
     pb.finish_and_clear();
-    let rollback = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
-    crate::ui::restore::print_root_restore_done(number, &rollback.done);
+    let done = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
+    crate::ui::restore::print_root_restore_done(number, &done);
 
     let restored_root = toplevel.join(root_subvol);
     if let Err(e) = boot::sync_fat32(&restored_root) {
@@ -399,7 +590,7 @@ fn execute_restore_root_to_snapshot(
         );
     }
 
-    finish_restore_with_undo(&[rollback.done], &rollback.preserved_regret_asides, toplevel)
+    finish_restore_with_undo(&[done], &[], toplevel)
 }
 
 /// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
@@ -428,6 +619,7 @@ fn boot_will_change(group: &Group, toplevel: &Path) -> Result<bool> {
 fn execute_restore_checkpoint(
     group: &Group,
     mount_path: &Path,
+    regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
     if should_warn_fat32(group, mount_path) && !crate::ui::restore::confirm_fat32_boot()? {
         crate::ui::restore::print_cancelled_boot_risk();
@@ -436,19 +628,28 @@ fn execute_restore_checkpoint(
 
     let configs: Vec<String> = group.members.iter().map(|m| m.config.clone()).collect();
 
-    // Move o regret anterior pra aside (não deleta): preserva o botão de
-    // arrependimento antigo até o reboot. Isso permite desfazer um restore sem
-    // reboot no futuro restaurando o estado anterior completo, inclusive o
-    // Regret que existia antes deste restore. O cleanup durável apaga o aside
-    // só no próximo boot, quando o novo root já virou realidade.
-    let asides = rollback::aside_existing_regrets(mount_path, &configs)?;
+    let asides = match regret_policy {
+        RestoreRegretPolicy::Update => {
+            // Move o regret anterior pra aside (não deleta): preserva o botão de
+            // arrependimento antigo até o reboot. Isso permite desfazer um restore
+            // sem reboot restaurando o estado anterior completo.
+            rollback::aside_existing_regrets(mount_path, &configs)?
+        }
+        RestoreRegretPolicy::PreserveExisting => Vec::new(),
+    };
 
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
         group.members.len()
     ));
-    let outcome = rollback::rollback_group(group, mount_path);
+    let outcome = match regret_policy {
+        RestoreRegretPolicy::Update => rollback::rollback_group(group, mount_path),
+        RestoreRegretPolicy::PreserveExisting => {
+            let label = btrfs::now_local_label().context("obter label de tempo")?;
+            rollback::rollback_group_preserving_regret(group, mount_path, &label)
+        }
+    };
     pb.finish_and_clear();
     match outcome {
         Ok(done) => {
@@ -725,7 +926,7 @@ fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::pa
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         for (_, _, current) in &cfg_map {
-            let prefix = format!("{current}_snapg_discard_");
+            let prefix = rollback::discard_prefix(current);
             let aside = rollback::regret_aside_name(current);
             if name.starts_with(&prefix) || name == aside {
                 found.push((name, entry.path()));
@@ -811,7 +1012,7 @@ fn arm_cleanup_for_restore(
     asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
-    if asides.is_empty() {
+    if asides.is_empty() && !done.iter().any(done_needs_boot_cleanup) {
         return Ok(());
     }
 
@@ -824,6 +1025,11 @@ fn arm_cleanup_for_restore(
         Err(e) => crate::ui::restore::print_cleanup_arm_failed(&e),
     }
     Ok(())
+}
+
+fn done_needs_boot_cleanup(done: &rollback::Done) -> bool {
+    done.backup_subvol
+        .starts_with(&rollback::discard_prefix(&done.current_subvol))
 }
 
 fn prompt_reboot() -> Result<()> {
@@ -846,4 +1052,79 @@ fn reboot_now() -> Result<()> {
         bail!("systemctl reboot -i falhou com status {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{snapgroup_id_from_info_xml, xml_text};
+
+    #[test]
+    fn extracts_snapgroup_id_from_key_value_userdata() {
+        let xml = r#"
+            <snapshot>
+              <userdata>
+                <key>snapgroup-id</key>
+                <value>1790000000</value>
+              </userdata>
+            </snapshot>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000000")
+        );
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_from_equals_userdata() {
+        let xml = r#"<userdata>snapgroup-id=1790000001</userdata>"#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000001")
+        );
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_from_matching_userdata_block() {
+        let xml = r#"
+            <snapshot>
+              <userdata>
+                <key>numeric-other</key>
+                <value>111</value>
+              </userdata>
+              <userdata>
+                <key>snapgroup-id</key>
+                <value>1790000002</value>
+              </userdata>
+            </snapshot>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000002")
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_snapgroup_id_value() {
+        let xml = r#"
+            <userdata>
+              <key>snapgroup-id</key>
+              <value>179x</value>
+            </userdata>
+        "#;
+
+        assert_eq!(snapgroup_id_from_info_xml(xml), None);
+    }
+
+    #[test]
+    fn reads_and_unescapes_xml_text() {
+        let xml = r#"<description>root &amp; boot &lt;ok&gt;</description>"#;
+
+        assert_eq!(
+            xml_text(xml, "description").as_deref(),
+            Some("root & boot <ok>")
+        );
+    }
 }

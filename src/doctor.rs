@@ -118,7 +118,7 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                 drop(mount);
                 {
                     let _lock = crate::lock::acquire()?;
-                    crate::commands::restore()?;
+                    crate::commands::restore_preserving_regret()?;
                 }
             }
         }
