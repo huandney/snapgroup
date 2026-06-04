@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-beta] - 2026-06-04
+> Commits: `bb8208e`, `9461dfa`, `75ae17a`, `cb25b05`, `2939975`, `5a66b57`, `175fb1d`, `862d98a`, `5f65c69`, `9dec3ee`
+
+### Boot / Recovery
+- **Feature**: Add an assisted rescue flow in `snapg doctor` for interrupted `/boot` syncs and rescue boots, including target-root detection, backup discovery, kernel-aware choices, and a scoped root-only restore path.
+- **Feature**: Stream restore execution output in-place so long `/boot` backup and `mkinitcpio` operations show live progress instead of leaving the TUI apparently frozen.
+- **Fix**: Detect leftover `/boot` backups and unmounted FAT32 boot partitions instead of reporting a false all-clear after interrupted recovery work.
+- **Fix**: Gate doctor sync with the same short-circuit/lock rules as restore so recovery actions do not rewrite `/boot` unnecessarily or race another mutating `snapg` command.
+
+### Restore / TUI
+- **Feature**: Refresh the restore, doctor, and delete screens with a consistent branded layout, bounded checkpoint summaries, clearer confirmation prompts, and paginated delete confirmation for large checkpoint sets.
+- **Refine**: Warn about FAT32 `/boot` only when the selected restore changes kernel artifacts, keeping same-kernel restores quiet and fast.
+
 ## [0.4.0-beta] - 2026-06-01
 > Commits: `c7d2d73`, `97b7072`, `d883c41`
 
