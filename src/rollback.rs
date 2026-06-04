@@ -105,74 +105,6 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
     Ok(())
 }
 
-/// Nome do aside temporário pro regret anterior durante um restore checkpoint.
-/// Sufixo distinto de `_snapg_regret`, `.snapgroup_prep` e `_snapg_discard_*`
-/// pra não colidir com nada que rollback_group/revert criem.
-/// Ex: "@" → "@.snapgroup_regret_aside"
-pub fn regret_aside_name(current_subvol: &str) -> String {
-    format!("{current_subvol}.snapgroup_regret_aside")
-}
-
-/// Regret anterior movido pro lado durante um restore checkpoint, à espera do
-/// resultado do rollback.
-pub struct AsidedRegret {
-    pub config: String,
-    pub regret_subvol: String, // nome canônico: "@_snapg_regret"
-    pub aside_subvol: String,  // "@.snapgroup_regret_aside"
-}
-
-/// Move os regrets existentes pra um nome aside, em vez de deletá-los.
-/// Diferente de `delete_existing_regrets`: preserva o "botão de arrependimento"
-/// anterior até o novo rollback commitar. Se o rollback falhar e o sistema
-/// voltar a um estado limpo, o caller restaura o aside (`restore_asides`); em
-/// estado ambíguo, preserva. Idempotente quanto a regrets ausentes.
-pub fn aside_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<Vec<AsidedRegret>> {
-    let mut asides = Vec::new();
-    for cfg in configs {
-        let mp = snapper::config_subvolume(cfg)?;
-        let current = btrfs::subvol_relative_path(Path::new(&mp))
-            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
-        let rname = regret_name(&current);
-        let regret_path = toplevel.join(&rname);
-        if !regret_path.exists() {
-            continue;
-        }
-        let aname = regret_aside_name(&current);
-        let aside_path = toplevel.join(&aname);
-        // Aside órfão = restou de uma tentativa anterior abortada. Estado
-        // inesperado: não sobrescrever (perderia o regret antigo). Para.
-        if aside_path.exists() {
-            bail!(
-                "aside órfão encontrado em {} — provável tentativa anterior \
-                 interrompida. Resolva manualmente antes de novo restore.",
-                aside_path.display()
-            );
-        }
-        fs::rename(&regret_path, &aside_path)
-            .with_context(|| format!("mover regret {rname} pra aside {aname}"))?;
-        asides.push(AsidedRegret {
-            config: cfg.clone(),
-            regret_subvol: rname,
-            aside_subvol: aname,
-        });
-    }
-    Ok(asides)
-}
-
-/// Restaura os asides de volta ao nome canônico de regret. Usar SOMENTE quando
-/// o sistema vivo está num estado limpo conhecido (slots `_snapg_regret`
-/// livres): rollback falhou na Fase 1, ou `revert_partial` concluiu.
-pub fn restore_asides(asides: &[AsidedRegret], toplevel: &Path) -> Result<()> {
-    for a in asides {
-        let aside_path = toplevel.join(&a.aside_subvol);
-        let regret_path = toplevel.join(&a.regret_subvol);
-        fs::rename(&aside_path, &regret_path).with_context(|| {
-            format!("restaurar aside {} → {}", a.aside_subvol, a.regret_subvol)
-        })?;
-    }
-    Ok(())
-}
-
 /// Two-phase rollback de um grupo.
 ///
 /// Fase 1 (preparação, IO-pesada): cria `<subvol>.snapgroup_prep` a partir
@@ -187,7 +119,7 @@ pub fn restore_asides(asides: &[AsidedRegret], toplevel: &Path) -> Result<()> {
 /// um grupo, retorna `RollbackError` com os membros já commitados pra que
 /// o caller decida se reverte (`revert_partial`).
 ///
-/// INVARIANTE: o caller DEVE ter deletado regrets existentes antes de chamar.
+/// INVARIANTE: o caller DEVE garantir que não há restore pendente antes de chamar.
 pub fn rollback_group(group: &Group, toplevel: &Path) -> Result<Vec<Done>, RollbackError> {
     rollback_group_with_commit(group, toplevel, CommitMode::Regret)
 }
@@ -331,18 +263,106 @@ pub fn rollback_root_explicit_preserving_regret(
 
 fn commit_prep(p: &Prep, toplevel: &Path) -> Result<Done> {
     let backup_subvol = regret_name(&p.current_subvol);
-    commit_prepared_subvol(p, toplevel, &backup_subvol)
+    commit_prepared_subvol(p, toplevel, &backup_subvol, true)
 }
 
 fn commit_prep_preserving_regret(p: &Prep, toplevel: &Path, label: &str) -> Result<Done> {
     let discard_subvol = discard_name(&p.current_subvol, label);
-    commit_prepared_subvol(p, toplevel, &discard_subvol)
+    commit_prepared_subvol(p, toplevel, &discard_subvol, false)
 }
 
-fn commit_prepared_subvol(p: &Prep, toplevel: &Path, backup_subvol: &str) -> Result<Done> {
+struct StashedBackup {
+    original_subvol: String,
+    stashed_subvol: String,
+}
+
+fn stale_regret_name(current_subvol: &str, label: &str) -> String {
+    format!(
+        "{}old-regret_{}_{}",
+        discard_prefix(current_subvol),
+        label,
+        std::process::id()
+    )
+}
+
+fn stash_existing_backup(
+    toplevel: &Path,
+    original_subvol: &str,
+    current_subvol: &str,
+) -> Result<StashedBackup> {
+    let label = btrfs::now_local_label().context("obter label de tempo")?;
+    let stashed_subvol = stale_regret_name(current_subvol, &label);
+    let original = toplevel.join(original_subvol);
+    let stashed = toplevel.join(&stashed_subvol);
+    if stashed.exists() {
+        bail!("destino temporário de Regret antigo já existe: {}", stashed.display());
+    }
+    fs::rename(&original, &stashed).with_context(|| {
+        format!("preservar Regret anterior {original_subvol} em {stashed_subvol}")
+    })?;
+    Ok(StashedBackup {
+        original_subvol: original_subvol.to_string(),
+        stashed_subvol,
+    })
+}
+
+fn restore_stashed_backup(stashed_backup: &Option<StashedBackup>, toplevel: &Path) -> Result<()> {
+    let Some(stashed_backup) = stashed_backup else {
+        return Ok(());
+    };
+    fs::rename(
+        toplevel.join(&stashed_backup.stashed_subvol),
+        toplevel.join(&stashed_backup.original_subvol),
+    )
+    .with_context(|| {
+        format!(
+            "restaurar Regret anterior {} → {}",
+            stashed_backup.stashed_subvol, stashed_backup.original_subvol
+        )
+    })
+}
+
+fn restore_stashed_backup_error_note(
+    stashed_backup: &Option<StashedBackup>,
+    toplevel: &Path,
+) -> String {
+    match restore_stashed_backup(stashed_backup, toplevel) {
+        Ok(()) => String::new(),
+        Err(e) => format!("; restaurar Regret anterior falhou: {e:#}"),
+    }
+}
+
+fn delete_stashed_backup(stashed_backup: Option<StashedBackup>, toplevel: &Path, config: &str) {
+    let Some(stashed_backup) = stashed_backup else {
+        return;
+    };
+    let stashed = toplevel.join(&stashed_backup.stashed_subvol);
+    if let Err(e) = btrfs::delete_subvolume(&stashed) {
+        crate::ui::rollback::print_stashed_regret_delete_failed(config, &stashed, &e);
+    }
+}
+
+fn commit_prepared_subvol(
+    p: &Prep,
+    toplevel: &Path,
+    backup_subvol: &str,
+    replace_existing_backup: bool,
+) -> Result<Done> {
     let intermediate = toplevel.join(prep_intermediate_name(&p.current_subvol));
     let current = toplevel.join(&p.current_subvol);
     let backup = toplevel.join(backup_subvol);
+
+    let stashed_backup = if backup.exists() && replace_existing_backup {
+        match stash_existing_backup(toplevel, backup_subvol, &p.current_subvol) {
+            Ok(stashed_backup) => Some(stashed_backup),
+            Err(e) => {
+                let _ = btrfs::delete_subvolume(&intermediate);
+                return Err(e);
+            }
+        }
+    } else {
+        None
+    };
 
     if backup.exists() {
         let _ = btrfs::delete_subvolume(&intermediate);
@@ -353,10 +373,11 @@ fn commit_prepared_subvol(p: &Prep, toplevel: &Path, backup_subvol: &str) -> Res
     // sobrevive (kernel referencia por inode, não path).
     if let Err(e) = fs::rename(&current, &backup) {
         let _ = btrfs::delete_subvolume(&intermediate);
+        let restore_note = restore_stashed_backup_error_note(&stashed_backup, toplevel);
         return Err(e).with_context(|| {
             format!(
-                "renomear subvol ativo {} → {}",
-                p.current_subvol, backup_subvol
+                "renomear subvol ativo {} → {}{}",
+                p.current_subvol, backup_subvol, restore_note
             )
         });
     }
@@ -365,7 +386,13 @@ fn commit_prepared_subvol(p: &Prep, toplevel: &Path, backup_subvol: &str) -> Res
     if let Err(e) = fs::rename(&intermediate, &current) {
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
-        return Err(e).with_context(|| format!("promover intermediate → {}", p.current_subvol));
+        let restore_note = restore_stashed_backup_error_note(&stashed_backup, toplevel);
+        return Err(e).with_context(|| {
+            format!(
+                "promover intermediate → {}{}",
+                p.current_subvol, restore_note
+            )
+        });
     }
 
     // Etapa 3: corrige `.snapshots` aninhado (foi junto do backup no rename).
@@ -377,13 +404,16 @@ fn commit_prepared_subvol(p: &Prep, toplevel: &Path, backup_subvol: &str) -> Res
         let _ = fs::rename(&current, &intermediate);
         let _ = fs::rename(&backup, &current);
         let _ = btrfs::delete_subvolume(&intermediate);
+        let restore_note = restore_stashed_backup_error_note(&stashed_backup, toplevel);
         return Err(e).with_context(|| {
             format!(
-                "mover .snapshots de {} pro novo {}",
-                backup_subvol, p.current_subvol
+                "mover .snapshots de {} pro novo {}{}",
+                backup_subvol, p.current_subvol, restore_note
             )
         });
     }
+
+    delete_stashed_backup(stashed_backup, toplevel, &p.config);
 
     Ok(Done {
         config: p.config.clone(),
@@ -418,21 +448,29 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
             })?;
         }
 
-        // 1. Move o subvol revertido pra fora do nome ativo
-        fs::rename(&current, &discard)
-            .with_context(|| format!("revert {}: tirar revertido de {}", d.config, d.current_subvol))?;
+        // 1. Move o subvol revertido pra fora do nome ativo. Em recuperação
+        // manual/interrompida ele pode já ter sumido; nesse caso o undo só
+        // precisa restaurar o regret para o nome ativo.
+        let moved_current_to_discard = current.exists();
+        if moved_current_to_discard {
+            fs::rename(&current, &discard).with_context(|| {
+                format!("revert {}: tirar revertido de {}", d.config, d.current_subvol)
+            })?;
+        }
 
         // 2. Restaura o backup pro nome ativo (fstab volta a achar)
         if let Err(e) = fs::rename(&backup, &current) {
             // Tenta voltar o discard pro lugar (estado consistente com falha)
-            let _ = fs::rename(&discard, &current);
+            if moved_current_to_discard {
+                let _ = fs::rename(&discard, &current);
+            }
             return Err(e).with_context(|| {
                 format!("revert {}: restaurar backup {}", d.config, d.backup_subvol)
             });
         }
 
         // 3. Apaga o subvol revertido (SEGURO aqui — nunca foi montado).
-        if let Err(e) = btrfs::delete_subvolume(&discard) {
+        if moved_current_to_discard && let Err(e) = btrfs::delete_subvolume(&discard) {
             crate::ui::rollback::print_discard_delete_failed(&d.config, &discard, &e);
         }
     }

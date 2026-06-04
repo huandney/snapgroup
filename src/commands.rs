@@ -5,7 +5,7 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    PostRestoreAction, RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
+    PostRestoreAction, RegretEntry, RegretInfo, RegretKind, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm};
@@ -19,6 +19,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 enum RestoreRegretPolicy {
     Update,
     PreserveExisting,
+}
+
+impl RestoreRegretPolicy {
+    fn needs_rescue_root_scan(self) -> bool {
+        matches!(self, RestoreRegretPolicy::PreserveExisting)
+    }
+
+    fn updates_regret(self) -> bool {
+        matches!(self, RestoreRegretPolicy::Update)
+    }
 }
 
 pub fn save(description: Option<String>) -> Result<()> {
@@ -87,7 +97,9 @@ fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
     let result = (|| -> Result<()> {
-        augment_root_member_from_toplevel(&mut groups, &configs, &mount_path)?;
+        if regret_policy.needs_rescue_root_scan() {
+            augment_root_member_from_toplevel(&mut groups, &configs, &mount_path)?;
+        }
         restore_inner(&groups, &configs, &mount_path, regret_policy)
     })();
     let _ = btrfs::umount_toplevel(&mount_path);
@@ -121,7 +133,7 @@ pub fn has_pending_restore() -> Result<bool> {
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = pending_restore_from_live(&mount_path, &configs).map(|p| p.is_some());
+    let result = pending_restore_from_live(&configs).map(|p| p.is_some());
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
@@ -137,22 +149,18 @@ pub fn undo_pending_restore() -> Result<()> {
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
     let result = (|| -> Result<()> {
-        let Some((done, asides)) = pending_restore_from_live(&mount_path, &configs)? else {
+        let Some(done) = pending_restore_from_live(&configs)? else {
             bail!("nenhuma restauração pendente de reboot encontrada");
         };
-        undo_restore_before_reboot(&done, &asides, &mount_path)
+        undo_restore_before_reboot(&done, &mount_path)
     })();
 
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
 
-fn pending_restore_from_live(
-    toplevel: &Path,
-    configs: &[String],
-) -> Result<Option<(Vec<rollback::Done>, Vec<rollback::AsidedRegret>)>> {
+fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::Done>>> {
     let mut done = Vec::new();
-    let mut asides = Vec::new();
 
     for cfg in configs {
         let mountpoint = snapper::config_subvolume(cfg)?;
@@ -162,22 +170,6 @@ fn pending_restore_from_live(
             continue;
         };
         let current_subvol = current_subvol.to_string();
-        if !toplevel.join(&current_subvol).exists() {
-            bail!(
-                "restauração pendente inconsistente: {} existe, mas {} não",
-                live_subvol,
-                current_subvol
-            );
-        }
-
-        let aside_subvol = rollback::regret_aside_name(&current_subvol);
-        if toplevel.join(&aside_subvol).exists() {
-            asides.push(rollback::AsidedRegret {
-                config: cfg.clone(),
-                regret_subvol: live_subvol.clone(),
-                aside_subvol,
-            });
-        }
 
         done.push(rollback::Done {
             config: cfg.clone(),
@@ -190,7 +182,19 @@ fn pending_restore_from_live(
     if done.is_empty() {
         return Ok(None);
     }
-    Ok(Some((done, asides)))
+    Ok(Some(done))
+}
+
+fn ensure_no_pending_restore(configs: &[String]) -> Result<()> {
+    if pending_restore_from_live(configs)?.is_none() {
+        return Ok(());
+    }
+
+    bail!(
+        "já existe uma restauração pendente de reboot.\n  \
+         Reinicie para concluir a restauração atual ou rode 'snapg restore' \
+         e selecione o Regret no menu para desfazê-la."
+    )
 }
 
 fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
@@ -234,6 +238,14 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
 
 /// Descobre regrets existentes no toplevel.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
+    if let Some(done) = pending_restore_from_live(configs)? {
+        return Ok(Some(regret_from_pending_restore(toplevel, done)));
+    }
+
+    discover_archived_regrets(toplevel, configs)
+}
+
+fn discover_archived_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
     for cfg in configs {
         let mp = snapper::config_subvolume(cfg)?;
@@ -254,14 +266,36 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
     if entries.is_empty() {
         return Ok(None);
     }
-    // Creation time do primeiro regret (todos criados no mesmo instante).
-    let first_path = toplevel.join(&entries[0].regret_subvol);
-    let creation_time = btrfs::subvol_creation_time(&first_path)
-        .unwrap_or_else(|_| String::from("data desconhecida"));
     Ok(Some(RegretInfo {
+        creation_time: regret_creation_time(toplevel, &entries),
         entries,
-        creation_time,
+        kind: RegretKind::Archived,
     }))
+}
+
+fn regret_from_pending_restore(toplevel: &Path, done: Vec<rollback::Done>) -> RegretInfo {
+    let entries: Vec<RegretEntry> = done
+        .into_iter()
+        .map(|d| RegretEntry {
+            config: d.config,
+            mountpoint: d.mountpoint,
+            current_subvol: d.current_subvol,
+            regret_subvol: d.backup_subvol,
+        })
+        .collect();
+    RegretInfo {
+        creation_time: regret_creation_time(toplevel, &entries),
+        entries,
+        kind: RegretKind::PendingRestore,
+    }
+}
+
+fn regret_creation_time(toplevel: &Path, entries: &[RegretEntry]) -> String {
+    let Some(first) = entries.first() else {
+        return String::from("data desconhecida");
+    };
+    btrfs::subvol_creation_time(&toplevel.join(&first.regret_subvol))
+        .unwrap_or_else(|_| String::from("data desconhecida"))
 }
 
 fn restore_inner(
@@ -457,6 +491,9 @@ fn snapshot_from_info_xml(
     snapshot_path: &Path,
     number: u32,
 ) -> Result<Option<snapper::Snapshot>> {
+    // Fallback de resgate para o mesmo contrato que `snapper::list` entrega no
+    // caminho normal. O Snapper fica cego ao root quando `/` é um snapshot
+    // Limine, então este parser manual lê só os campos necessários do info.xml.
     let content = fs::read_to_string(info_xml).with_context(|| format!("ler {}", info_xml.display()))?;
     let Some(group_id) = snapgroup_id_from_info_xml(&content) else {
         return Ok(None);
@@ -590,7 +627,7 @@ fn execute_restore_root_to_snapshot(
         );
     }
 
-    finish_restore_with_undo(&[done], &[], toplevel)
+    finish_restore_with_undo(&[done], toplevel)
 }
 
 /// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
@@ -627,16 +664,9 @@ fn execute_restore_checkpoint(
     }
 
     let configs: Vec<String> = group.members.iter().map(|m| m.config.clone()).collect();
-
-    let asides = match regret_policy {
-        RestoreRegretPolicy::Update => {
-            // Move o regret anterior pra aside (não deleta): preserva o botão de
-            // arrependimento antigo até o reboot. Isso permite desfazer um restore
-            // sem reboot restaurando o estado anterior completo.
-            rollback::aside_existing_regrets(mount_path, &configs)?
-        }
-        RestoreRegretPolicy::PreserveExisting => Vec::new(),
-    };
+    if regret_policy.updates_regret() {
+        ensure_no_pending_restore(&configs)?;
+    }
 
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
@@ -671,29 +701,17 @@ fn execute_restore_checkpoint(
                 }
             }
 
-            finish_restore_with_undo(&done, &asides, mount_path)
+            finish_restore_with_undo(&done, mount_path)
         }
         Err(rerr) => {
-            match handle_partial(group, rerr, mount_path)? {
-                // Estado limpo conhecido: slots de regret canônicos livres.
-                PartialOutcome::Clean => {
-                    rollback::restore_asides(&asides, mount_path)
-                        .context("restaurar regret anterior após reversão limpa")?;
-                    if !asides.is_empty() {
-                        crate::ui::restore::print_previous_regret_restored();
-                    }
-                }
-                // Estado ambíguo: preserva o aside e instrui recuperação manual.
-                PartialOutcome::Indeterminate => {
-                    crate::ui::restore::print_preserved_asides(&asides, mount_path);
-                }
-            }
+            handle_partial(group, rerr, mount_path)?;
             bail!("rollback do grupo {} não concluído", group.id)
         }
     }
 }
 
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
+    let kind = regret.kind;
     let done: Vec<rollback::Done> = regret
         .entries
         .into_iter()
@@ -705,8 +723,15 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
         })
         .collect();
 
+    match kind {
+        RegretKind::Archived => restore_archived_regret(&done, mount_path),
+        RegretKind::PendingRestore => undo_restore_before_reboot(&done, mount_path),
+    }
+}
+
+fn restore_archived_regret(done: &[rollback::Done], mount_path: &Path) -> Result<()> {
     let label = btrfs::now_local_label().context("obter label de tempo")?;
-    rollback::revert_regret(&done, mount_path, &label).context("restaurar regret")?;
+    rollback::revert_regret(done, mount_path, &label).context("restaurar regret")?;
 
     crate::ui::restore::print_regret_restore_done(done.len());
 
@@ -739,37 +764,26 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     prompt_reboot()
 }
 
-/// Veredito do estado do sistema vivo após uma falha de rollback. Decide se o
-/// regret anterior (aside) pode voltar automaticamente ao nome canônico.
-enum PartialOutcome {
-    /// Estado limpo conhecido: slots `_snapg_regret` canônicos livres.
-    /// Fase 1 falhou (nada tocado), ou `revert_partial` concluiu.
-    Clean,
-    /// Estado ambíguo: recuperação manual escolhida, ou `revert_partial`
-    /// falhou no meio. O slot canônico pode estar ocupado — não mexer.
-    Indeterminate,
-}
-
-fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<PartialOutcome> {
+fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
     crate::ui::restore::print_partial_failure(g.id, &rerr);
 
     // Fase 1 falhou: sistema vivo 100% intocado, nenhum regret novo criado.
     if rerr.done.is_empty() {
-        return Ok(PartialOutcome::Clean);
+        return Ok(());
     }
 
     if !crate::ui::restore::confirm_revert_partial(rerr.done.len())? {
         crate::ui::restore::print_manual_recovery(&rerr.done, mount_path);
-        return Ok(PartialOutcome::Indeterminate);
+        return Ok(());
     }
 
     if let Err(re) = rollback::revert_partial(&rerr.done, mount_path) {
         crate::ui::restore::print_auto_revert_failed(&re, mount_path);
-        return Ok(PartialOutcome::Indeterminate);
+        return Ok(());
     }
 
     crate::ui::restore::print_partial_reverted();
-    Ok(PartialOutcome::Clean)
+    Ok(())
 }
 
 pub fn delete(yes: bool) -> Result<()> {
@@ -916,9 +930,7 @@ fn boot_clean_inner(mount_path: &Path) -> Result<()> {
 }
 
 /// Descobre sobras pós-restore no toplevel:
-/// - `_snapg_discard_*`, deixados por `revert_regret`;
-/// - `.snapgroup_regret_aside`, Regret antigo preservado durante checkpoint
-///   restore para permitir desfazer sem reboot.
+/// - `_snapg_discard_*`, deixados por `revert_regret` e pelo doctor.
 fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let cfg_map = config_subvol_map()?;
     let mut found = Vec::new();
@@ -927,8 +939,7 @@ fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::pa
         let name = entry.file_name().to_string_lossy().into_owned();
         for (_, _, current) in &cfg_map {
             let prefix = rollback::discard_prefix(current);
-            let aside = rollback::regret_aside_name(current);
-            if name.starts_with(&prefix) || name == aside {
+            if name.starts_with(&prefix) {
                 found.push((name, entry.path()));
                 break;
             }
@@ -965,17 +976,16 @@ fn abort_reboot_boot_desync(restored_root: &Path, e: anyhow::Error, recovery: &s
 
 fn finish_restore_with_undo(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
     match crate::ui::restore::select_post_restore_action()? {
-        PostRestoreAction::Undo => undo_restore_before_reboot(done, asides, mount_path),
+        PostRestoreAction::Undo => undo_restore_before_reboot(done, mount_path),
         PostRestoreAction::RebootNow => {
-            arm_cleanup_for_restore(done, asides, mount_path)?;
+            arm_cleanup_for_restore(done, mount_path)?;
             reboot_now()
         }
         PostRestoreAction::RebootLater => {
-            arm_cleanup_for_restore(done, asides, mount_path)?;
+            arm_cleanup_for_restore(done, mount_path)?;
             crate::ui::restore::print_manual_reboot();
             Ok(())
         }
@@ -984,12 +994,9 @@ fn finish_restore_with_undo(
 
 fn undo_restore_before_reboot(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
     rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
-    rollback::restore_asides(asides, mount_path)
-        .context("restaurar Regret anterior após desfazer restauração")?;
 
     if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
         let restored_root = mount_path.join(&root.current_subvol);
@@ -1009,10 +1016,9 @@ fn undo_restore_before_reboot(
 
 fn arm_cleanup_for_restore(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
-    if asides.is_empty() && !done.iter().any(done_needs_boot_cleanup) {
+    if !done.iter().any(done_needs_boot_cleanup) {
         return Ok(());
     }
 

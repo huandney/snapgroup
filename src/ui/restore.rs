@@ -27,6 +27,13 @@ pub(crate) struct RegretEntry {
 pub(crate) struct RegretInfo {
     pub(crate) entries: Vec<RegretEntry>,
     pub(crate) creation_time: String,
+    pub(crate) kind: RegretKind,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RegretKind {
+    Archived,
+    PendingRestore,
 }
 
 #[derive(Clone, Copy)]
@@ -330,10 +337,6 @@ pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback
     }
 }
 
-pub(crate) fn print_previous_regret_restored() {
-    eprintln!("  regret anterior restaurado");
-}
-
 pub(crate) fn print_regret_restore_done(done_len: usize) {
     println!("{} regret restaurado ({} membros)", style("✓").green().bold(), done_len);
     println!("  subvols atuais preservados como discard (limpos no próximo boot)");
@@ -492,6 +495,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     Ok(Some(RegretInfo {
         entries,
         creation_time: regret.creation_time.clone(),
+        kind: regret.kind,
     }))
 }
 
@@ -621,32 +625,6 @@ pub(crate) fn print_auto_revert_failed(error: &anyhow::Error, mount_path: &Path)
 pub(crate) fn print_partial_reverted() {
     println!();
     println!("{} rollback parcial revertido — sistema voltou ao estado pré-restore", style("✓").green().bold());
-}
-
-/// Imprime onde cada regret anterior ficou preservado (estado ambíguo) e o
-/// comando de reativação por config. O usuário está em recuperação manual:
-/// só deve renomear de volta após confirmar que o slot canônico está livre.
-pub(crate) fn print_preserved_asides(asides: &[rollback::AsidedRegret], mount_path: &Path) {
-    if asides.is_empty() {
-        return;
-    }
-    eprintln!();
-    eprintln!("regret anterior preservado (não restaurado: estado ambíguo):");
-    for a in asides {
-        eprintln!(
-            "  {}: {}",
-            a.config,
-            mount_path.join(&a.aside_subvol).display()
-        );
-    }
-    eprintln!("  reative só após confirmar que {{subvol}}_snapg_regret está livre:");
-    for a in asides {
-        eprintln!(
-            "  sudo mv {} {}",
-            mount_path.join(&a.aside_subvol).display(),
-            mount_path.join(&a.regret_subvol).display()
-        );
-    }
 }
 
 pub(crate) fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
