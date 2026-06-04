@@ -5,6 +5,7 @@ mod commands;
 mod doctor;
 mod group;
 mod lock;
+mod proc;
 mod rollback;
 mod snapper;
 mod sudo;

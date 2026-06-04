@@ -1,15 +1,16 @@
 use crate::boot;
 use crate::btrfs;
 use crate::doctor;
-use crate::group::{self, Group};
+use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
-use crate::ui::restore::{
-    RegretEntry, RegretInfo, RestoreAction, RestoreFlow, review_checkpoint_restore,
-    review_regret_restore, select_checkpoint_members, select_regret_members, select_restore_action,
-};
 use crate::snapper;
+use crate::ui::restore::{
+    PostRestoreAction, RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
+};
 use crate::ui::snapshots;
+use crate::ui::term::{clear_screen, confirm};
 use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -76,6 +77,144 @@ pub fn restore() -> Result<()> {
     result
 }
 
+/// Restaura só o `/` para um snapshot escolhido, preservando `home`/`root_home`.
+/// O doctor usa isto para "manter o kernel do `/boot`" ajustando a outra ponta
+/// (o `/`). Varre os snapshots de root direto do toplevel (funciona inclusive
+/// num boot de resgate) e reverte com o subvol-alvo `@` explícito.
+pub fn restore_root_only() -> Result<()> {
+    let root_subvol = boot::default_root_subvol()
+        .context("não foi possível determinar o subvol de / pelo fstab")?;
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = restore_root_only_inner(&mount_path, &root_subvol);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+pub fn has_pending_restore() -> Result<bool> {
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        return Ok(false);
+    }
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = pending_restore_from_live(&mount_path, &configs).map(|p| p.is_some());
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+pub fn undo_pending_restore() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        bail!("nenhuma config snapper encontrada");
+    }
+
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+
+    let result = (|| -> Result<()> {
+        let Some((done, asides)) = pending_restore_from_live(&mount_path, &configs)? else {
+            bail!("nenhuma restauração pendente de reboot encontrada");
+        };
+        undo_restore_before_reboot(&done, &asides, &mount_path)
+    })();
+
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+fn pending_restore_from_live(
+    toplevel: &Path,
+    configs: &[String],
+) -> Result<Option<(Vec<rollback::Done>, Vec<rollback::AsidedRegret>)>> {
+    let mut done = Vec::new();
+    let mut asides = Vec::new();
+
+    for cfg in configs {
+        let mountpoint = snapper::config_subvolume(cfg)?;
+        let live_subvol = btrfs::subvol_relative_path(Path::new(&mountpoint))
+            .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
+        let Some(current_subvol) = live_subvol.strip_suffix("_snapg_regret") else {
+            continue;
+        };
+        let current_subvol = current_subvol.to_string();
+        if !toplevel.join(&current_subvol).exists() {
+            bail!(
+                "restauração pendente inconsistente: {} existe, mas {} não",
+                live_subvol,
+                current_subvol
+            );
+        }
+
+        let aside_subvol = rollback::regret_aside_name(&current_subvol);
+        if toplevel.join(&aside_subvol).exists() {
+            asides.push(rollback::AsidedRegret {
+                config: cfg.clone(),
+                regret_subvol: live_subvol.clone(),
+                aside_subvol,
+            });
+        }
+
+        done.push(rollback::Done {
+            config: cfg.clone(),
+            mountpoint,
+            current_subvol,
+            backup_subvol: live_subvol,
+        });
+    }
+
+    if done.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some((done, asides)))
+}
+
+fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
+    let snaps = scan_root_snapshots(mount_path, root_subvol)?;
+    if snaps.is_empty() {
+        crate::ui::restore::print_no_root_snapshots();
+        return Ok(());
+    }
+
+    // Deduplica por kernel: o propósito da Opção C é casar o root com o kernel do
+    // /boot, e todos os snapshots de um mesmo kernel bootam igual. `snaps` vem
+    // ordenado por número desc, então o primeiro de cada kernel é o mais recente.
+    // Escolher um ponto-no-tempo específico é assunto do restore completo.
+    let mut seen = std::collections::HashSet::new();
+    let rows: Vec<crate::ui::restore::RootSnapshotRow> = snaps
+        .iter()
+        .filter(|s| seen.insert(s.kernel.clone()))
+        .map(|s| crate::ui::restore::RootSnapshotRow {
+            number: s.number,
+            date: s.date.clone(),
+            kernel: s.kernel.clone(),
+            name: s.name.clone(),
+        })
+        .collect();
+
+    let current_kernel = boot::running_kernel().unwrap_or_default();
+    let Some(number) = crate::ui::restore::select_root_snapshot(&rows, &current_kernel)? else {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    };
+
+    if !confirm(&format!(
+        "Restaurar o / para o snapshot #{number}? Troca o root que boota (home e /root ficam intactos)."
+    ))? {
+        crate::ui::restore::print_cancelled();
+        return Ok(());
+    }
+
+    execute_restore_root_to_snapshot(mount_path, root_subvol, number)
+}
+
 /// Descobre regrets existentes no toplevel.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
@@ -110,91 +249,187 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
 
 fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
-    let has_regret = regret.is_some();
 
-    if groups.is_empty() && !has_regret {
+    if groups.is_empty() && regret.is_none() {
         crate::ui::restore::print_no_restore_points();
         return Ok(());
     }
 
-    loop {
-        let action = select_restore_action(groups, regret.as_ref())?;
-        match action {
-            RestoreAction::Checkpoint(group_id) => {
-                let group = groups.iter().find(|g| g.id == group_id).unwrap();
-                // Loop interno: Back no review volta pra cá (seleção de membros),
-                // um passo só. Esc nos membros quebra pro menu de pontos.
-                loop {
-                    let Some(selected) = select_checkpoint_members(group)? else {
-                        break;
-                    };
-                    match review_checkpoint_restore(group, &selected)? {
-                        RestoreFlow::Continue => {
-                            return execute_restore_checkpoint(&selected, mount_path);
-                        }
-                        RestoreFlow::Back => continue,
-                        RestoreFlow::Abort => {
-                            crate::ui::restore::print_cancelled();
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            RestoreAction::Regret => {
-                loop {
-                    let Some(selected) = select_regret_members(regret.as_ref().unwrap())? else {
-                        break;
-                    };
-                    match review_regret_restore(regret.as_ref().unwrap(), &selected)? {
-                        RestoreFlow::Continue => {
-                            return execute_restore_regret(selected, mount_path);
-                        }
-                        RestoreFlow::Back => continue,
-                        RestoreFlow::Abort => {
-                            crate::ui::restore::print_cancelled();
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            RestoreAction::Abort => {
-                crate::ui::restore::print_cancelled();
-                return Ok(());
-            }
+    // Wizard interativo no alternate screen; ao sair, executa no terminal normal.
+    let kernel_labels = group_kernel_labels(groups, mount_path);
+    let regret_kernel = regret.as_ref().map(|r| regret_kernel_label(r, mount_path));
+
+    match select_restore_plan(
+        groups,
+        regret.as_ref(),
+        &kernel_labels,
+        regret_kernel.as_deref(),
+    )? {
+        None => {
+            crate::ui::restore::print_cancelled();
+            Ok(())
         }
+        Some(RestorePlan::Checkpoint(selected)) => {
+            execute_restore_checkpoint(&selected, mount_path)
+        }
+        Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
 }
 
-fn group_includes_root(group: &Group) -> Result<bool> {
+fn group_kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<group::GroupId, String> {
+    groups
+        .iter()
+        .map(|g| (g.id, group_kernel_label(g, toplevel)))
+        .collect()
+}
+
+fn group_kernel_label(group: &Group, toplevel: &Path) -> String {
+    let Some(root_m) = root_member(group).ok().flatten() else {
+        return "?".to_string();
+    };
+    rollback::member_snapshot_path(root_m, toplevel)
+        .map(|path| boot::kernel_label(&path))
+        .unwrap_or_else(|_| "?".to_string())
+}
+
+fn regret_kernel_label(regret: &RegretInfo, toplevel: &Path) -> String {
+    let Some(root_e) = regret.entries.iter().find(|e| e.mountpoint == "/") else {
+        return "?".to_string();
+    };
+    boot::kernel_label(&toplevel.join(&root_e.regret_subvol))
+}
+
+fn root_member(group: &Group) -> Result<Option<&Member>> {
     for member in &group.members {
         let mountpoint = snapper::config_subvolume(&member.config)?;
         if mountpoint == "/" {
-            return Ok(true);
+            return Ok(Some(member));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
-/// True se /boot está montado em FAT32 (vfat). Isso significa que kernel e
-/// initramfs vivem fora do BTRFS e precisam de sincronização no rollback.
-fn boot_is_fat32() -> bool {
-    boot::is_fat32()
+/// Um snapshot de root varrido direto do toplevel (`@/.snapshots/N/snapshot`),
+/// sem snapper — funciona inclusive de dentro de um boot de resgate.
+struct RootSnap {
+    number: u32,
+    kernel: String,
+    date: String,
+    /// Nome do backup, se foi feito pelo snapgroup (descrição do `info.xml`).
+    name: Option<String>,
 }
 
-/// Emite warning: /boot em FAT32 é modo legado e menos transacional que BTRFS.
-/// Retorna false se o utilizador cancelar.
-fn warn_fat32_boot() -> Result<bool> {
-    if !boot_is_fat32() {
-        return Ok(true);
+/// Varre os snapshots de root no toplevel, contornando a cegueira do snapper num
+/// boot de resgate (`/.snapshots` do snapshot está vazio). Lê kernel e data
+/// direto do subvol, e o nome do backup do `info.xml` (só quando é snapgroup).
+fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSnap>> {
+    let dir = toplevel.join(root_subvol).join(".snapshots");
+    let mut snaps = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("ler {}", dir.display()))? {
+        let entry = entry?;
+        let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let src = entry.path().join("snapshot");
+        if !src.join("usr/lib/modules").exists() {
+            continue; // não é um snapshot de root válido
+        }
+        snaps.push(RootSnap {
+            number,
+            kernel: boot::kernel_label(&src),
+            date: btrfs::subvol_creation_time(&src).unwrap_or_default(),
+            name: snapgroup_backup_name(&entry.path().join("info.xml")),
+        });
     }
-    crate::ui::restore::confirm_fat32_boot()
+    // Mais recente primeiro.
+    snaps.sort_by_key(|s| std::cmp::Reverse(s.number));
+    Ok(snaps)
+}
+
+/// Nome de um backup feito pelo snapgroup: a `<description>` do `info.xml`, mas
+/// só quando o snapshot tem `snapgroup-id` no userdata (senão é timeline/pacman,
+/// sem nome útil). Extração mínima de string — sem crate de XML. `None` se não
+/// for snapgroup, o arquivo não existir, ou a descrição for vazia.
+fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
+    let content = fs::read_to_string(info_xml).ok()?;
+    if !content.contains("snapgroup-id") {
+        return None;
+    }
+    let open = "<description>";
+    let close = "</description>";
+    let start = content.find(open)? + open.len();
+    let rest = &content[start..];
+    let end = rest.find(close)?;
+    let val = rest[..end].trim();
+    (!val.is_empty()).then(|| val.to_string())
+}
+
+/// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
+/// explícito (`@` do fstab) — preserva `home` e `root_home`. O sync pós-rollback
+/// garante consistência do `/boot`: no-op se o snapshot já casa com o `/boot`,
+/// senão reescreve. Em falha de sync, bloqueia o reboot (não bricka).
+fn execute_restore_root_to_snapshot(
+    toplevel: &Path,
+    root_subvol: &str,
+    number: u32,
+) -> Result<()> {
+    let src = toplevel
+        .join(root_subvol)
+        .join(".snapshots")
+        .join(number.to_string())
+        .join("snapshot");
+
+    let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
+    let result = rollback::rollback_root_explicit(toplevel, root_subvol, &src);
+    pb.finish_and_clear();
+    let rollback = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
+    crate::ui::restore::print_root_restore_done(number, &rollback.done);
+
+    let restored_root = toplevel.join(root_subvol);
+    if let Err(e) = boot::sync_fat32(&restored_root) {
+        return abort_reboot_boot_desync(
+            &restored_root,
+            e,
+            "verifique /boot manualmente (vmlinuz/initramfs vs /usr/lib/modules \
+             do root) antes de reiniciar; não reinicie enquanto não corresponderem.",
+        );
+    }
+
+    finish_restore_with_undo(&[rollback.done], &rollback.preserved_regret_asides, toplevel)
+}
+
+/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
+/// quando o sync vai de fato mexer no /boot legado: kernel idêntico ao do
+/// snapshot → sync no-op → não incomoda. Qualquer falha de detecção cai no
+/// aviso (fail-safe) — nunca silencia por incerteza.
+fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
+    if !boot::is_fat32() {
+        return false;
+    }
+    // Err (detecção falhou) → true: fail-safe mantém o aviso.
+    boot_will_change(group, toplevel).unwrap_or(true)
+}
+
+/// Ok(true) se o sync pós-rollback vai escrever em /boot (kernel do snapshot
+/// difere do /boot atual). Ok(false) se será no-op: mesmo kernel, ou grupo que
+/// não restaura root. Err em falha real de leitura — o caller trata como aviso.
+fn boot_will_change(group: &Group, toplevel: &Path) -> Result<bool> {
+    let Some(root_m) = root_member(group)? else {
+        return Ok(false);
+    };
+    let snapshot_root = rollback::member_snapshot_path(root_m, toplevel)?;
+    Ok(!boot::boot_already_synced(&snapshot_root)?)
 }
 
 fn execute_restore_checkpoint(
     group: &Group,
     mount_path: &Path,
 ) -> Result<()> {
-    if group_includes_root(group)? && !warn_fat32_boot()? {
+    if should_warn_fat32(group, mount_path) && !crate::ui::restore::confirm_fat32_boot()? {
         crate::ui::restore::print_cancelled_boot_risk();
         return Ok(());
     }
@@ -202,14 +437,21 @@ fn execute_restore_checkpoint(
     let configs: Vec<String> = group.members.iter().map(|m| m.config.clone()).collect();
 
     // Move o regret anterior pra aside (não deleta): preserva o botão de
-    // arrependimento até o novo rollback commitar. Em falha que volte a um
-    // estado limpo, o aside é restaurado; em estado ambíguo, é preservado.
+    // arrependimento antigo até o reboot. Isso permite desfazer um restore sem
+    // reboot no futuro restaurando o estado anterior completo, inclusive o
+    // Regret que existia antes deste restore. O cleanup durável apaga o aside
+    // só no próximo boot, quando o novo root já virou realidade.
     let asides = rollback::aside_existing_regrets(mount_path, &configs)?;
 
-    match rollback::rollback_group(group, mount_path) {
+    let pb = crate::ui::term::spinner(format!(
+        "restaurando checkpoint {} ({} membros)…",
+        group.id,
+        group.members.len()
+    ));
+    let outcome = rollback::rollback_group(group, mount_path);
+    pb.finish_and_clear();
+    match outcome {
         Ok(done) => {
-            // Rollback commitou: o regret anterior virou obsoleto. Best-effort.
-            rollback::delete_asides(&asides, mount_path);
             crate::ui::restore::print_checkpoint_rollback_done(group.id, &done);
 
             // Sincroniza kernel/initramfs em /boot (FAT32) com o snapshot restaurado.
@@ -222,13 +464,13 @@ fn execute_restore_checkpoint(
                         &restored_root,
                         e,
                         "rode 'snapg restore' e selecione o Regret \
-                         (⟲ Estado Anterior à Restauração) para voltar ao \
+                         (↺ Regret — Estado Anterior à Restauração) para voltar ao \
                          sistema bootável atual antes de qualquer reboot.",
                     );
                 }
             }
 
-            prompt_reboot()
+            finish_restore_with_undo(&done, &asides, mount_path)
         }
         Err(rerr) => {
             match handle_partial(group, rerr, mount_path)? {
@@ -343,27 +585,16 @@ pub fn delete(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Loop: Esc na confirmação volta pra seleção (um passo); Esc na seleção sai.
-    loop {
-        let Some(target_indices) = snapshots::select_delete_targets(&groups)? else {
-            return Ok(());
-        };
-        let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
+    // Wizard interativo no alternate screen; a exclusão roda fora, no normal.
+    let Some(target_indices) = snapshots::select_delete_plan(&groups)? else {
+        snapshots::print_delete_cancelled();
+        return Ok(());
+    };
 
-        match snapshots::confirm_delete_targets(&targets)? {
-            snapshots::DeleteFlow::Proceed => {
-                for g in &targets {
-                    delete_group(g)?;
-                }
-                return Ok(());
-            }
-            snapshots::DeleteFlow::Back => continue,
-            snapshots::DeleteFlow::Cancel => {
-                snapshots::print_delete_cancelled();
-                return Ok(());
-            }
-        }
+    for i in target_indices {
+        delete_group(&groups[i])?;
     }
+    Ok(())
 }
 
 fn delete_group(g: &Group) -> Result<()> {
@@ -376,22 +607,12 @@ fn delete_group(g: &Group) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
+    clear_screen();
     let groups = group::list_groups()?;
-    if groups.is_empty() {
-        snapshots::print_no_groups();
-    } else {
-        snapshots::print_groups(&groups)?;
-    }
 
-    // Mostra regret ativo, se existir.
-    show_regret_status()?;
-    Ok(())
-}
-
-/// Monta toplevel, verifica se há regret ativo e exibe info.
-fn show_regret_status() -> Result<()> {
     let configs = snapper::list_configs()?;
-    if configs.is_empty() {
+    if groups.is_empty() && configs.is_empty() {
+        snapshots::print_no_groups();
         return Ok(());
     }
 
@@ -401,8 +622,18 @@ fn show_regret_status() -> Result<()> {
 
     let result = (|| -> Result<()> {
         let regret = discover_regrets(&mount_path, &configs)?;
+        let mut printed_regret = false;
         if let Some(r) = regret {
-            snapshots::print_regret_status(&r.creation_time);
+            let kernel = regret_kernel_label(&r, &mount_path);
+            snapshots::print_regret_status(&r.creation_time, &kernel);
+            printed_regret = true;
+        }
+
+        if groups.is_empty() {
+            snapshots::print_no_groups();
+        } else {
+            let kernel_labels = group_kernel_labels(&groups, &mount_path);
+            snapshots::print_groups(&groups, &kernel_labels, !printed_regret)?;
         }
         Ok(())
     })();
@@ -443,7 +674,7 @@ fn disarm_boot_cleanup() -> Result<()> {
 }
 
 /// Subcomando interno chamado pelo `snapg-cleanup.service` no boot.
-/// Apaga todos os discards no top-level e desarma o serviço.
+/// Apaga sobras pós-restore no top-level e desarma o serviço.
 /// Output vai pro journal (stdout/stderr capturados pelo systemd).
 pub fn boot_clean() -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
@@ -454,7 +685,7 @@ pub fn boot_clean() -> Result<()> {
     let _ = btrfs::umount_toplevel(&mount_path);
     result?;
 
-    // Desarma o serviço — independente de ter discards ou não.
+    // Desarma o serviço — independente de ter sobras ou não.
     if let Err(e) = disarm_boot_cleanup() {
         crate::ui::boot_clean::print_disarm_failed(&e);
     }
@@ -462,37 +693,41 @@ pub fn boot_clean() -> Result<()> {
 }
 
 fn boot_clean_inner(mount_path: &Path) -> Result<()> {
-    let discards = discover_discards(mount_path)?;
-    if discards.is_empty() {
-        crate::ui::boot_clean::print_no_discards();
+    let targets = discover_boot_cleanup_targets(mount_path)?;
+    if targets.is_empty() {
+        crate::ui::boot_clean::print_no_cleanup_targets();
         return Ok(());
     }
 
-    let total = discards.len();
+    let total = targets.len();
     let mut ok = 0usize;
-    for (name, path) in &discards {
+    for (name, path) in &targets {
         match btrfs::delete_subvolume(path) {
             Ok(()) => {
-                crate::ui::boot_clean::print_discard_removed(name);
+                crate::ui::boot_clean::print_cleanup_target_removed(name);
                 ok += 1;
             }
-            Err(e) => crate::ui::boot_clean::print_discard_remove_failed(name, &e),
+            Err(e) => crate::ui::boot_clean::print_cleanup_target_remove_failed(name, &e),
         }
     }
-    crate::ui::boot_clean::print_discard_summary(ok, total);
+    crate::ui::boot_clean::print_cleanup_summary(ok, total);
     Ok(())
 }
 
-/// Descobre subvols `_snapg_discard_*` no toplevel (deixados por revert_regret).
-fn discover_discards(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
+/// Descobre sobras pós-restore no toplevel:
+/// - `_snapg_discard_*`, deixados por `revert_regret`;
+/// - `.snapgroup_regret_aside`, Regret antigo preservado durante checkpoint
+///   restore para permitir desfazer sem reboot.
+fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let cfg_map = config_subvol_map()?;
     let mut found = Vec::new();
-    for entry in fs::read_dir(toplevel).context("ler toplevel pra descobrir discards")? {
+    for entry in fs::read_dir(toplevel).context("ler toplevel pra descobrir sobras pós-restore")? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         for (_, _, current) in &cfg_map {
             let prefix = format!("{current}_snapg_discard_");
-            if name.starts_with(&prefix) {
+            let aside = rollback::regret_aside_name(current);
+            if name.starts_with(&prefix) || name == aside {
                 found.push((name, entry.path()));
                 break;
             }
@@ -527,11 +762,79 @@ fn abort_reboot_boot_desync(restored_root: &Path, e: anyhow::Error, recovery: &s
     doctor::handle_boot_sync_failure(restored_root, Path::new("/boot"), e, recovery)
 }
 
+fn finish_restore_with_undo(
+    done: &[rollback::Done],
+    asides: &[rollback::AsidedRegret],
+    mount_path: &Path,
+) -> Result<()> {
+    match crate::ui::restore::select_post_restore_action()? {
+        PostRestoreAction::Undo => undo_restore_before_reboot(done, asides, mount_path),
+        PostRestoreAction::RebootNow => {
+            arm_cleanup_for_restore(done, asides, mount_path)?;
+            reboot_now()
+        }
+        PostRestoreAction::RebootLater => {
+            arm_cleanup_for_restore(done, asides, mount_path)?;
+            crate::ui::restore::print_manual_reboot();
+            Ok(())
+        }
+    }
+}
+
+fn undo_restore_before_reboot(
+    done: &[rollback::Done],
+    asides: &[rollback::AsidedRegret],
+    mount_path: &Path,
+) -> Result<()> {
+    rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
+    rollback::restore_asides(asides, mount_path)
+        .context("restaurar Regret anterior após desfazer restauração")?;
+
+    if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+        let restored_root = mount_path.join(&root.current_subvol);
+        if let Err(e) = boot::sync_fat32(&restored_root) {
+            return abort_reboot_boot_desync(
+                &restored_root,
+                e,
+                "desfazer aplicado, mas /boot precisa casar com o root restaurado. \
+                 Rode 'snapg doctor --apply' antes de reiniciar.",
+            );
+        }
+    }
+
+    crate::ui::restore::print_restore_undone(done.len());
+    Ok(())
+}
+
+fn arm_cleanup_for_restore(
+    done: &[rollback::Done],
+    asides: &[rollback::AsidedRegret],
+    mount_path: &Path,
+) -> Result<()> {
+    if asides.is_empty() {
+        return Ok(());
+    }
+
+    let cleanup_root = done
+        .iter()
+        .find(|d| d.mountpoint == "/")
+        .map(|root| mount_path.join(&root.current_subvol));
+    match arm_boot_cleanup(cleanup_root.as_deref().unwrap_or(Path::new("/"))) {
+        Ok(()) => crate::ui::restore::print_cleanup_armed(),
+        Err(e) => crate::ui::restore::print_cleanup_arm_failed(&e),
+    }
+    Ok(())
+}
+
 fn prompt_reboot() -> Result<()> {
     if !crate::ui::restore::confirm_reboot_now()? {
         crate::ui::restore::print_manual_reboot();
         return Ok(());
     }
+    reboot_now()
+}
+
+fn reboot_now() -> Result<()> {
     // -i ignora inhibitors (ex: sessão GNOME bloqueando reboot).
     // Sem isso, o reboot falha silenciosamente e o utilizador fica
     // rodando no subvolume antigo sem saber.

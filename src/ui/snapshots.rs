@@ -1,10 +1,13 @@
-use crate::group::{self, Group};
+use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
-    THEME, branch, clear_screen, confirm, short_datetime, stem, truncate_for_terminal,
+    AltScreen, CONTENT_INDENT, HINT_MULTI, THEME, app_header, branch, clear_screen,
+    confirm, content_width, header, line, prompt_hint, section_header, short_datetime,
+    truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
+use std::collections::HashMap;
 
 pub(crate) fn print_save_created(id: i64, desc: &str, created: &[(String, u32)]) {
     println!(
@@ -19,14 +22,33 @@ pub(crate) fn print_save_created(id: i64, desc: &str, created: &[(String, u32)])
     }
 }
 
-pub(crate) fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+/// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
+/// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
+/// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
+pub(crate) fn select_delete_plan(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+    let _alt = AltScreen::enter();
+    loop {
+        let Some(indices) = select_delete_targets(groups)? else {
+            return Ok(None);
+        };
+        let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
+        match confirm_delete_targets(&targets)? {
+            DeleteFlow::Proceed => return Ok(Some(indices)),
+            DeleteFlow::Back => continue,
+            DeleteFlow::Cancel => return Ok(None),
+        }
+    }
+}
+
+fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     loop {
         clear_screen();
+        header("Apagar checkpoints");
         let action = dialoguer::Select::with_theme(&THEME)
-            .with_prompt("Apagar checkpoints")
             .items(&["Selecionar", "Apagar todos"])
             .default(0)
             .clear(true)
+            .report(false)
             .interact_opt()
             .context("seleção cancelada")?;
 
@@ -35,32 +57,49 @@ pub(crate) fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize
                 Some(targets) => return Ok(Some(targets)),
                 None => continue,
             },
-            Some(1) => return select_all_delete_targets(groups),
+            Some(1) => match select_all_delete_targets(groups)? {
+                Some(targets) => return Ok(Some(targets)),
+                None => continue,
+            },
             _ => return Ok(None),
         }
     }
 }
 
 fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    // MultiSelect prefix: "> [ ] " = 6 chars
-    let prefix_len = 6;
+    let name_col = groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(NAME_HEADER.len())
+        .max(NAME_HEADER.len())
+        .min(NAME_COL_MAX);
+
     let mut items: Vec<String> = Vec::new();
     for g in groups {
+        let desc = group::description(g);
+        let desc_cell = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<name_col$}")
+        };
         let text = format!(
-            "checkpoint {}  ·  {}  ·  {} membros  ·  {}",
-            g.id,
+            "{desc_cell}   {:<DATE_COL$}   {} membros   #{}",
             short_datetime(group::date(g)),
             g.members.len(),
-            group::description(g)
+            g.id
         );
-        items.push(truncate_for_terminal(&text, prefix_len));
+        items.push(truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER));
     }
 
     clear_screen();
+    header("Apagar checkpoints");
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt("Selecione checkpoints para apagar (Espaço=marcar, Enter=confirmar)")
+        .with_prompt(prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI))
         .items(&items)
         .clear(true)
+        .report(false)
         .interact_opt()
         .context("seleção cancelada")?
     else {
@@ -76,52 +115,134 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
 }
 
 fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    clear_screen();
-    if !confirm("Apagar TODOS os checkpoints?")? {
-        return Ok(None);
+    let targets: Vec<&Group> = groups.iter().collect();
+    match confirm_delete_targets_with_prompt(&targets, "Confirmar?", Some("todos selecionados"))? {
+        DeleteFlow::Proceed => {
+            clear_screen();
+            header("Apagar checkpoints");
+            if confirm("Tem certeza que deseja apagar todos os checkpoints?")? {
+                Ok(Some((0..groups.len()).collect()))
+            } else {
+                Ok(None)
+            }
+        }
+        DeleteFlow::Back | DeleteFlow::Cancel => Ok(None),
     }
-    Ok(Some((0..groups.len()).collect()))
 }
 
 /// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
 /// um passo); `Cancel` = "Cancelar" explícito (encerra).
-pub(crate) enum DeleteFlow {
+enum DeleteFlow {
     Proceed,
     Back,
     Cancel,
 }
 
-pub(crate) fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
-    clear_screen();
-    println!("{}", style("Apagar checkpoints").bold());
-    let total = targets.len();
-    for (i, g) in targets.iter().enumerate() {
-        println!(
-            "{} {}  {}  {}  {}  {}  {} membros",
-            branch(i + 1 == total),
-            style(g.id).dim(),
-            style("·").dim(),
-            short_datetime(group::date(g)),
-            style("·").dim(),
-            group::description(g),
-            g.members.len()
-        );
-    }
+fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
+    confirm_delete_targets_with_prompt(targets, "Confirmar?", None)
+}
 
-    let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Apagar estes checkpoints?  (esc volta)")
-        .items(&["Confirmar", "Cancelar"])
-        .default(1)
-        .clear(true)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(DeleteFlow::Back);
+fn confirm_delete_targets_with_prompt(
+    targets: &[&Group],
+    prompt: &str,
+    dim_hint: Option<&str>,
+) -> Result<DeleteFlow> {
+    let mut yes = false;
+    let mut page = 0usize;
+    loop {
+        let page_size = delete_confirm_page_size();
+        let pages = targets.len().div_ceil(page_size).max(1);
+        page = page.min(pages - 1);
+
+        render_delete_confirmation(targets, prompt, dim_hint, yes, page, page_size, pages);
+        match console::Term::stdout()
+            .read_key()
+            .context("aguardar confirmação")?
+        {
+            console::Key::ArrowUp | console::Key::ArrowDown => yes = !yes,
+            console::Key::ArrowLeft => page = page.saturating_sub(1),
+            console::Key::ArrowRight => page = (page + 1).min(pages - 1),
+            console::Key::Enter => {
+                return Ok(if yes {
+                    DeleteFlow::Proceed
+                } else {
+                    DeleteFlow::Cancel
+                });
+            }
+            console::Key::Escape => return Ok(DeleteFlow::Back),
+            _ => {}
+        }
+    }
+}
+
+fn render_delete_confirmation(
+    targets: &[&Group],
+    prompt: &str,
+    dim_hint: Option<&str>,
+    yes: bool,
+    page: usize,
+    page_size: usize,
+    pages: usize,
+) {
+    clear_screen();
+    header("Apagar checkpoints");
+    println!();
+    match dim_hint {
+        Some(hint) => line(format_args!("{} {}", style(prompt).bold(), style(format!("({hint})")).dim())),
+        None => line(format_args!("{}", style(prompt).bold())),
+    }
+    line(format_args!("{} Sim", if yes { ">" } else { " " }));
+    line(format_args!("{} Não", if yes { " " } else { ">" }));
+    println!();
+
+    let start = page * page_size;
+    let end = (start + page_size).min(targets.len());
+    for g in &targets[start..end] {
+        print_delete_target_card(g);
+    }
+    if pages > 1 {
+        line(format_args!(
+            "{}",
+            style(format!("página {}/{} · ←/→ navega", page + 1, pages)).dim()
+        ));
+    }
+}
+
+fn delete_confirm_page_size() -> usize {
+    let rows = console::Term::stdout().size().0 as usize;
+    // Header + prompt/options + paginação ocupam ~8 linhas. Cada item usa
+    // 3 linhas (nome, metadados, respiro).
+    rows.saturating_sub(8).max(3) / 3
+}
+
+fn print_delete_target_card(g: &Group) {
+    let desc_width = content_width().min(80);
+    let desc = group::description(g).trim();
+    let desc = if desc.is_empty() {
+        format!("#{}", g.id)
+    } else {
+        desc.to_string()
     };
-    Ok(match choice {
-        0 => DeleteFlow::Proceed,
-        _ => DeleteFlow::Cancel,
-    })
+    let desc = truncate_chars(&desc, desc_width);
+    println!("{CONTENT_INDENT}{desc}");
+    println!(
+        "{}{} {}",
+        CONTENT_INDENT,
+        style(format!(
+            "└─ {} · {} membros ·",
+            short_datetime(group::date(g)),
+            g.members.len()
+        ))
+        .dim(),
+        style(g.id).dim()
+    );
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
 }
 
 pub(crate) fn print_delete_cancelled() {
@@ -141,43 +262,125 @@ pub(crate) fn print_no_groups() {
     println!("nenhum grupo snapg save encontrado");
 }
 
-pub(crate) fn print_groups(groups: &[Group]) -> Result<()> {
-    println!("{}", style("Checkpoints").bold());
-    let gtotal = groups.len();
-    for (gi, g) in groups.iter().enumerate() {
-        let glast = gi + 1 == gtotal;
-        println!(
-            "{} {}  {}  {}  {}  {}  {}  {} membros",
-            branch(glast),
-            style(g.id).dim(),
-            style("·").dim(),
-            short_datetime(group::date(g)),
-            style("·").dim(),
-            group::description(g),
-            style("·").dim(),
-            g.members.len()
-        );
-        let mtotal = g.members.len();
-        for (mi, m) in g.members.iter().enumerate() {
-            let mountpoint = snapper::config_subvolume(&m.config)?;
-            println!(
-                "{}{} {:<10} {:<8} #{}",
-                stem(glast),
-                branch(mi + 1 == mtotal),
-                m.config,
-                mountpoint,
-                m.snapshot.number
-            );
+const ID_COL: usize = 10;
+const NAME_HEADER: &str = "Nome";
+const KERNEL_HEADER: &str = "Kernel";
+const DATE_HEADER: &str = "Data";
+const MEMBERS_HEADER: &str = "Membros";
+const DATE_COL: usize = 16;
+/// Limite da coluna de nome no `list`: respeita o maior nome comum, mas impede
+/// uma descrição muito longa de empurrar kernel/data para fora da tela.
+const NAME_COL_MAX: usize = 36;
+
+pub(crate) fn print_groups(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    show_app_header: bool,
+) -> Result<()> {
+    if show_app_header {
+        header("Checkpoints");
+    } else {
+        section_header("▪", "Checkpoints");
+    }
+    let mut rows = Vec::with_capacity(groups.len());
+    for g in groups {
+        let mut mountpoints = Vec::with_capacity(g.members.len());
+        for m in &g.members {
+            mountpoints.push(snapper::config_subvolume(&m.config)?);
         }
+        rows.push((g, member_badges(&mut mountpoints)));
+    }
+
+    let kernel_col = groups
+        .iter()
+        .filter_map(|g| kernel_labels.get(&g.id))
+        .map(|k| k.chars().count())
+        .max()
+        .unwrap_or(KERNEL_HEADER.len())
+        .max(KERNEL_HEADER.len());
+    let members_col = rows
+        .iter()
+        .map(|(_, members)| members.chars().count())
+        .max()
+        .unwrap_or(MEMBERS_HEADER.len())
+        .max(MEMBERS_HEADER.len());
+    let natural_name_col = groups
+        .iter()
+        .map(|g| group::description(g).chars().count())
+        .max()
+        .unwrap_or(NAME_HEADER.len())
+        .max(NAME_HEADER.len())
+        .min(NAME_COL_MAX);
+    let name_col = natural_name_col.min(list_name_col_for_terminal(kernel_col, members_col));
+
+    line(format_args!(
+        "{}   {}   {}   {}   {}",
+        style(format!("{:<ID_COL$}", "ID")).bold(),
+        style(format!("{:<name_col$}", NAME_HEADER)).bold(),
+        style(format!("{:<kernel_col$}", KERNEL_HEADER)).bold(),
+        style(format!("{:<DATE_COL$}", DATE_HEADER)).bold(),
+        style(MEMBERS_HEADER).bold()
+    ));
+
+    for (g, members) in rows {
+        let desc = group::description(g);
+        let desc_cell = if desc.chars().count() > name_col {
+            let cut: String = desc.chars().take(name_col - 1).collect();
+            format!("{cut}…")
+        } else {
+            format!("{desc:<name_col$}")
+        };
+        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
+        line(format_args!(
+            "{}   {}   {:<kernel_col$}   {:<DATE_COL$}   {}",
+            style(format!("{:>ID_COL$}", g.id)).dim(),
+            desc_cell,
+            style(kernel).dim(),
+            style(short_datetime(group::date(g))).dim(),
+            style(members).dim(),
+        ));
     }
     Ok(())
 }
 
-pub(crate) fn print_regret_status(creation_time: &str) {
+fn list_name_col_for_terminal(kernel_col: usize, members_col: usize) -> usize {
+    let width = console::Term::stdout().size().1 as usize;
+    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3);
+    width
+        .saturating_sub(crate::ui::term::CONTENT_INDENT.chars().count())
+        .saturating_sub(fixed)
+        .max(NAME_HEADER.len())
+}
+
+fn member_badges(mountpoints: &mut [String]) -> String {
+    mountpoints.sort_by(|a, b| match (a.as_str(), b.as_str()) {
+        ("/", "/") => std::cmp::Ordering::Equal,
+        ("/", _) => std::cmp::Ordering::Less,
+        (_, "/") => std::cmp::Ordering::Greater,
+        _ => a.cmp(b),
+    });
+    mountpoints
+        .iter()
+        .map(|m| format!("[{m}]"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
+    app_header();
+    section_header("↺", "Regret ativo");
+    let kernel_col = kernel.chars().count().max(KERNEL_HEADER.len());
+    line(format_args!(
+        "{}   {}   {}",
+        style(format!("{:<kernel_col$}", KERNEL_HEADER)).bold(),
+        style(format!("{:<DATE_COL$}", DATE_HEADER)).bold(),
+        style("Ação").bold()
+    ));
+    line(format_args!(
+        "{}   {}   {}",
+        style(format!("{:<kernel_col$}", kernel)).dim(),
+        style(format!("{:<DATE_COL$}", short_datetime(creation_time))).dim(),
+        style("snapg restore").dim()
+    ));
     println!();
-    println!(
-        "{} Regret ativo ({}) — use 'snapg restore' para restaurar",
-        style("⚠").yellow().bold(),
-        short_datetime(creation_time)
-    );
 }
