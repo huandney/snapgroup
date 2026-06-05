@@ -5,7 +5,8 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    PostRestoreAction, RegretEntry, RegretInfo, RegretKind, RestorePlan, select_restore_plan,
+    PostRestoreAction, RegretEntry, RegretInfo, RegretKind, RestorePlan, regret_when,
+    select_restore_plan,
 };
 use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm};
@@ -203,7 +204,7 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
 /// Descobre regrets existentes no toplevel.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     if let Some(done) = pending_restore_from_live(configs)? {
-        return Ok(Some(regret_from_pending_restore(toplevel, done)));
+        return Ok(Some(regret_from_pending_restore(done)));
     }
 
     discover_archived_regrets(toplevel, configs)
@@ -237,7 +238,7 @@ fn discover_archived_regrets(toplevel: &Path, configs: &[String]) -> Result<Opti
     }))
 }
 
-fn regret_from_pending_restore(toplevel: &Path, done: Vec<rollback::Done>) -> RegretInfo {
+fn regret_from_pending_restore(done: Vec<rollback::Done>) -> RegretInfo {
     let entries: Vec<RegretEntry> = done
         .into_iter()
         .map(|d| RegretEntry {
@@ -248,7 +249,9 @@ fn regret_from_pending_restore(toplevel: &Path, done: Vec<rollback::Done>) -> Re
         })
         .collect();
     RegretInfo {
-        creation_time: regret_creation_time(toplevel, &entries),
+        // Pending: o Regret é o sistema vivo, não congelou em instante nenhum.
+        // A UI mostra um rótulo de estado, não data.
+        creation_time: String::new(),
         entries,
         kind: RegretKind::PendingRestore,
     }
@@ -258,7 +261,11 @@ fn regret_creation_time(toplevel: &Path, entries: &[RegretEntry]) -> String {
     let Some(first) = entries.first() else {
         return String::from("data desconhecida");
     };
-    btrfs::subvol_creation_time(&toplevel.join(&first.regret_subvol))
+    // otime do subvol restaurado (o ativo) = instante do restore: a Fase 1 o
+    // cria com create_snapshot. O regret_subvol é o chão antigo renomeado, cujo
+    // otime é a data de nascimento daquele subvol (instalação ou restore antigo)
+    // — irrelevante pro evento que o usuário associa ao Regret.
+    btrfs::subvol_creation_time(&toplevel.join(&first.current_subvol))
         .unwrap_or_else(|_| String::from("data desconhecida"))
 }
 
@@ -801,7 +808,7 @@ pub fn list() -> Result<()> {
         let mut printed_regret = false;
         if let Some(r) = regret {
             let kernel = regret_kernel_label(&r, &mount_path);
-            snapshots::print_regret_status(&r.creation_time, &kernel);
+            snapshots::print_regret_status(&regret_when(&r), &kernel);
             printed_regret = true;
         }
 

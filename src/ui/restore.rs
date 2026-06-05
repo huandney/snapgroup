@@ -36,6 +36,16 @@ pub(crate) enum RegretKind {
     PendingRestore,
 }
 
+/// Texto pro slot de "quando" do Regret. Archived: a data do restore que o
+/// estabeleceu. Pending: o Regret é o sistema vivo, sem instante de
+/// congelamento — mostra um rótulo de estado em vez de data.
+pub(crate) fn regret_when(regret: &RegretInfo) -> String {
+    match regret.kind {
+        RegretKind::Archived => short_datetime(&regret.creation_time),
+        RegretKind::PendingRestore => "não reiniciado".to_string(),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum RestoreFlow {
     Continue,
@@ -133,7 +143,7 @@ pub(crate) fn select_restore_action(
             "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
             "↺ Regret",
             kernel,
-            short_datetime(&r.creation_time),
+            regret_when(r),
             r.entries.len()
         );
         items.push(truncate_for_terminal(&text, prefix_len));
@@ -461,12 +471,16 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
 
     clear_screen();
     header("Restaurar Regret");
+    let when = match regret.kind {
+        RegretKind::Archived => format!("criado {}", short_datetime(&regret.creation_time)),
+        RegretKind::PendingRestore => "restauração ainda não reiniciada".to_string(),
+    };
     line(format_args!(
-        "{}  {}  estado anterior à última restauração  {}  criado {}",
+        "{}  {}  estado anterior à última restauração  {}  {}",
         regret_title("↺ Regret"),
         style("·").dim(),
         style("·").dim(),
-        short_datetime(&regret.creation_time)
+        when
     ));
     println!();
 

@@ -366,7 +366,7 @@ fn member_badges(mountpoints: &mut [String]) -> String {
         .join(" ")
 }
 
-pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
+pub(crate) fn print_regret_status(when: &str, kernel: &str) {
     app_header();
     section_header("↺", "Regret ativo");
     let kernel_col = kernel.chars().count().max(KERNEL_HEADER.len());
@@ -379,7 +379,7 @@ pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
     line(format_args!(
         "{}   {}   {}",
         style(format!("{:<kernel_col$}", kernel)).dim(),
-        style(format!("{:<DATE_COL$}", short_datetime(creation_time))).dim(),
+        style(format!("{:<DATE_COL$}", when)).dim(),
         style("snapg restore").dim()
     ));
     println!();
