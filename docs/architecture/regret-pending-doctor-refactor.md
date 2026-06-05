@@ -21,6 +21,12 @@
   fica montado de `@_snapg_regret` — estado chamado **pending**.
 - Dois bugs iniciais (corrigidos): (1) o **doctor** poluía o Regret legítimo ao
   recuperar; (2) **membros de grupos** não apareciam num boot de resgate.
+- O caso real que disparou tudo foi: restore para kernel mais antigo, interrupção
+  com `Ctrl-C`, reboot quebrado, boot manual por snapshot Limine, `snapg doctor`,
+  tentativa de restore completo sem o `/` aparecer, e depois recuperação escolhendo
+  kernel/root. Esse fluxo mostrou que o doctor estava operando em estado de falha e
+  portanto **não pode tratar o sistema montado como "estado bom para salvar como
+  Regret"**.
 - O mecanismo de preservação do Regret evoluiu: **aside → stash → bloqueio de pending**.
   A ideia de **labels** (archive rotulado) foi cogitada e **descartada**.
 - O **gate** (restore/delete) e o **doctor** foram unificados para tratar o pending:
@@ -28,9 +34,36 @@
   Sincronizar e reiniciar / Cancelar.
 - **PROBLEMA EM ABERTO:** o `@_snapg_regret` e a escrita direta no `/boot` colidem
   com o ecossistema `limine-snapper-sync`. Detalhado na §8.
-- **Estado:** os 4 commits da branch estão feitos; o trabalho do **gate + doctor +
-  synced/desync** está **no working tree, NÃO commitado**, validado. O **lock do
-  mutex limine (Gap 1)** ainda **não foi implementado**.
+- **Estado:** o trabalho do **gate + doctor + synced/desync** foi **commitado**
+  (`960ab73`, pushed); este doc foi adicionado em `d0dd412`. O **lock do mutex
+  limine (Gap 1)** ainda **não foi implementado** — é a próxima tarefa.
+
+---
+
+## 0.1 Linha do tempo curta da discussão
+
+Esta seção existe para evitar que a próxima IA confunda "o que motivou" com "o que
+foi implementado depois".
+
+1. **Incidente operacional:** o usuário restaurou para uma versão com kernel mais
+   antigo, interrompeu o restore no meio com `Ctrl-C`, reiniciou e o boot falhou.
+   Entrou por um snapshot Limine e rodou o doctor.
+2. **Sintoma 1 no doctor:** no restore completo apareciam `home` e `root_home`, mas
+   não aparecia `/`. A hipótese inicial era que o Limine montava o snapshot de forma
+   que o Snapper ficasse cego/readonly para o root. A conclusão de engenharia foi:
+   no caminho de resgate, `snapg` não deve depender cegamente de `snapper list`.
+3. **Sintoma 2 no doctor:** ao "consertar escolhendo a versão do kernel", o Regret
+   correto parecia ter sido sobrescrito pelo estado problemático. Regra decidida:
+   doctor/recuperação nunca deve atualizar Regret; o estado substituído pelo doctor
+   é discard, não undo oferecível.
+4. **Primeiro fix:** introdução de `RestoreRegretPolicy::{Update, PreserveExisting}`
+   e restore de doctor preservando Regret.
+5. **Segundo debate:** remoção do `aside`. O insight foi que permitir restore em
+   cima de pending era uma conveniência rara e perigosa. Melhor bloquear/encaminhar
+   esse estado do que manter uma terceira categoria de subvol.
+6. **Refino posterior:** pending deixou de ser só "Regret no menu" e passou a
+   precisar de gate próprio, porque pending limpo e pending dessincronizado têm UX
+   e risco diferentes.
 
 ---
 
@@ -64,6 +97,29 @@ implementação inicial só "augmentava" o membro **root** lido do top-level btr
 direto do top-level e só forma **grupos completos** (todas as configs presentes),
 em vez de confiar no snapper cego. Parser manual mínimo de `info.xml` (sem crate de
 XML) extrai o `snapgroup-id` e os campos necessários.
+
+### 1.3 Critério de aceitação para o restore completo no doctor
+
+No modo doctor/resgate, "restore completo" não pode oferecer grupos parciais como se
+fossem checkpoints completos. A tela que revelou o bug era parecida com:
+
+```text
+↺ Regret                  7.0.11-1-cachyos   2026-06-04 03:03   3 membros
+Atual3                    ?                  2026-06-04 09:51   1 membros   #1780566707
+Atual2                    ?                  2026-06-04 06:57   1 membros   #1780556224
+Atual                     ?                  2026-06-04 06:48   1 membros   #1780555738
+```
+
+Se existem 3 configs (`root`, `home`, `root_home`, por exemplo), checkpoints de
+`snapg save` devem aparecer com 3 membros. Um checkpoint com 1 membro no restore
+**completo** do doctor é evidência de que o scanner ainda está misturando visões:
+root reconstruído pelo top-level e outras configs vindas de uma fonte incompleta.
+
+Regra prática para a próxima implementação: em `PreserveExisting`, montar grupos
+por fonte snapper-independente para todas as configs ou filtrar grupos incompletos.
+Não apresentar `1 membros` como restauração completa. Um restore parcial pode
+existir como feature explícita, mas precisa aparecer como parcial e não como
+"restore completo".
 
 > **NOTA sobre a memória:** estes dois problemas **não estão registrados** nos
 > arquivos de memória do agente de forma específica (só há um `project_snap_tools.md`
@@ -166,6 +222,37 @@ termina em `_snapg_regret` (via `subvol_relative_path`/`strip_suffix`). Não é
 bookkeeping mantido à mão; é derivado do estado real do mount. Por isso não precisa
 da maquinaria de "aside órfão".
 
+### 3.3.1 Por que ficou com mais linhas mesmo simplificando
+
+A métrica correta aqui não é LOC; é **quantidade de estados de produto** que o resto
+do sistema precisa conhecer.
+
+Modelo antigo:
+
+- `Regret` — aparece como undo.
+- `Discard` — lixo pós-restore/doctor.
+- `Aside` — Regret deslocado temporariamente.
+- Cleanup conhecia aside.
+- UI tinha mensagem manual de aside.
+- Falha parcial tinha que decidir entre restaurar aside ou preservá-lo em estado
+  ambíguo.
+
+Modelo novo:
+
+- `Regret` — aparece como undo ou é tratado pelo gate de pending.
+- `Discard` — lixo seguro para cleanup.
+- `Stashed old Regret` — detalhe **privado** do rename-dance, sem UI e sem modelo
+  de produto.
+
+As linhas aumentaram porque a refatoração fechou robustez que o aside cobria de
+forma global: preservar Regret antigo durante falha do rename-dance, restaurar o
+stash em erro e permitir undo quando o subvol base já sumiu. O ganho é que essa
+complexidade ficou confinada em `commit_prepared_subvol`/`revert_partial`, não
+espalhada por descoberta, UI, cleanup e fluxo de doctor.
+
+Resumo: **menos estados globais, mais código local de atomicidade**. Isso é uma
+simplificação arquitetural, não minificação.
+
 ### 3.4 Labels (archive rotulado) — COGITADO e DESCARTADO
 
 No meio do caminho cogitou-se substituir o slot fixo `@_snapg_regret` por um modelo
@@ -215,13 +302,13 @@ fisicamente de qualquer forma; o bloqueio só torna explícito.
 
 ---
 
-## 6. Data/rótulo do Regret (commit `e73c1aa`, parcialmente revertido no working tree)
+## 6. Data/rótulo do Regret (commit `e73c1aa`, parcialmente revertido em `960ab73`)
 
 - **Archived:** data = otime do subvol restaurado (`current_subvol`) = momento do
   restore. (Mantido.)
 - **Pending (no commit `e73c1aa`):** mostrava rótulo "não reiniciado" no menu de
   restore via `RegretKind` e `regret_when()`.
-- **ATENÇÃO:** o trabalho **não commitado** do gate (§7) **remove** o pending do menu
+- **ATENÇÃO:** o trabalho do gate (§7, commit `960ab73`) **remove** o pending do menu
   de restore (e o `RegretKind`/`regret_when`), porque o pending passou a ser tratado
   pelo gate (Reiniciar/Cancelar), não como Regret restaurável no menu. A data archived
   via `current_subvol` permanece; o `list` ganha um aviso de pending separado
@@ -229,10 +316,9 @@ fisicamente de qualquer forma; o bloqueio só torna explícito.
 
 ---
 
-## 7. Gate + Doctor (desenho atual — trabalho NÃO commitado no working tree)
+## 7. Gate + Doctor (desenho atual — commit `960ab73`)
 
-Esta é a parte mais recente. Está **implementada e validada no working tree**, mas
-**não commitada**.
+Esta é a parte mais recente. Está **implementada, validada e commitada** (`960ab73`).
 
 ### 7.1 Conceito de pending limpo vs dessincronizado
 
@@ -289,6 +375,28 @@ o `detect_rescue_boot` **confundia com resgate** (mostrava o menu A/B/C de 3 op�
 Agora o pending vai direto para o mesmo prompt de reiniciar/cancelar do restore/delete.
 O menu A/B/C de resgate fica **só para o resgate-real** (boot manual num snapshot
 read-only de `.snapshots`).
+
+### 7.3.1 Não duplicar o "desfazer pending" no doctor
+
+Durante a discussão houve uma fase em que o doctor mostrava uma opção explícita:
+
+```text
+Desfazer restauração sem reboot — volta ao estado anterior e restaura o Regret antigo
+```
+
+e o restore completo também mostrava `↺ Regret` para o pending. Isso é duplicação:
+as duas entradas executam a mesma intenção de produto (cancelar/desfazer o restore
+pendente). A regra final desejada é ter **uma única metáfora por estado**:
+
+- Se a UX escolhida for "pending aparece no restore", então o menu do doctor não
+  deve ter a ação separada; o usuário entra em "Mudar o que boota" e escolhe
+  `↺ Regret`.
+- Se a UX escolhida for "gate de pending", então o pending não deve aparecer como
+  Regret restaurável no menu de checkpoints; o gate oferece Reiniciar/Cancelar
+  antes de abrir restore/delete.
+
+Não manter os dois ao mesmo tempo. A duplicidade confundiu porque parecia haver duas
+operações diferentes, quando fisicamente ambas passam por `undo_restore_before_reboot`.
 
 ### 7.4 Lock (importante para entender o fluxo)
 
@@ -412,11 +520,14 @@ pacman no pending"). **Não** fazer o bind mount.
    o caminho de undo dedicado do doctor; extrai `base_subvol_of_mountpoint`.
 4. **`e73c1aa` Refine: date Regret by restore time, label pending as not-rebooted** —
    data archived via `current_subvol`; rótulo de pending no menu (depois revertido).
+5. **`960ab73` Refactor: handle pending restore via gate, split clean vs desynced
+   /boot** — o gate synced/desync + doctor unificado (detalhado abaixo).
+6. **`d0dd412` Docs: add regret/pending/doctor refactor handoff** — este documento +
+   `archived-subvols-design.html`.
 
-### Working tree — NÃO COMMITADO (validado: 24 testes, clippy limpo)
+### Conteúdo do commit `960ab73` (validado: 24 testes, clippy limpo, +239/−100)
 
-`src/commands.rs`, `src/doctor.rs`, `src/ui/restore.rs`, `src/ui/snapshots.rs`
-(+239/−100). Conteúdo:
+`src/commands.rs`, `src/doctor.rs`, `src/ui/restore.rs`, `src/ui/snapshots.rs`:
 - **Gate synced/desync** (`gate_pending_restore`, `pending_boot_synced`,
   `resolve_pending_clean`, `resolve_pending_sync`, `complete_pending_restore`,
   `cancel_pending_restore`).
@@ -430,14 +541,82 @@ pacman no pending"). **Não** fazer o bind mount.
 - Hint corrigida em `abort_reboot_boot_desync` ("escolha 'Cancelar a restauração'"
   em vez de "selecione o Regret").
 
-### NÃO feito (pendências)
+### NÃO feito (pendências — próximos passos)
 
-- **Gap 1 do limine** (lock do mutex) — **não implementado**.
+- **Gap 1 do limine** (lock do mutex `/tmp/limine-global.lock` dentro de
+  `sync_fat32_paths`, com timeout, gated na presença do limine) — **não implementado**.
+  É a próxima tarefa concreta.
 - **Diagnóstico enganoso do doctor** (§7.5) — comparar `/boot` com destino no pending.
-- **Decisão final** de commit do working tree (mensagem sugerida:
-  `Refactor: gate pending restore in restore/delete, split clean vs desynced`).
-- Doc `docs/architecture/archived-subvols-design.html` está **untracked** (não
-  versionado) — decidir se entra.
+
+---
+
+## 9.1 Invariantes que a próxima IA deve preservar
+
+Estas regras são mais importantes que o formato atual do código:
+
+1. **Doctor não atualiza Regret.** Qualquer fluxo iniciado pelo doctor/resgate deve
+   usar semântica `PreserveExisting`: o estado substituído vira discard; Regret
+   legítimo permanece.
+2. **Restore normal (`Update`) é o único caminho que cria/substitui Regret.**
+   Recovery/doctor não deve chamar o caminho normal por conveniência.
+3. **Pending é detectado pelo mount vivo, não por arquivo auxiliar.** Se o subvol
+   relativo de uma config termina com `_snapg_regret`, essa config está pendente.
+4. **Pending bloqueia novos checkpoints.** Para trocar de checkpoint, o usuário
+   precisa resolver o pending primeiro: reiniciar/concluir ou cancelar/desfazer.
+5. **Restore completo no doctor exige grupos completos.** Se a config listada pelo
+   Snapper é `N`, um checkpoint completo precisa ter `N` membros. Não oferecer
+   grupo parcial com aparência de restore completo.
+6. **`/boot` FAT32 é parte da transação do produto.** O snapg só pode dizer que o
+   restore está pronto para reboot depois de sincronizar/verificar `/boot` contra o
+   root que vai bootar, não contra o root vivo quando há pending.
+7. **O Regret archived não pode ser perdido em falha que deixou o sistema intacto.**
+   Se o código precisar liberar o slot `_snapg_regret`, deve stashear e restaurar
+   em falha, não deletar eager.
+8. **Não confiar em Snapper no resgate Limine.** Snapper é bom caminho normal, mas
+   o doctor precisa de primitiva top-level Btrfs para ler snapshots quando `/` é um
+   snapshot de resgate ou quando `.snapshots` visto pelo ambiente vivo não reflete
+   o sistema-alvo.
+
+---
+
+## 9.2 Testes manuais que importam mais que `cargo test`
+
+`cargo test` cobre parser e utilitários, mas os bugs reais são de integração com
+Btrfs, Snapper, Limine e `/boot`. Antes de declarar arquitetura pronta, testar em
+ambiente descartável:
+
+1. `snapg save` com 3 configs; `snapg restore`; antes do reboot, rodar `snapg restore`
+   de novo. Resultado esperado: pending é detectado e novos checkpoints não são
+   oferecidos como se fossem seguros.
+2. Bootar em snapshot Limine/resgate e abrir doctor. Resultado esperado: restore
+   completo mostra checkpoints com todos os membros; não aparecem grupos `1 membros`
+   quando o save tinha 3 configs.
+3. Usar doctor para recuperar root/kernel. Resultado esperado: Regret anterior não
+   é substituído pelo estado quebrado.
+4. Interromper restore entre Fase 2 e reboot quando possível em VM. Resultado
+   esperado: doctor/restore consegue cancelar pending mesmo se o subvol base já
+   estiver ausente.
+5. Em FAT32/Limine, após restore, verificar que `/boot/vmlinuz*` casa byte a byte
+   com o root que vai bootar, não com o root vivo `_snapg_regret`.
+
+---
+
+## 9.3 Armadilhas de implementação recorrentes
+
+- **Não medir simplificação por LOC.** O objetivo foi reduzir estados globais
+  (`aside` saiu), não reduzir linhas. Helpers extras no rename-dance podem ser
+  aceitáveis se preservam atomicidade.
+- **Não reintroduzir `snapg undo` público sem decisão explícita.** A intenção mais
+  recente foi concentrar a UX em `snapg restore`/gate/doctor, não criar comando
+  concorrente.
+- **Não tratar checkpoint parcial como "quase completo".** Isso foi exatamente o
+  bug observado na tela do usuário.
+- **Não tentar silenciar `limine-snapper-sync` falsificando config.** O aviso de
+  `_snapg_regret` em `/proc/mounts` é transitório; bind-mount/config fake pode
+  gerar boot entries erradas.
+- **Cuidado com o binário instalado.** O usuário normalmente testa via pacote
+  instalado (`/usr/bin/snapg`); mudanças no source só aparecem depois de
+  reinstalar com o PKGBUILD ou rodar explicitamente o binário de `target/`.
 
 ---
 
