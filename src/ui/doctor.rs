@@ -27,17 +27,6 @@ pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
         .context("selecionar sistema")
 }
 
-pub(crate) fn select_undo_done_action() -> Result<UndoDoneAction> {
-    clear_screen();
-    header("Diagnóstico de boot");
-    line(format_args!(
-        "{} restauração desfeita sem reboot",
-        style("✓").green().bold()
-    ));
-    line(format_args!("Regret anterior restaurado, quando existia."));
-    wait_done_action()
-}
-
 /// Espera enter/esc após uma ação terminal cujo status já está na tela (relatório
 /// do doctor, "nada a fazer", "correção não aplicada"). Enter sai; Esc pede o
 /// diagnóstico do sistema atual. Só imprime a dica de teclas — não limpa nem
@@ -79,7 +68,6 @@ pub(crate) fn select_rescue_action(
     current_kernel: &str,
     default_kernel: &str,
     boot_kernel: &str,
-    can_undo_pending_restore: bool,
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Diagnóstico de boot");
@@ -117,20 +105,13 @@ pub(crate) fn select_rescue_action(
     // um item do Select quebra a medição de largura, e item que dá wrap faz o
     // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
     // linhas de diagnóstico acima, impressas direto.
-    let mut choices = Vec::new();
-    if can_undo_pending_restore {
-        choices.push(
-            "Desfazer restauração sem reboot — volta ao estado anterior e restaura o Regret antigo"
-                .to_string(),
-        );
-    }
-    choices.extend([
+    let choices = [
         format!(
             "Manter o root atual (kernel {default_kernel}) — ajusta o /boot · mantém root e home"
         ),
         "Restaurar só o / — escolher kernel · mantém home e root".to_string(),
         "Mudar o que boota — restore completo · outro snapshot ou desfazer".to_string(),
-    ]);
+    ];
     let items: Vec<String> = choices
     .iter()
     .map(|t| truncate_for_terminal(t, SELECT_MARKER))

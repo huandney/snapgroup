@@ -1,3 +1,4 @@
+use crate::boot;
 use crate::btrfs;
 use crate::group::{Group, Member};
 use crate::snapper;
@@ -184,6 +185,7 @@ fn rollback_group_with_commit(
 /// no /boot legado.
 pub fn member_snapshot_path(m: &Member, toplevel: &Path) -> Result<PathBuf> {
     let mountpoint = snapper::config_subvolume(&m.config)?;
+    let base_subvol = configured_subvol_for_mountpoint(&mountpoint)?;
     // Path top-level do snapshot read-only (pode ser nested ou top-level)
     let snap_live_path = format!(
         "{}/.snapshots/{}/snapshot",
@@ -191,8 +193,27 @@ pub fn member_snapshot_path(m: &Member, toplevel: &Path) -> Result<PathBuf> {
         m.snapshot.number
     );
     let snap_subvol_path = btrfs::subvol_relative_path(Path::new(&snap_live_path))
-        .with_context(|| format!("descobrir path do snapshot #{}", m.snapshot.number))?;
-    Ok(toplevel.join(&snap_subvol_path))
+        .unwrap_or_else(|_| format!("{base_subvol}/.snapshots/{}/snapshot", m.snapshot.number));
+    Ok(toplevel.join(snap_subvol_path))
+}
+
+fn configured_subvol_for_mountpoint(mountpoint: &str) -> Result<String> {
+    if mountpoint == "/" && let Some(root_subvol) = boot::default_root_subvol() {
+        return Ok(root_subvol);
+    }
+    base_subvol_of_mountpoint(mountpoint)
+}
+
+/// Subvol base de um mountpoint, descontando o sufixo de restore pendente.
+/// Pré-reboot o subvol vivo é `<base>_snapg_regret` (o chão renomeado, ainda
+/// montado por inode); o nome base é o que importa pra preparar/escanear.
+pub fn base_subvol_of_mountpoint(mountpoint: &str) -> Result<String> {
+    let current = btrfs::subvol_relative_path(Path::new(mountpoint))
+        .with_context(|| format!("descobrir subvol ativo de {mountpoint}"))?;
+    Ok(current
+        .strip_suffix("_snapg_regret")
+        .unwrap_or(&current)
+        .to_string())
 }
 
 /// Fase 1: cria a cópia writable do snapshot RO num nome intermediário.
@@ -201,8 +222,7 @@ fn prepare_member(m: &Member, toplevel: &Path) -> Result<Prep> {
     let mountpoint = snapper::config_subvolume(&m.config)?;
 
     // Path top-level do subvol atualmente ativo (ex: "@home")
-    let current_subvol = btrfs::subvol_relative_path(Path::new(&mountpoint))
-        .with_context(|| format!("descobrir subvol ativo de {mountpoint}"))?;
+    let current_subvol = configured_subvol_for_mountpoint(&mountpoint)?;
 
     let intermediate_name = prep_intermediate_name(&current_subvol);
 

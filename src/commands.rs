@@ -98,7 +98,7 @@ fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
 
     let result = (|| -> Result<()> {
         if regret_policy.needs_rescue_root_scan() {
-            augment_root_member_from_toplevel(&mut groups, &configs, &mount_path)?;
+            groups = scan_groups_from_toplevel(&mount_path, &configs)?;
         }
         restore_inner(&groups, &configs, &mount_path, regret_policy)
     })();
@@ -119,42 +119,6 @@ pub fn restore_root_only() -> Result<()> {
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
     let result = restore_root_only_inner(&mount_path, &root_subvol);
-    let _ = btrfs::umount_toplevel(&mount_path);
-    result
-}
-
-pub fn has_pending_restore() -> Result<bool> {
-    let configs = snapper::list_configs()?;
-    if configs.is_empty() {
-        return Ok(false);
-    }
-
-    let uuid = btrfs::fs_uuid("/")?;
-    let mount_path = rollback::toplevel_mount_path(&uuid);
-    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-
-    let result = pending_restore_from_live(&configs).map(|p| p.is_some());
-    let _ = btrfs::umount_toplevel(&mount_path);
-    result
-}
-
-pub fn undo_pending_restore() -> Result<()> {
-    let configs = snapper::list_configs()?;
-    if configs.is_empty() {
-        bail!("nenhuma config snapper encontrada");
-    }
-
-    let uuid = btrfs::fs_uuid("/")?;
-    let mount_path = rollback::toplevel_mount_path(&uuid);
-    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-
-    let result = (|| -> Result<()> {
-        let Some(done) = pending_restore_from_live(&configs)? else {
-            bail!("nenhuma restauração pendente de reboot encontrada");
-        };
-        undo_restore_before_reboot(&done, &mount_path)
-    })();
-
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
@@ -305,6 +269,14 @@ fn restore_inner(
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
+    let groups = if matches!(
+        regret.as_ref().map(|r| r.kind),
+        Some(RegretKind::PendingRestore)
+    ) {
+        &[]
+    } else {
+        groups
+    };
 
     if groups.is_empty() && regret.is_none() {
         crate::ui::restore::print_no_restore_points();
@@ -330,50 +302,6 @@ fn restore_inner(
         }
         Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
-}
-
-fn augment_root_member_from_toplevel(
-    groups: &mut Vec<Group>,
-    configs: &[String],
-    toplevel: &Path,
-) -> Result<()> {
-    let Some((root_config, root_subvol)) = root_config_and_subvol(configs)? else {
-        return Ok(());
-    };
-
-    for member in scan_root_members_from_toplevel(toplevel, &root_subvol, &root_config)? {
-        let Some(id) = group::extract_id(&member.snapshot) else {
-            continue;
-        };
-        match groups.iter_mut().find(|g| g.id == id) {
-            Some(g) => {
-                if !g.members.iter().any(|m| m.config == root_config) {
-                    g.members.push(member);
-                    g.members.sort_by(|a, b| a.config.cmp(&b.config));
-                }
-            }
-            None => groups.push(Group {
-                id,
-                members: vec![member],
-            }),
-        }
-    }
-
-    groups.sort_by_key(|g| std::cmp::Reverse(g.id));
-    Ok(())
-}
-
-fn root_config_and_subvol(configs: &[String]) -> Result<Option<(String, String)>> {
-    for cfg in configs {
-        let mp = snapper::config_subvolume(cfg)?;
-        if mp == "/" {
-            let Some(root_subvol) = boot::default_root_subvol() else {
-                return Ok(None);
-            };
-            return Ok(Some((cfg.clone(), root_subvol)));
-        }
-    }
-    Ok(None)
 }
 
 fn group_kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<group::GroupId, String> {
@@ -407,6 +335,42 @@ fn root_member(group: &Group) -> Result<Option<&Member>> {
         }
     }
     Ok(None)
+}
+
+fn scan_groups_from_toplevel(toplevel: &Path, configs: &[String]) -> Result<Vec<Group>> {
+    let mut by_id: HashMap<group::GroupId, Vec<Member>> = HashMap::new();
+    for cfg in configs {
+        let Some(subvol) = config_snapshot_subvol(cfg)? else {
+            continue;
+        };
+        for member in scan_config_members_from_toplevel(toplevel, &subvol, cfg)? {
+            let Some(id) = group::extract_id(&member.snapshot) else {
+                continue;
+            };
+            by_id.entry(id).or_default().push(member);
+        }
+    }
+
+    let mut groups: Vec<Group> = by_id
+        .into_iter()
+        .filter_map(|(id, mut members)| {
+            if members.len() != configs.len() {
+                return None;
+            }
+            members.sort_by(|a, b| a.config.cmp(&b.config));
+            Some(Group { id, members })
+        })
+        .collect();
+    groups.sort_by_key(|g| std::cmp::Reverse(g.id));
+    Ok(groups)
+}
+
+fn config_snapshot_subvol(config: &str) -> Result<Option<String>> {
+    let mountpoint = snapper::config_subvolume(config)?;
+    if mountpoint == "/" {
+        return Ok(boot::default_root_subvol());
+    }
+    Ok(Some(rollback::base_subvol_of_mountpoint(&mountpoint)?))
 }
 
 /// Um snapshot de root varrido direto do toplevel (`@/.snapshots/N/snapshot`),
@@ -450,12 +414,12 @@ fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSna
     Ok(snaps)
 }
 
-fn scan_root_members_from_toplevel(
+fn scan_config_members_from_toplevel(
     toplevel: &Path,
-    root_subvol: &str,
-    root_config: &str,
+    subvol: &str,
+    config: &str,
 ) -> Result<Vec<Member>> {
-    let dir = toplevel.join(root_subvol).join(".snapshots");
+    let dir = toplevel.join(subvol).join(".snapshots");
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -471,15 +435,12 @@ fn scan_root_members_from_toplevel(
             continue;
         };
         let src = entry.path().join("snapshot");
-        if !src.join("usr/lib/modules").exists() {
-            continue;
-        }
         let Some(snapshot) = snapshot_from_info_xml(&entry.path().join("info.xml"), &src, number)?
         else {
             continue;
         };
         members.push(Member {
-            config: root_config.to_string(),
+            config: config.to_string(),
             snapshot,
         });
     }
