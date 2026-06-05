@@ -5,7 +5,7 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    PostRestoreAction, RegretEntry, RegretInfo, RegretKind, RestorePlan, regret_when,
+    PendingAction, PendingSyncAction, PostRestoreAction, RegretEntry, RegretInfo, RestorePlan,
     select_restore_plan,
 };
 use crate::ui::snapshots;
@@ -25,10 +25,6 @@ enum RestoreRegretPolicy {
 impl RestoreRegretPolicy {
     fn needs_rescue_root_scan(self) -> bool {
         matches!(self, RestoreRegretPolicy::PreserveExisting)
-    }
-
-    fn updates_regret(self) -> bool {
-        matches!(self, RestoreRegretPolicy::Update)
     }
 }
 
@@ -86,6 +82,12 @@ fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada");
+    }
+
+    // Gate: uma restauração pendente de reboot não convive com um novo restore.
+    // Resolve antes — concluir (reboot) ou cancelar — em vez de empilhar.
+    if let Some(done) = pending_restore_from_live(&configs)? {
+        return gate_pending_restore(done);
     }
 
     // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
@@ -150,16 +152,99 @@ fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::
     Ok(Some(done))
 }
 
-fn ensure_no_pending_restore(configs: &[String]) -> Result<()> {
-    if pending_restore_from_live(configs)?.is_none() {
-        return Ok(());
-    }
+/// Há uma restauração aplicada mas ainda não reiniciada? Leitura pura, sem lock.
+pub fn has_pending_restore() -> Result<bool> {
+    let configs = snapper::list_configs()?;
+    Ok(pending_restore_from_live(&configs)?.is_some())
+}
 
-    bail!(
-        "já existe uma restauração pendente de reboot.\n  \
-         Reinicie para concluir a restauração atual ou rode 'snapg restore' \
-         e selecione o Regret no menu para desfazê-la."
-    )
+/// Ponto de entrada do doctor para um pending: sincronizar o /boot com o destino
+/// e reiniciar, ou cancelar. O lock global DEVE estar pego pelo caller.
+pub fn doctor_resolve_pending() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    let Some(done) = pending_restore_from_live(&configs)? else {
+        return Ok(());
+    };
+    if pending_boot_synced(&done)? {
+        resolve_pending_clean(&done)
+    } else {
+        resolve_pending_sync(&done)
+    }
+}
+
+/// Gate de `restore`/`delete` (sob o lock do caller) quando há uma restauração
+/// aplicada mas ainda não reiniciada. Sem checkpoints a oferecer:
+/// - /boot casa com o destino → reiniciar é seguro: reiniciar / cancelar;
+/// - /boot dessincronizado → reiniciar quebraria o boot: leva ao doctor.
+fn gate_pending_restore(done: Vec<rollback::Done>) -> Result<()> {
+    if pending_boot_synced(&done)? {
+        resolve_pending_clean(&done)
+    } else if crate::ui::restore::confirm_run_doctor()? {
+        resolve_pending_sync(&done)
+    } else {
+        Ok(())
+    }
+}
+
+/// /boot casa com o destino: reiniciar é seguro. Reiniciar ou cancelar.
+fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
+    match crate::ui::restore::select_pending_action()? {
+        PendingAction::Reboot => reboot_now(),
+        PendingAction::Cancel => cancel_pending_restore(done),
+        PendingAction::Nothing => Ok(()),
+    }
+}
+
+/// Sincronizar o /boot com o destino e reiniciar, ou cancelar. Compartilhado
+/// pelo doctor e pelo gate quando o /boot está dessincronizado.
+fn resolve_pending_sync(done: &[rollback::Done]) -> Result<()> {
+    match crate::ui::restore::select_pending_sync_action()? {
+        PendingSyncAction::SyncReboot => complete_pending_restore(done),
+        PendingSyncAction::Cancel => cancel_pending_restore(done),
+        PendingSyncAction::Nothing => Ok(()),
+    }
+}
+
+/// O /boot já casa com o subvol de destino (o que vai bootar)? Em /boot não-FAT32
+/// (nativo) é sempre coerente — o kernel vive dentro do snapshot.
+fn pending_boot_synced(done: &[rollback::Done]) -> Result<bool> {
+    let Some(root) = done.iter().find(|d| d.mountpoint == "/") else {
+        return Ok(true);
+    };
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let dest_root = mount_path.join(&root.current_subvol);
+    let result = boot::boot_already_synced(&dest_root);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+/// Concluir: garante o /boot coerente com o subvol que vai bootar (o destino do
+/// restore) e então reinicia. O sync é no-op se o /boot já casa com o destino.
+fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let result = (|| -> Result<()> {
+        if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+            let dest_root = mount_path.join(&root.current_subvol);
+            boot::sync_fat32(&dest_root).context("sincronizar /boot com o destino do restore")?;
+        }
+        Ok(())
+    })();
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result?;
+    reboot_now()
+}
+
+fn cancel_pending_restore(done: &[rollback::Done]) -> Result<()> {
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let result = undo_restore_before_reboot(done, &mount_path);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
 }
 
 fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
@@ -201,16 +286,10 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
     execute_restore_root_to_snapshot(mount_path, root_subvol, number)
 }
 
-/// Descobre regrets existentes no toplevel.
+/// Descobre o Regret archived (estado anterior a um restore já efetivado por
+/// reboot) no toplevel. O pending (restauração não reiniciada) não entra aqui —
+/// é tratado pelo gate em `restore`/`delete`, não como Regret restaurável.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
-    if let Some(done) = pending_restore_from_live(configs)? {
-        return Ok(Some(regret_from_pending_restore(done)));
-    }
-
-    discover_archived_regrets(toplevel, configs)
-}
-
-fn discover_archived_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
     for cfg in configs {
         let mp = snapper::config_subvolume(cfg)?;
@@ -234,27 +313,7 @@ fn discover_archived_regrets(toplevel: &Path, configs: &[String]) -> Result<Opti
     Ok(Some(RegretInfo {
         creation_time: regret_creation_time(toplevel, &entries),
         entries,
-        kind: RegretKind::Archived,
     }))
-}
-
-fn regret_from_pending_restore(done: Vec<rollback::Done>) -> RegretInfo {
-    let entries: Vec<RegretEntry> = done
-        .into_iter()
-        .map(|d| RegretEntry {
-            config: d.config,
-            mountpoint: d.mountpoint,
-            current_subvol: d.current_subvol,
-            regret_subvol: d.backup_subvol,
-        })
-        .collect();
-    RegretInfo {
-        // Pending: o Regret é o sistema vivo, não congelou em instante nenhum.
-        // A UI mostra um rótulo de estado, não data.
-        creation_time: String::new(),
-        entries,
-        kind: RegretKind::PendingRestore,
-    }
 }
 
 fn regret_creation_time(toplevel: &Path, entries: &[RegretEntry]) -> String {
@@ -276,14 +335,6 @@ fn restore_inner(
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
-    let groups = if matches!(
-        regret.as_ref().map(|r| r.kind),
-        Some(RegretKind::PendingRestore)
-    ) {
-        &[]
-    } else {
-        groups
-    };
 
     if groups.is_empty() && regret.is_none() {
         crate::ui::restore::print_no_restore_points();
@@ -631,11 +682,6 @@ fn execute_restore_checkpoint(
         return Ok(());
     }
 
-    let configs: Vec<String> = group.members.iter().map(|m| m.config.clone()).collect();
-    if regret_policy.updates_regret() {
-        ensure_no_pending_restore(&configs)?;
-    }
-
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
@@ -662,9 +708,8 @@ fn execute_restore_checkpoint(
                     return abort_reboot_boot_desync(
                         &restored_root,
                         e,
-                        "rode 'snapg restore' e selecione o Regret \
-                         (↺ Regret — Estado Anterior à Restauração) para voltar ao \
-                         sistema bootável atual antes de qualquer reboot.",
+                        "rode 'snapg restore' e escolha 'Cancelar a restauração' \
+                         para voltar ao sistema bootável atual antes de qualquer reboot.",
                     );
                 }
             }
@@ -679,7 +724,6 @@ fn execute_restore_checkpoint(
 }
 
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
-    let kind = regret.kind;
     let done: Vec<rollback::Done> = regret
         .entries
         .into_iter()
@@ -691,15 +735,8 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
         })
         .collect();
 
-    match kind {
-        RegretKind::Archived => restore_archived_regret(&done, mount_path),
-        RegretKind::PendingRestore => undo_restore_before_reboot(&done, mount_path),
-    }
-}
-
-fn restore_archived_regret(done: &[rollback::Done], mount_path: &Path) -> Result<()> {
     let label = btrfs::now_local_label().context("obter label de tempo")?;
-    rollback::revert_regret(done, mount_path, &label).context("restaurar regret")?;
+    rollback::revert_regret(&done, mount_path, &label).context("restaurar regret")?;
 
     crate::ui::restore::print_regret_restore_done(done.len());
 
@@ -755,6 +792,13 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
 }
 
 pub fn delete(yes: bool) -> Result<()> {
+    // Gate: não apagar checkpoints com uma restauração pendente de reboot —
+    // resolve antes (concluir ou cancelar).
+    let configs = snapper::list_configs()?;
+    if let Some(done) = pending_restore_from_live(&configs)? {
+        return gate_pending_restore(done);
+    }
+
     let groups = group::list_groups()?;
     if groups.is_empty() {
         snapshots::print_no_groups();
@@ -804,11 +848,14 @@ pub fn list() -> Result<()> {
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
     let result = (|| -> Result<()> {
+        if pending_restore_from_live(&configs)?.is_some() {
+            snapshots::print_pending_restore_status();
+        }
         let regret = discover_regrets(&mount_path, &configs)?;
         let mut printed_regret = false;
         if let Some(r) = regret {
             let kernel = regret_kernel_label(&r, &mount_path);
-            snapshots::print_regret_status(&regret_when(&r), &kernel);
+            snapshots::print_regret_status(&r.creation_time, &kernel);
             printed_regret = true;
         }
 

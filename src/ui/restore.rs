@@ -23,27 +23,12 @@ pub(crate) struct RegretEntry {
     pub(crate) regret_subvol: String,
 }
 
-/// Regret ativo com data de criação (metadata BTRFS).
+/// Regret ativo: estado anterior à última restauração já efetivada por reboot,
+/// com a data do restore que o estabeleceu. O pending (restauração não
+/// reiniciada) não passa por aqui — é resolvido por `select_pending_action`.
 pub(crate) struct RegretInfo {
     pub(crate) entries: Vec<RegretEntry>,
     pub(crate) creation_time: String,
-    pub(crate) kind: RegretKind,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum RegretKind {
-    Archived,
-    PendingRestore,
-}
-
-/// Texto pro slot de "quando" do Regret. Archived: a data do restore que o
-/// estabeleceu. Pending: o Regret é o sistema vivo, sem instante de
-/// congelamento — mostra um rótulo de estado em vez de data.
-pub(crate) fn regret_when(regret: &RegretInfo) -> String {
-    match regret.kind {
-        RegretKind::Archived => short_datetime(&regret.creation_time),
-        RegretKind::PendingRestore => "não reiniciado".to_string(),
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +43,24 @@ pub(crate) enum PostRestoreAction {
     RebootNow,
     Undo,
     RebootLater,
+}
+
+/// Ação para um restore já aplicado mas ainda não reiniciado (pending), com o
+/// /boot coerente com o destino — reiniciar é seguro.
+#[derive(Clone, Copy)]
+pub(crate) enum PendingAction {
+    Reboot,
+    Cancel,
+    Nothing,
+}
+
+/// Ação quando o /boot está dessincronizado do destino (doctor): reiniciar cego
+/// quebraria o boot, então a opção é sincronizar antes de reiniciar.
+#[derive(Clone, Copy)]
+pub(crate) enum PendingSyncAction {
+    SyncReboot,
+    Cancel,
+    Nothing,
 }
 
 /// Ação selecionada na TUI.
@@ -143,7 +146,7 @@ pub(crate) fn select_restore_action(
             "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
             "↺ Regret",
             kernel,
-            regret_when(r),
+            short_datetime(&r.creation_time),
             r.entries.len()
         );
         items.push(truncate_for_terminal(&text, prefix_len));
@@ -384,6 +387,84 @@ pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
     Ok(actions[choice])
 }
 
+/// Prompt quando o usuário aciona restore/delete com uma restauração já aplicada
+/// mas não reiniciada. Não há checkpoints a oferecer nesse estado: ou conclui
+/// (reboot) ou cancela (volta ao estado de antes da restauração).
+pub(crate) fn select_pending_action() -> Result<PendingAction> {
+    clear_screen();
+    header("Restauração pendente de reboot");
+    line(format_args!(
+        "Há uma restauração aplicada que ainda não foi reiniciada. Reinicie para"
+    ));
+    line(format_args!(
+        "concluí-la, ou cancele para voltar ao estado atual (kernel e subvolumes"
+    ));
+    line(format_args!("de antes da restauração — home e root atuais preservados)."));
+    println!();
+    let actions = [PendingAction::Reboot, PendingAction::Cancel];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("O que fazer com a restauração pendente?")
+        .items(&[
+            "Reiniciar agora (concluir a restauração)",
+            "Cancelar a restauração (voltar ao estado atual)",
+        ])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(PendingAction::Nothing);
+    };
+    Ok(actions[choice])
+}
+
+/// Pending com o /boot dessincronizado do destino: reiniciar agora quebraria o
+/// boot. Pergunta se leva ao doctor para corrigir antes.
+pub(crate) fn confirm_run_doctor() -> Result<bool> {
+    clear_screen();
+    header("Restauração pendente — /boot dessincronizado");
+    line(format_args!(
+        "Há uma restauração aplicada que ainda não foi reiniciada, mas o /boot não"
+    ));
+    line(format_args!(
+        "casa com o kernel do destino. Reiniciar agora quebraria o boot (o kernel"
+    ));
+    line(format_args!("não acharia seus módulos)."));
+    println!();
+    confirm("Rodar o doctor para sincronizar o /boot?")
+}
+
+/// Prompt do doctor para um pending dessincronizado: sincronizar o /boot com o
+/// destino e reiniciar, ou cancelar a restauração.
+pub(crate) fn select_pending_sync_action() -> Result<PendingSyncAction> {
+    clear_screen();
+    header("Doctor — sincronizar /boot com o destino");
+    line(format_args!(
+        "Sincronizar copia o kernel/initramfs do destino para o /boot e reinicia."
+    ));
+    line(format_args!(
+        "Cancelar volta ao estado de antes da restauração (home e root preservados)."
+    ));
+    println!();
+    let actions = [PendingSyncAction::SyncReboot, PendingSyncAction::Cancel];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt("O que fazer?")
+        .items(&[
+            "Sincronizar o /boot e reiniciar",
+            "Cancelar a restauração (voltar ao estado atual)",
+        ])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(PendingSyncAction::Nothing);
+    };
+    Ok(actions[choice])
+}
+
 pub(crate) fn print_restore_undone(done_len: usize) {
     println!(
         "{} restauração desfeita sem reboot ({} membros)",
@@ -471,16 +552,12 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
 
     clear_screen();
     header("Restaurar Regret");
-    let when = match regret.kind {
-        RegretKind::Archived => format!("criado {}", short_datetime(&regret.creation_time)),
-        RegretKind::PendingRestore => "restauração ainda não reiniciada".to_string(),
-    };
     line(format_args!(
-        "{}  {}  estado anterior à última restauração  {}  {}",
+        "{}  {}  estado anterior à última restauração  {}  criado {}",
         regret_title("↺ Regret"),
         style("·").dim(),
         style("·").dim(),
-        when
+        short_datetime(&regret.creation_time)
     ));
     println!();
 
@@ -509,7 +586,6 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     Ok(Some(RegretInfo {
         entries,
         creation_time: regret.creation_time.clone(),
-        kind: regret.kind,
     }))
 }
 

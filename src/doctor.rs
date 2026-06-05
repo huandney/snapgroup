@@ -10,11 +10,18 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
     // não o subvol que boota por padrão, sincronizar `/boot` daqui miraria o
     // root errado. Recusa e instrui. Args explícitos fazem bypass: quem passa
     // --root sabe o alvo.
-    if root.is_none()
-        && boot.is_none()
-        && let Some(ctx) = boot::detect_rescue_boot()?
-    {
-        return resolve_rescue(ctx, apply);
+    if root.is_none() && boot.is_none() {
+        // Restauração pendente de reboot: o `/` montado é um `*_snapg_regret`, o
+        // que diverge do fstab e o `detect_rescue_boot` confundiria com resgate.
+        // Mas não é resgate — é o mesmo estado que restore/delete resolvem com
+        // reiniciar/cancelar. Trata aqui, com o mesmo prompt, antes do resgate.
+        if crate::commands::has_pending_restore()? {
+            let _lock = crate::lock::acquire()?;
+            return crate::commands::doctor_resolve_pending();
+        }
+        if let Some(ctx) = boot::detect_rescue_boot()? {
+            return resolve_rescue(ctx, apply);
+        }
     }
     let target = select_target(root, boot)?;
     diagnose_and_apply(&target, apply)?;
