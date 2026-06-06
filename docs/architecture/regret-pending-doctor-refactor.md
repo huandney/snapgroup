@@ -406,14 +406,32 @@ operações diferentes, quando fisicamente ambas passam por `undo_restore_before
 - O `doctor::run` pega o lock **só quando confirma pending** (`has_pending_restore`
   é leitura pura, sem lock); `doctor_resolve_pending` roda sob esse lock.
 
-### 7.5 Diagnóstico enganoso do doctor (bug conhecido, não corrigido)
+### 7.5 Diagnóstico do doctor no pending (CORRIGIDO)
 
-A tabela de diagnóstico do doctor compara o `/boot` com o subvol **VIVO**
-(`@_snapg_regret`), não com o **destino** (`@`). No pending isso sempre mostra
-"✗ /boot difere do /", o que **parece** problema quando está tudo certo (o `/boot`
-casa com o destino, que é o que importa). Foi o que confundiu o usuário a achar que
-estava "com problema de sincronização". Vale corrigir: no pending, comparar com o
-destino. **Não corrigido ainda.**
+Eram **dois** problemas, e a leitura original deste doc estava errada num deles.
+
+**Problema A (referência errada):** a tabela do doctor comparava o `/boot` com o
+subvol **VIVO** (`@_snapg_regret`), não com o **destino** (`@`, o que vai bootar).
+No pending isso mostrava "✗ /boot difere do /" mesmo quando o `/boot` casava com o
+destino. **Corrigido:** `diagnosis_for` (doctor.rs), quando `root == "/"` e há
+pending, diagnostica contra o destino via `commands::pending_dest_diagnosis`
+(monta o top-level com guard RAII).
+
+**Problema B (o sinal era insuficiente — descoberto depois):** a versão antiga deste
+doc concluía que, se o vmlinuz casa com o destino, "está tudo certo". **Errado.** O
+usuário reiniciou nesse estado e **ficou preso no estágio do Limine** (bootloader
+recusou a entrada). Causa: um restore interrompido com `Ctrl-C` deixou os **hashes
+BLAKE2B do `limine.conf`** inconsistentes com os arquivos do `/boot`. O Limine valida
+esses hashes no boot; vmlinuz casar **≠** bootável. **Corrigido:** novo
+`BootIssue::HashMismatch` e a função `limine_hashes_match`; um predicado único
+`boot_ready = boot_matches_snapshot && limine_hashes_match` passou a ser o sinal de
+"boot pronto" em **todos** os gates (`diagnose_boot`, `verify_synced`, o early-return
+de `sync_fat32_paths` e `boot_already_synced` — este último é o que o gate de pending
+usa para decidir Reiniciar). Sem unificar os quatro, o doctor acusava mas o sync/gate
+liberavam mesmo assim.
+
+Pendência herdada: a parte de integração (`limine_hashes_match` com `b2sum` real,
+mount do top-level) não tem teste automatizado — validar pelo teste manual §9.2.5.
 
 ---
 
@@ -459,14 +477,22 @@ Pacotes: `limine`, `limine-mkinitcpio-hook`, `limine-snapper-sync`. Componentes:
 - **Gap 3 (sobreposição):** snapg e limine-snapper-sync ambos gerenciam o `/boot` em
   função de snapshots.
 
-### 8.4 Estado real do usuário (medido)
+### 8.4 Estado real do usuário (medido) — CONCLUSÃO ORIGINAL ERRADA
 
 Medido montando o top-level read-only:
 - destino `@`: módulos `7.0.10-2-cachyos`; vivo `@_snapg_regret`: módulos `7.0.11-1-cachyos`.
 - vmlinuz do `/boot` **CASA** (bytes) com o do destino `@` (7.0.10).
-- **Conclusão:** o estado está **limpo** (o `/boot` está correto para o destino). O
-  "✗ difere do /" do doctor era a comparação com o subvol vivo (errado). O aviso do
-  limine é ruído transitório, não dano.
+
+**Conclusão ORIGINAL (errada):** "o estado está limpo porque o vmlinuz casa".
+
+**Correção:** vmlinuz casar **não** garante boot. O usuário reiniciou nesse exato
+estado e **ficou preso no Limine** (bootloader recusou a entrada) — os hashes BLAKE2B
+do `limine.conf` estavam inconsistentes com os arquivos do `/boot` (restore
+interrompido com `Ctrl-C`). O sinal correto de "boot pronto" inclui a verificação de
+hash, não só o byte-compare do vmlinuz (ver §7.5, Problema B). O "✗ difere do /" do
+doctor tinha duas causas misturadas: a referência errada (comparava com o vivo) **e**
+um desync real de hash. Ambas tratadas. O aviso do limine-snapper-notify (Gap 2)
+segue sendo ruído transitório à parte.
 
 ### 8.5 Análise das soluções propostas (por outra IA) — vereditos
 
@@ -541,12 +567,23 @@ pacman no pending"). **Não** fazer o bind mount.
 - Hint corrigida em `abort_reboot_boot_desync` ("escolha 'Cancelar a restauração'"
   em vez de "selecione o Regret").
 
+### Feito depois (b + b′ + unificação)
+
+- **Diagnóstico do doctor no pending (§7.5, Problema A)** — `diagnosis_for` diagnostica
+  contra o destino, não contra o `_snapg_regret` vivo (`pending_dest_diagnosis` +
+  `ToplevelMountGuard`).
+- **Verificação de hash do `limine.conf` (§7.5, Problema B)** — `BootIssue::HashMismatch`,
+  `limine_hashes_match`, e o predicado único `boot_ready` usado em `diagnose_boot`,
+  `verify_synced`, no early-return de `sync_fat32_paths` e em `boot_already_synced`.
+
 ### NÃO feito (pendências — próximos passos)
 
 - **Gap 1 do limine** (lock do mutex `/tmp/limine-global.lock` dentro de
   `sync_fat32_paths`, com timeout, gated na presença do limine) — **não implementado**.
-  É a próxima tarefa concreta.
-- **Diagnóstico enganoso do doctor** (§7.5) — comparar `/boot` com destino no pending.
+  Rebaixado de "SÉRIO" para condicional/baixo: o watcher fica inerte sem `inotifywait`
+  e o snapg não dispara o plugin de snapper no restore; o vetor real é só um
+  `pacman`/`snapper create` externo na janela pending. O flock segue sendo o fix
+  correto se quiser a garantia.
 
 ---
 
