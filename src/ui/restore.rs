@@ -615,7 +615,6 @@ pub(crate) fn review_checkpoint_restore(
         for wrapped in wrap_text(desc, content_width()) {
             line(format_args!("{wrapped}"));
         }
-        println!();
     }
 
     let has_skip = !skipped.is_empty();
