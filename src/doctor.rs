@@ -272,6 +272,14 @@ fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
 
 fn diagnosis_for(root: &Path, boot_path: &Path) -> Result<boot::BootDiagnosis> {
     validate_target(root, boot_path)?;
+    // No pending o `/` montado é o `*_snapg_regret` (chão antigo), não o subvol
+    // que vai bootar. Comparar o /boot contra ele acusa um falso "difere"; o que
+    // importa é o destino. Mira o destino montando o top-level.
+    if root == Path::new("/")
+        && let Some(diagnosis) = crate::commands::pending_dest_diagnosis(boot_path)?
+    {
+        return Ok(diagnosis);
+    }
     boot::diagnose_boot(root, boot_path)
 }
 

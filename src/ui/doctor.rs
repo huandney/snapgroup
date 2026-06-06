@@ -273,6 +273,14 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
                 style("✗").red().bold()
             );
         }
+        BootHealth::NeedsSync(BootIssue::HashMismatch) => {
+            println!(
+                "{} {:<COL$} {} kernels casam, mas os hashes do limine.conf divergem (Limine recusa o boot)",
+                tree_branch(true),
+                "estado",
+                style("✗").red().bold()
+            );
+        }
         BootHealth::Unmounted => print_unmounted(root),
     }
 }

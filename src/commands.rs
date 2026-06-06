@@ -13,7 +13,7 @@ use crate::ui::term::{clear_screen, confirm};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy)]
@@ -218,6 +218,38 @@ fn pending_boot_synced(done: &[rollback::Done]) -> Result<bool> {
     let result = boot::boot_already_synced(&dest_root);
     let _ = btrfs::umount_toplevel(&mount_path);
     result
+}
+
+/// Desmonta o top-level ao sair de escopo, mesmo em erro/early-return.
+struct ToplevelMountGuard {
+    path: PathBuf,
+}
+
+impl Drop for ToplevelMountGuard {
+    fn drop(&mut self) {
+        let _ = btrfs::umount_toplevel(&self.path);
+    }
+}
+
+/// Diagnóstico de `/boot` contra o subvol de destino de uma restauração pendente
+/// (o que vai bootar), não contra o `*_snapg_regret` vivo. No pending o `/` é o
+/// chão antigo renomeado; diagnosticar contra ele acusa um falso "difere", já que
+/// o `/boot` está coerente com o destino. `Ok(None)` quando não há pending — o
+/// caller cai no diagnóstico normal.
+pub(crate) fn pending_dest_diagnosis(boot_path: &Path) -> Result<Option<boot::BootDiagnosis>> {
+    let configs = snapper::list_configs()?;
+    let Some(done) = pending_restore_from_live(&configs)? else {
+        return Ok(None);
+    };
+    let Some(root) = done.iter().find(|d| d.mountpoint == "/") else {
+        return Ok(None);
+    };
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let _guard = ToplevelMountGuard { path: mount_path.clone() };
+    let dest_root = mount_path.join(&root.current_subvol);
+    Ok(Some(boot::diagnose_boot(&dest_root, boot_path)?))
 }
 
 /// Concluir: garante o /boot coerente com o subvol que vai bootar (o destino do
@@ -1137,6 +1169,27 @@ mod tests {
         "#;
 
         assert_eq!(snapgroup_id_from_info_xml(xml), None);
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_with_whitespace_and_newlines() {
+        // xml_text faz trim do conteúdo interno, então key/value indentados em
+        // múltiplas linhas ainda casam. Guarda de regressão dessa tolerância.
+        let xml = r#"
+            <userdata>
+              <key>
+                snapgroup-id
+              </key>
+              <value>
+                1790000003
+              </value>
+            </userdata>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000003")
+        );
     }
 
     #[test]
