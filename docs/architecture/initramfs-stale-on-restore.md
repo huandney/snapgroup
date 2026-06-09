@@ -1,10 +1,10 @@
 # Initramfs desatualizado no restore (FAT32 + Limine) — decisão em aberto
 
-> **Status:** problema identificado, **solução ainda não decidida**. Este doc
-> existe para registrar o problema, por que a detecção atual não o cobre, e as
-> opções com trade-offs — sem escolher. Atualizar com a decisão quando tomada.
+> **Status:** **DECIDIDO — Opção A (sempre regenerar), implementada** no commit
+> `b0bfe17`. As opções abaixo ficam como registro do raciocínio que levou à
+> escolha. O residual de pending (§4) segue tratado como regra operacional.
 >
-> **Data:** 2026-06-06. **Branch de referência:** `fix/doctor-restore-regret`.
+> **Data:** 2026-06-06 (decidido 2026-06-09). **Branch:** `fix/doctor-restore-regret`.
 
 ---
 
@@ -181,5 +181,5 @@ instantâneo). Decisão acoplada à da §3 — registrar junto.
 - **Doutrina do projeto:** §5 (explícito e chato > esperto), §9.3 (não otimizar
   caminho frio) favorecem A.
 
-> **Recomendação registrada (não vinculante):** Opção A. Mas a decisão final é do
-> usuário e está **em aberto**.
+> **Decisão:** Opção A, implementada em `b0bfe17`. Opção C (`/boot` no BTRFS)
+> fica como feature futura separada — ver `docs/proposals/snapg-migrate-boot.md`.
