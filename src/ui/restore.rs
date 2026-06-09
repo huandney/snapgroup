@@ -62,10 +62,10 @@ pub(crate) enum PendingAction {
 }
 
 /// Ação quando o /boot está dessincronizado do destino (doctor): reiniciar cego
-/// quebraria o boot, então a opção é sincronizar antes de reiniciar.
+/// quebraria o boot, então a opção é sincronizar antes de perguntar pelo reboot.
 #[derive(Clone, Copy)]
 pub(crate) enum PendingSyncAction {
-    SyncReboot,
+    SyncBoot,
     Cancel,
     Nothing,
 }
@@ -438,39 +438,47 @@ pub(crate) fn select_pending_action() -> Result<PendingAction> {
     Ok(actions[choice])
 }
 
-/// Pending com o /boot dessincronizado do destino: reiniciar agora quebraria o
-/// boot. Pergunta se leva ao doctor para corrigir antes.
+/// Pending em /boot FAT32 ou dessincronizado: reiniciar direto não é seguro.
+/// Pergunta se sincroniza antes de liberar o reboot.
 pub(crate) fn confirm_run_doctor() -> Result<bool> {
     clear_screen();
-    header("Restauração pendente — /boot dessincronizado");
+    header("Restauração pendente — sincronizar /boot");
     line(format_args!(
-        "Há uma restauração aplicada que ainda não foi reiniciada, mas o /boot não"
+        "Há uma restauração aplicada que ainda não foi reiniciada. Como o /boot"
     ));
     line(format_args!(
-        "casa com o kernel do destino. Reiniciar agora quebraria o boot (o kernel"
+        "pode estar fora do snapshot BTRFS, sincronize antes de reiniciar para"
     ));
-    line(format_args!("não acharia seus módulos)."));
+    line(format_args!("garantir que o initramfs corresponde ao root de destino."));
     println!();
-    confirm("Rodar o doctor para sincronizar o /boot?")
+    let choice = dialoguer::Select::with_theme(&THEME)
+        .with_prompt(prompt_bold_hint("Rodar o doctor para sincronizar o /boot?", "(esc sai)"))
+        .items(&["Sim", "Não"])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?;
+    Ok(matches!(choice, Some(0)))
 }
 
-/// Prompt do doctor para um pending dessincronizado: sincronizar o /boot com o
-/// destino e reiniciar, ou cancelar a restauração.
+/// Prompt do doctor para um pending que precisa sincronizar o /boot com o
+/// destino, ou cancelar a restauração.
 pub(crate) fn select_pending_sync_action() -> Result<PendingSyncAction> {
     clear_screen();
     header("Doctor — sincronizar /boot com o destino");
     line(format_args!(
-        "Sincronizar copia o kernel/initramfs do destino para o /boot e reinicia."
+        "Sincronizar copia o kernel/initramfs do destino para o /boot."
     ));
     line(format_args!(
         "Cancelar volta ao estado de antes da restauração (home e root preservados)."
     ));
     println!();
-    let actions = [PendingSyncAction::SyncReboot, PendingSyncAction::Cancel];
+    let actions = [PendingSyncAction::SyncBoot, PendingSyncAction::Cancel];
     let Some(choice) = dialoguer::Select::with_theme(&THEME)
         .with_prompt("O que fazer?")
         .items(&[
-            "Sincronizar o /boot e reiniciar",
+            "Sincronizar o /boot",
             "Cancelar a restauração (voltar ao estado atual)",
         ])
         .default(0)

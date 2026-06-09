@@ -175,7 +175,7 @@ pub fn doctor_resolve_pending() -> Result<()> {
 /// Gate de `restore`/`delete` (sob o lock do caller) quando há uma restauração
 /// aplicada mas ainda não reiniciada. Sem checkpoints a oferecer:
 /// - /boot casa com o destino → reiniciar é seguro: reiniciar / cancelar;
-/// - /boot dessincronizado → reiniciar quebraria o boot: leva ao doctor.
+/// - /boot FAT32 ou não comprovadamente seguro → sincronizar antes do reboot.
 fn gate_pending_restore(done: Vec<rollback::Done>) -> Result<()> {
     if pending_boot_synced(&done)? {
         resolve_pending_clean(&done)
@@ -195,22 +195,32 @@ fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
     }
 }
 
-/// Sincronizar o /boot com o destino e reiniciar, ou cancelar. Compartilhado
-/// pelo doctor e pelo gate quando o /boot está dessincronizado.
+/// Sincronizar o /boot com o destino, ou cancelar. Compartilhado pelo doctor e
+/// pelo gate quando o pending precisa provar /boot antes do reboot.
 fn resolve_pending_sync(done: &[rollback::Done]) -> Result<()> {
     match crate::ui::restore::select_pending_sync_action()? {
-        PendingSyncAction::SyncReboot => complete_pending_restore(done),
+        PendingSyncAction::SyncBoot => complete_pending_restore(done),
         PendingSyncAction::Cancel => cancel_pending_restore(done),
         PendingSyncAction::Nothing => Ok(()),
     }
 }
 
-/// O /boot já casa com o subvol de destino (o que vai bootar)? Em /boot não-FAT32
-/// (nativo) é sempre coerente — o kernel vive dentro do snapshot.
+/// O /boot já casa com o subvol de destino (o que vai bootar)?
+///
+/// Em pending com root + FAT32, nunca dá reboot direto: um sync anterior pode ter
+/// sido interrompido, ou o /boot pode ter sido alterado por pacman/DKMS antes do
+/// reboot. `boot_already_synced` compara vmlinuz/hashes, mas não prova que o
+/// initramfs corresponde aos módulos do root de destino em restores de mesmo
+/// kernel. Força resync antes de liberar reboot.
+///
+/// Em /boot não-FAT32 (nativo) é coerente — o kernel vive dentro do snapshot.
 fn pending_boot_synced(done: &[rollback::Done]) -> Result<bool> {
     let Some(root) = done.iter().find(|d| d.mountpoint == "/") else {
         return Ok(true);
     };
+    if boot::is_fat32() {
+        return Ok(false);
+    }
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
@@ -252,8 +262,8 @@ pub(crate) fn pending_dest_diagnosis(boot_path: &Path) -> Result<Option<boot::Bo
     Ok(Some(boot::diagnose_boot(&dest_root, boot_path)?))
 }
 
-/// Concluir: garante o /boot coerente com o subvol que vai bootar (o destino do
-/// restore) e então reinicia.
+/// Garante o /boot coerente com o subvol que vai bootar (o destino do restore)
+/// e então pergunta se reinicia agora.
 fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
@@ -267,7 +277,7 @@ fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
     })();
     let _ = btrfs::umount_toplevel(&mount_path);
     result?;
-    reboot_now()
+    prompt_reboot()
 }
 
 fn cancel_pending_restore(done: &[rollback::Done]) -> Result<()> {
