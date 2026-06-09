@@ -45,6 +45,13 @@ pub(crate) enum PostRestoreAction {
     RebootLater,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Fat32BootAction {
+    Continue,
+    Back,
+    Cancel,
+}
+
 /// Ação para um restore já aplicado mas ainda não reiniciado (pending), com o
 /// /boot coerente com o destino — reiniciar é seguro.
 #[derive(Clone, Copy)]
@@ -307,7 +314,7 @@ pub(crate) fn print_cancelled() {
     println!("cancelado");
 }
 
-pub(crate) fn confirm_fat32_boot() -> Result<bool> {
+pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
     clear_screen();
     header("Restauração");
     println!();
@@ -318,7 +325,19 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
     println!();
     line(format_args!("Se a sincronização for interrompida, rode {}.", style("snapg doctor").bold()));
     println!();
-    confirm("Continuar?")
+    let actions = [Fat32BootAction::Continue, Fat32BootAction::Cancel];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt(prompt_bold_hint("Continuar?", HINT_BACK))
+        .items(&["Sim", "Não"])
+        .default(1)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(Fat32BootAction::Back);
+    };
+    Ok(actions[choice])
 }
 
 pub(crate) fn print_cancelled_boot_risk() {

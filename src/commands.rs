@@ -5,8 +5,8 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    PendingAction, PendingSyncAction, PostRestoreAction, RegretEntry, RegretInfo, RestorePlan,
-    select_restore_plan,
+    Fat32BootAction, PendingAction, PendingSyncAction, PostRestoreAction, RegretEntry,
+    RegretInfo, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm};
@@ -253,7 +253,7 @@ pub(crate) fn pending_dest_diagnosis(boot_path: &Path) -> Result<Option<boot::Bo
 }
 
 /// Concluir: garante o /boot coerente com o subvol que vai bootar (o destino do
-/// restore) e então reinicia. O sync é no-op se o /boot já casa com o destino.
+/// restore) e então reinicia.
 fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
@@ -377,20 +377,34 @@ fn restore_inner(
     let kernel_labels = group_kernel_labels(groups, mount_path);
     let regret_kernel = regret.as_ref().map(|r| regret_kernel_label(r, mount_path));
 
-    match select_restore_plan(
-        groups,
-        regret.as_ref(),
-        &kernel_labels,
-        regret_kernel.as_deref(),
-    )? {
-        None => {
-            crate::ui::restore::print_cancelled();
-            Ok(())
+    loop {
+        match select_restore_plan(
+            groups,
+            regret.as_ref(),
+            &kernel_labels,
+            regret_kernel.as_deref(),
+        )? {
+            None => {
+                crate::ui::restore::print_cancelled();
+                return Ok(());
+            }
+            Some(RestorePlan::Checkpoint(selected)) => {
+                if should_warn_fat32(&selected, mount_path) {
+                    match crate::ui::restore::confirm_fat32_boot()? {
+                        Fat32BootAction::Continue => {}
+                        Fat32BootAction::Back => continue,
+                        Fat32BootAction::Cancel => {
+                            crate::ui::restore::print_cancelled_boot_risk();
+                            return Ok(());
+                        }
+                    }
+                }
+                return execute_restore_checkpoint(&selected, mount_path, regret_policy);
+            }
+            Some(RestorePlan::Regret(selected)) => {
+                return execute_restore_regret(selected, mount_path);
+            }
         }
-        Some(RestorePlan::Checkpoint(selected)) => {
-            execute_restore_checkpoint(&selected, mount_path, regret_policy)
-        }
-        Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
 }
 
@@ -704,11 +718,6 @@ fn execute_restore_checkpoint(
     mount_path: &Path,
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
-    if should_warn_fat32(group, mount_path) && !crate::ui::restore::confirm_fat32_boot()? {
-        crate::ui::restore::print_cancelled_boot_risk();
-        return Ok(());
-    }
-
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,

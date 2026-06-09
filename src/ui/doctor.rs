@@ -13,7 +13,7 @@ pub(crate) enum UndoDoneAction {
     ShowDiagnosis,
 }
 
-pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
+pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<Option<usize>> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
     clear_screen();
     header("Diagnóstico de boot");
@@ -23,7 +23,7 @@ pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
         .default(0)
         .clear(true)
         .report(false)
-        .interact()
+        .interact_opt()
         .context("selecionar sistema")
 }
 

@@ -23,7 +23,9 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
             return resolve_rescue(ctx, apply);
         }
     }
-    let target = select_target(root, boot)?;
+    let Some(target) = select_target(root, boot)? else {
+        return Ok(());
+    };
     diagnose_and_apply(&target, apply)?;
     Ok(())
 }
@@ -172,26 +174,26 @@ pub fn handle_boot_sync_failure(
     Ok(())
 }
 
-fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<DoctorTarget> {
+fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<Option<DoctorTarget>> {
     if let Some(root) = root {
         let boot = boot.unwrap_or_else(|| root.join("boot"));
-        return Ok(DoctorTarget::new(
+        return Ok(Some(DoctorTarget::new(
             format!("root={} boot={}", root.display(), boot.display()),
             root,
             boot,
-        ));
+        )));
     }
     if let Some(boot) = boot {
         let root = PathBuf::from("/");
-        return Ok(DoctorTarget::new(
+        return Ok(Some(DoctorTarget::new(
             format!("root={} boot={}", root.display(), boot.display()),
             root,
             boot,
-        ));
+        )));
     }
 
     if let Some(target) = current_system_target()? {
-        return Ok(target);
+        return Ok(Some(target));
     }
 
     let targets = mounted_system_targets()?;
@@ -202,8 +204,10 @@ fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<DoctorT
         );
     }
 
-    let idx = doctor_ui::select_target(&targets)?;
-    Ok(targets.into_iter().nth(idx).expect("índice selecionado existe"))
+    let Some(idx) = doctor_ui::select_target(&targets)? else {
+        return Ok(None);
+    };
+    Ok(Some(targets.into_iter().nth(idx).expect("índice selecionado existe")))
 }
 
 fn current_system_target() -> Result<Option<DoctorTarget>> {

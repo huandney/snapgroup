@@ -135,7 +135,6 @@ impl BootSyncPanel {
         // Sem bloco "executando/comando": a linha de etapa já anuncia a ação, e
         // o spinner ao vivo (durante o initramfs) é desenhado logo abaixo daqui
         // pelo caller. O kernel aparece no próprio stream ("Starting build: …").
-        println!();
     }
 
     fn status_text(&self, status: StepStatus) -> String {
