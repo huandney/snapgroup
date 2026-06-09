@@ -64,21 +64,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
     }
 
-    // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
-    // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
-    // de interrupção junto. O caminho pesado só roda quando o kernel difere.
-    //
-    // Exceção: backup remanescente = sync anterior interrompido. Aí o gate é
-    // pulado mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho
-    // na janela entre copiar o vmlinuz e regenerá-lo. O resync completo o refaz.
-    // Short-circuit: havendo backup remanescente, nem avalia o match do vmlinuz —
-    // essa leitura pode falhar em estado parcial e abortaria o reparo antes de
-    // regenerar. Só checa o match quando NÃO interrompido.
     let interrupted = boot_backup_remnant(boot);
-    if !interrupted && boot_ready(restored_root, boot, &groups)? {
-        panel.already_synced();
-        return Ok(());
-    }
 
     let critical = critical_boot_files(boot, &groups);
     // No resync de interrupção NÃO recriar o backup: o remanescente é o último
@@ -188,7 +174,6 @@ fn sync_inner(
                 snap_vmlinuz.display()
             );
         }
-
         for dest in &group.vmlinuz_paths {
             panel.start_vmlinuz();
             fs::copy(&snap_vmlinuz, dest).with_context(|| {
@@ -565,9 +550,9 @@ fn boot_matches_snapshot(restored_root: &Path, groups: &[KernelGroup]) -> Result
 
 /// `/boot` está pronto pra bootar `restored_root`? Une os dois sinais que o
 /// Limine valida no boot: vmlinuz idêntico ao do snapshot E hashes do
-/// limine.conf coerentes com os arquivos. Predicado único para os gates de
-/// "já sincronizado" (entrada do sync e `boot_already_synced`), evitando que um
-/// deles libere reboot/pule o sync com hash divergente.
+/// limine.conf coerentes com os arquivos. Esse predicado serve para diagnóstico
+/// e fluxo pendente; o sync FAT32 não usa isso como licença para pular
+/// mkinitcpio, porque initramfs pode divergir sem troca de vmlinuz.
 fn boot_ready(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Result<bool> {
     Ok(boot_matches_snapshot(restored_root, groups)? && limine_hashes_match(boot)?)
 }

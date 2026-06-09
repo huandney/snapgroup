@@ -681,10 +681,9 @@ fn execute_restore_root_to_snapshot(
     finish_restore_with_undo(&[done], toplevel)
 }
 
-/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
-/// quando o sync vai de fato mexer no /boot legado: kernel idêntico ao do
-/// snapshot → sync no-op → não incomoda. Qualquer falha de detecção cai no
-/// aviso (fail-safe) — nunca silencia por incerteza.
+/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Se o root
+/// participa, o sync de boot roda completo: vmlinuz idêntico não prova que o
+/// initramfs casa com o root restaurado (DKMS/hooks/config).
 fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
     if !boot::is_fat32() {
         return false;
@@ -693,15 +692,11 @@ fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
     boot_will_change(group, toplevel).unwrap_or(true)
 }
 
-/// Ok(true) se o sync pós-rollback vai escrever em /boot (kernel do snapshot
-/// difere do /boot atual). Ok(false) se será no-op: mesmo kernel, ou grupo que
-/// não restaura root. Err em falha real de leitura — o caller trata como aviso.
-fn boot_will_change(group: &Group, toplevel: &Path) -> Result<bool> {
-    let Some(root_m) = root_member(group)? else {
-        return Ok(false);
-    };
-    let snapshot_root = rollback::member_snapshot_path(root_m, toplevel)?;
-    Ok(!boot::boot_already_synced(&snapshot_root)?)
+/// Ok(true) se o sync pós-rollback vai tocar /boot. Em FAT32, qualquer restore
+/// do root exige regenerar o initramfs para fechar o caso de DKMS sem troca de
+/// kernel. Ok(false) só para grupos que não restauram root.
+fn boot_will_change(group: &Group, _toplevel: &Path) -> Result<bool> {
+    Ok(root_member(group)?.is_some())
 }
 
 fn execute_restore_checkpoint(

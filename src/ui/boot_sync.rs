@@ -27,19 +27,6 @@ impl BootSyncPanel {
         }
     }
 
-    pub(crate) fn already_synced(&mut self) {
-        clear_screen();
-        header("Sincronização de boot");
-        println!();
-        line(format_args!("etapa 1 de 1 · /boot já corresponde ao snapshot"));
-        println!(
-            "{} {:<12} {}",
-            tree_branch(true),
-            "estado",
-            style("sincronizado").green().bold()
-        );
-    }
-
     pub(crate) fn start_backup(&mut self) {
         self.start(0, "criando backup");
     }
