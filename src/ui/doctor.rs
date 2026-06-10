@@ -110,7 +110,7 @@ pub(crate) fn select_rescue_action(
             "Manter o root atual (kernel {default_kernel}) — ajusta o /boot · mantém root e home"
         ),
         "Restaurar só o / — escolher kernel · mantém home e root".to_string(),
-        "Mudar o que boota — restore completo · outro snapshot ou desfazer".to_string(),
+        "Mudar o que boota — restore completo · checkpoint ou Regret".to_string(),
     ];
     let items: Vec<String> = choices
     .iter()

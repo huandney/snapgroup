@@ -133,10 +133,9 @@ fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::
         let mountpoint = snapper::config_subvolume(cfg)?;
         let live_subvol = btrfs::subvol_relative_path(Path::new(&mountpoint))
             .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
-        let Some(current_subvol) = live_subvol.strip_suffix("_snapg_regret") else {
+        let Some(current_subvol) = pending_current_subvol(&live_subvol) else {
             continue;
         };
-        let current_subvol = current_subvol.to_string();
 
         done.push(rollback::Done {
             config: cfg.clone(),
@@ -150,6 +149,22 @@ fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::
         return Ok(None);
     }
     Ok(Some(done))
+}
+
+fn pending_current_subvol(live_subvol: &str) -> Option<String> {
+    if let Some(current) = live_subvol.strip_suffix("_snapg_regret") {
+        return (!current.is_empty()).then(|| current.to_string());
+    }
+
+    if let Some((current, label)) = live_subvol.split_once("_snapg_undo_")
+        && !current.is_empty()
+        && !label.is_empty()
+    {
+        return Some(current.to_string());
+    }
+
+    let (current, label) = live_subvol.split_once("_snapg_discard_")?;
+    (!current.is_empty() && !label.is_empty()).then(|| current.to_string())
 }
 
 /// Há uma restauração aplicada mas ainda não reiniciada? Leitura pura, sem lock.
@@ -991,7 +1006,8 @@ fn boot_clean_inner(mount_path: &Path) -> Result<()> {
 }
 
 /// Descobre sobras pós-restore no toplevel:
-/// - `_snapg_discard_*`, deixados por `revert_regret` e pelo doctor.
+/// - `_snapg_discard_*`, deixados pelo doctor/restore preservando Regret.
+/// - `_snapg_undo_*`, deixados por `revert_regret`.
 fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let cfg_map = config_subvol_map()?;
     let mut found = Vec::new();
@@ -999,8 +1015,9 @@ fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::pa
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         for (_, _, current) in &cfg_map {
-            let prefix = rollback::discard_prefix(current);
-            if name.starts_with(&prefix) {
+            let discard_prefix = rollback::discard_prefix(current);
+            let undo_prefix = rollback::undo_prefix(current);
+            if name.starts_with(&discard_prefix) || name.starts_with(&undo_prefix) {
                 found.push((name, entry.path()));
                 break;
             }
@@ -1057,7 +1074,15 @@ fn undo_restore_before_reboot(
     done: &[rollback::Done],
     mount_path: &Path,
 ) -> Result<()> {
-    rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
+    if done.iter().any(done_is_regret_undo) {
+        if !done.iter().all(done_is_regret_undo) {
+            bail!("pending misto entre undo de Regret e restore normal; abortando cancelamento");
+        }
+        rollback::cancel_regret_undo(done, mount_path)
+            .context("cancelar restauração de Regret antes do reboot")?;
+    } else {
+        rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
+    }
 
     if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
         let restored_root = mount_path.join(&root.current_subvol);
@@ -1097,6 +1122,14 @@ fn arm_cleanup_for_restore(
 fn done_needs_boot_cleanup(done: &rollback::Done) -> bool {
     done.backup_subvol
         .starts_with(&rollback::discard_prefix(&done.current_subvol))
+        || done
+            .backup_subvol
+            .starts_with(&rollback::undo_prefix(&done.current_subvol))
+}
+
+fn done_is_regret_undo(done: &rollback::Done) -> bool {
+    done.backup_subvol
+        .starts_with(&rollback::undo_prefix(&done.current_subvol))
 }
 
 fn prompt_reboot() -> Result<()> {
@@ -1123,7 +1156,27 @@ fn reboot_now() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{snapgroup_id_from_info_xml, xml_text};
+    use super::{pending_current_subvol, snapgroup_id_from_info_xml, xml_text};
+
+    #[test]
+    fn detects_pending_current_from_live_subvol_names() {
+        assert_eq!(
+            pending_current_subvol("@_snapg_regret").as_deref(),
+            Some("@")
+        );
+        assert_eq!(
+            pending_current_subvol("@home_snapg_discard_20260609-120000").as_deref(),
+            Some("@home")
+        );
+        assert_eq!(
+            pending_current_subvol("@root_snapg_undo_20260609-120000").as_deref(),
+            Some("@root")
+        );
+        assert_eq!(pending_current_subvol("@home"), None);
+        assert_eq!(pending_current_subvol("_snapg_regret"), None);
+        assert_eq!(pending_current_subvol("@home_snapg_discard_"), None);
+        assert_eq!(pending_current_subvol("@root_snapg_undo_"), None);
+    }
 
     #[test]
     fn extracts_snapgroup_id_from_key_value_userdata() {

@@ -11,7 +11,7 @@ pub struct Done {
     pub config: String,
     pub mountpoint: String,
     pub current_subvol: String, // ex: "@home" — agora aponta pro novo RW
-    pub backup_subvol: String,  // ex: "@home_snapg_regret" — o ativo anterior
+    pub backup_subvol: String,  // ex: "@home_snapg_regret", discard ou undo
 }
 
 pub struct RollbackError {
@@ -55,6 +55,14 @@ pub fn discard_name(current_subvol: &str, label: &str) -> String {
 
 pub fn discard_prefix(current_subvol: &str) -> String {
     format!("{current_subvol}_snapg_discard_")
+}
+
+pub fn undo_name(current_subvol: &str, label: &str) -> String {
+    format!("{}{label}", undo_prefix(current_subvol))
+}
+
+pub fn undo_prefix(current_subvol: &str) -> String {
+    format!("{current_subvol}_snapg_undo_")
 }
 
 fn prep_intermediate_name(current_subvol: &str) -> String {
@@ -503,14 +511,15 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
 /// kernel ainda o tem montado por inode mesmo depois do rename, e deletar
 /// quebra o sistema rodando.
 ///
-/// Solução: deixa um `<subvol>_snapg_discard_<label>` no top-level.
-/// Após reboot, o subvol fica desmontado e pode ser limpo pelo boot-clean.
+/// Solução: deixa um `<subvol>_snapg_undo_<label>` no top-level. Antes do reboot,
+/// cancelar faz o swap inverso e preserva o Regret; após reboot, o subvol fica
+/// desmontado e pode ser limpo pelo boot-clean.
 pub fn revert_regret(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
-        let discard_subvol = discard_name(&d.current_subvol, label);
-        let discard = toplevel.join(&discard_subvol);
+        let undo_subvol = undo_name(&d.current_subvol, label);
+        let undo = toplevel.join(&undo_subvol);
 
         // 0. Move .snapshots de volta pro backup (simétrico ao rollback_member).
         let current_dotsnap = current.join(".snapshots");
@@ -523,23 +532,115 @@ pub fn revert_regret(done: &[Done], toplevel: &Path, label: &str) -> Result<()> 
 
         // 1. Move o subvol revertido (= rootfs viva) pra fora do nome ativo.
         // Mount sobrevive — kernel referencia por inode, não path.
-        fs::rename(&current, &discard)
+        fs::rename(&current, &undo)
             .with_context(|| format!("revert_regret {}: tirar atual de {}", d.config, d.current_subvol))?;
 
         // 2. Restaura o regret pro nome ativo (fstab volta a achar no próximo boot).
         if let Err(e) = fs::rename(&backup, &current) {
-            let _ = fs::rename(&discard, &current);
+            let _ = fs::rename(&undo, &current);
             return Err(e).with_context(|| {
                 format!("revert_regret {}: restaurar regret {}", d.config, d.backup_subvol)
             });
         }
 
-        // 3. NÃO DELETA. Discard fica como `<subvol>_snapg_discard_<label>`
+        // 3. NÃO DELETA. Undo fica como `<subvol>_snapg_undo_<label>`
         // até o próximo reboot. boot-clean limpa depois.
+    }
+    Ok(())
+}
+
+/// Cancela um `revert_regret` antes do reboot.
+///
+/// Aqui `current` é o conteúdo do Regret recém-promovido, portanto precioso. Ao
+/// cancelar, ele volta para o slot fixo `_snapg_regret`, e o `_snapg_undo_*`
+/// volta para o nome ativo. Nada é deletado.
+pub fn cancel_regret_undo(done: &[Done], toplevel: &Path) -> Result<()> {
+    for d in done.iter().rev() {
+        let current = toplevel.join(&d.current_subvol);
+        let undo = toplevel.join(&d.backup_subvol);
+        let regret_subvol = regret_name(&d.current_subvol);
+        let regret = toplevel.join(&regret_subvol);
+
+        if regret.exists() {
+            bail!("destino de Regret já existe: {}", regret.display());
+        }
+
+        // .snapshots precisa acompanhar o subvol que voltará a ser ativo.
+        let current_dotsnap = current.join(".snapshots");
+        let undo_dotsnap = undo.join(".snapshots");
+        let moved_dotsnap = btrfs::is_subvolume(&current_dotsnap);
+        if moved_dotsnap {
+            fs::rename(&current_dotsnap, &undo_dotsnap).with_context(|| {
+                format!("cancel_regret_undo {}: mover .snapshots para {}", d.config, d.backup_subvol)
+            })?;
+        }
+
+        if let Err(e) = fs::rename(&current, &regret) {
+            if moved_dotsnap {
+                let _ = fs::rename(&undo_dotsnap, &current_dotsnap);
+            }
+            return Err(e).with_context(|| {
+                format!("cancel_regret_undo {}: preservar Regret em {}", d.config, regret_subvol)
+            });
+        }
+
+        if let Err(e) = fs::rename(&undo, &current) {
+            let _ = fs::rename(&regret, &current);
+            if moved_dotsnap {
+                let _ = fs::rename(&undo_dotsnap, &current_dotsnap);
+            }
+            return Err(e).with_context(|| {
+                format!("cancel_regret_undo {}: restaurar {}", d.config, d.backup_subvol)
+            });
+        }
     }
     Ok(())
 }
 
 pub fn toplevel_mount_path(uuid: &str) -> PathBuf {
     PathBuf::from(format!("/run/snapgroup/{uuid}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Done, cancel_regret_undo, regret_name, undo_name};
+
+    #[test]
+    fn cancel_regret_undo_swaps_back_without_deleting_regret() {
+        let base = std::env::temp_dir().join(format!(
+            "snapg_cancel_regret_undo_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let current = "@";
+        let undo = undo_name(current, "20260609-120000");
+        let regret = regret_name(current);
+        std::fs::create_dir(base.join(current)).unwrap();
+        std::fs::write(base.join(current).join("marker"), "regret").unwrap();
+        std::fs::create_dir(base.join(&undo)).unwrap();
+        std::fs::write(base.join(&undo).join("marker"), "active").unwrap();
+
+        let done = [Done {
+            config: "root".to_string(),
+            mountpoint: "/".to_string(),
+            current_subvol: current.to_string(),
+            backup_subvol: undo.clone(),
+        }];
+
+        cancel_regret_undo(&done, &base).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(base.join(current).join("marker")).unwrap(),
+            "active"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base.join(&regret).join("marker")).unwrap(),
+            "regret"
+        );
+        assert!(!base.join(&undo).exists());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
