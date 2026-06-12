@@ -5,8 +5,9 @@ use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold_hint,
-    prompt_hint, regret_title, short_datetime, tree_branch, tree_stem, truncate_for_terminal,
+    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold,
+    prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
+    truncate_for_terminal,
     wrap_text,
 };
 use anyhow::{Context, Result, bail};
@@ -448,7 +449,7 @@ pub(crate) fn confirm_run_doctor() -> Result<bool> {
     line(format_args!("garantir que o initramfs corresponde ao root de destino."));
     println!();
     let choice = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt_bold_hint("Rodar o doctor para sincronizar o /boot?", "(esc sai)"))
+        .with_prompt(prompt_bold("Rodar o doctor para sincronizar o /boot?"))
         .items(&["Sim", "Não"])
         .default(0)
         .clear(true)
@@ -557,7 +558,8 @@ fn render_pending_choice(
         _ => print_pending_cancel_preview(info),
     }
     println!();
-    line(format_args!("{}", style("enter confirma · esc volta").dim()));
+    // Primeira página do gate: Esc sai do comando, não "volta" a lugar nenhum.
+    line(format_args!("{}", style("enter confirma · esc sai").dim()));
 }
 
 fn print_pending_primary_preview(info: &PendingPromptInfo) {

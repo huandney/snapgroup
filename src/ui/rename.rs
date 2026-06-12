@@ -1,7 +1,7 @@
 use crate::group::{self, Group, GroupId};
 use crate::ui::term::{
-    AltScreen, HINT_BACK, SELECT_MARKER, THEME, clear_screen, header, input_line, line,
-    prompt_hint, short_datetime, truncate_for_terminal,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line, short_datetime,
+    truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -17,29 +17,29 @@ pub(crate) fn select_plan(
             return Ok(None);
         };
         // Esc no nome volta para a seleção de checkpoint, não cancela tudo.
-        if let Some(description) = prompt_description(&groups[index])? {
+        if let Some(description) =
+            prompt_description(&groups[index], "enter confirma · esc volta")?
+        {
             return Ok(Some((index, description)));
         }
     }
 }
 
 /// Caminho direto (`snapg rename <id>`): mesma tela do interativo, com
-/// AltScreen próprio. Esc = `None` (o caller cancela).
+/// AltScreen próprio. É a primeira página — Esc sai, sem hint de "volta".
 pub(crate) fn prompt_description_screen(group: &Group) -> Result<Option<String>> {
     let _alt = AltScreen::enter();
-    prompt_description(group)
+    prompt_description(group, "enter confirma")
 }
 
-fn prompt_description(group: &Group) -> Result<Option<String>> {
-    clear_screen();
-    header("Renomear checkpoint");
-    line(format_args!("ID atual     #{}", group.id));
-    line(format_args!("Nome atual   {}", group::description(group)));
-    println!();
-    input_line(
-        &prompt_hint("Novo nome", HINT_BACK),
-        group::description(group),
-    )
+fn prompt_description(group: &Group, footer: &str) -> Result<Option<String>> {
+    input_line("Novo nome", group::description(group), footer, || {
+        clear_screen();
+        header("Renomear checkpoint");
+        line(format_args!("ID atual     #{}", group.id));
+        line(format_args!("Nome atual   {}", group::description(group)));
+        println!();
+    })
 }
 
 fn select_target(
@@ -49,8 +49,9 @@ fn select_target(
     clear_screen();
     header("Renomear checkpoint");
     let items = group_picker_items(groups, kernel_labels);
+    // Primeira página do fluxo: Esc sai (padrão), sem hint de "volta".
     dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt_hint("Escolha o checkpoint", HINT_BACK))
+        .with_prompt("Escolha o checkpoint")
         .items(&items)
         .default(0)
         .clear(true)
