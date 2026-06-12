@@ -205,10 +205,29 @@ fn gate_pending_restore(done: Vec<rollback::Done>) -> Result<()> {
 fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
     let info = pending_prompt_info(done, false)?;
     match crate::ui::restore::select_pending_action(&info)? {
-        PendingAction::Reboot => reboot_now(),
+        PendingAction::Reboot => {
+            arm_pending_cleanup(done)?;
+            reboot_now()
+        }
         PendingAction::Cancel => cancel_pending_restore(done),
         PendingAction::Nothing => Ok(()),
     }
+}
+
+/// Arma o boot-cleanup antes de um reboot que resolve um pending cujo subvol
+/// deslocado (`_snapg_undo_*`/`_snapg_discard_*`) precisa ser varrido no
+/// próximo boot. O arm do fluxo de restore normal não cobre o gate: se a
+/// operação original foi interrompida antes de armar, resolver o pending por
+/// aqui deixaria o subvol órfão no top-level para sempre.
+fn arm_pending_cleanup(done: &[rollback::Done]) -> Result<()> {
+    if !done.iter().any(done_needs_boot_cleanup) {
+        return Ok(());
+    }
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let _guard = ToplevelMountGuard { path: mount_path.clone() };
+    arm_cleanup_for_restore(done, &mount_path)
 }
 
 /// Sincronizar o /boot com o destino, ou cancelar. Compartilhado pelo doctor e
@@ -322,7 +341,9 @@ fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
             let dest_root = mount_path.join(&root.current_subvol);
             boot::sync_fat32(&dest_root).context("sincronizar /boot com o destino do restore")?;
         }
-        Ok(())
+        // O fluxo original pode ter sido interrompido antes de armar o
+        // cleanup; sem isto, o subvol deslocado sobrevive ao reboot.
+        arm_cleanup_for_restore(done, &mount_path)
     })();
     let _ = btrfs::umount_toplevel(&mount_path);
     result?;
@@ -1108,26 +1129,29 @@ fn undo_restore_before_reboot(
     done: &[rollback::Done],
     mount_path: &Path,
 ) -> Result<()> {
-    if done.iter().any(done_is_regret_undo) {
-        if !done.iter().all(done_is_regret_undo) {
-            bail!("pending misto entre undo de Regret e restore normal; abortando cancelamento");
-        }
+    let any_undo = done.iter().any(done_is_regret_undo);
+    if any_undo && !done.iter().all(done_is_regret_undo) {
+        bail!("pending misto entre undo de Regret e restore normal; abortando cancelamento");
+    }
+
+    // Sincroniza o /boot com o sistema que vai permanecer ANTES do swap dos
+    // subvols: o backup_subvol é o chão vivo, o mesmo conteúdo que ocupará o
+    // nome ativo depois. Se o sync for interrompido (Ctrl-C), o pending ainda
+    // existe e o gate FAT32 ressincroniza na próxima execução. Na ordem
+    // inversa (swap primeiro), uma interrupção aqui deixava o /boot
+    // dessincronizado já sem pending — invisível para o gate, só um doctor
+    // explícito detectava.
+    if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+        let remaining_root = mount_path.join(&root.backup_subvol);
+        boot::sync_fat32(&remaining_root)
+            .context("sincronizar /boot com o sistema atual; nada foi desfeito")?;
+    }
+
+    if any_undo {
         rollback::cancel_regret_undo(done, mount_path)
             .context("cancelar restauração de Regret antes do reboot")?;
     } else {
         rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
-    }
-
-    if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
-        let restored_root = mount_path.join(&root.current_subvol);
-        if let Err(e) = boot::sync_fat32(&restored_root) {
-            return abort_reboot_boot_desync(
-                &restored_root,
-                e,
-                "desfazer aplicado, mas /boot precisa casar com o root restaurado. \
-                 Rode 'snapg doctor --apply' antes de reiniciar.",
-            );
-        }
     }
 
     crate::ui::restore::print_restore_undone(done.len());
