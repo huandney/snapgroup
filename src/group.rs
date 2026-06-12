@@ -1,6 +1,8 @@
 use crate::snapper::{self, Snapshot};
+use crate::{boot, rollback};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::path::Path;
 
 pub type GroupId = i64;
 
@@ -72,4 +74,30 @@ pub fn list_groups() -> Result<Vec<Group>> {
     // Mais recente primeiro (epoch decrescente).
     groups.sort_by_key(|g| std::cmp::Reverse(g.id));
     Ok(groups)
+}
+
+pub fn kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<GroupId, String> {
+    groups
+        .iter()
+        .map(|g| (g.id, kernel_label(g, toplevel)))
+        .collect()
+}
+
+fn kernel_label(group: &Group, toplevel: &Path) -> String {
+    let Some(root_m) = root_member(group).ok().flatten() else {
+        return "?".to_string();
+    };
+    rollback::member_snapshot_path(root_m, toplevel)
+        .map(|path| boot::kernel_label(&path))
+        .unwrap_or_else(|_| "?".to_string())
+}
+
+pub fn root_member(group: &Group) -> Result<Option<&Member>> {
+    for member in &group.members {
+        let mountpoint = snapper::config_subvolume(&member.config)?;
+        if mountpoint == "/" {
+            return Ok(Some(member));
+        }
+    }
+    Ok(None)
 }

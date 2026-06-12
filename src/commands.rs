@@ -455,7 +455,7 @@ fn restore_inner(
     }
 
     // Wizard interativo no alternate screen; ao sair, executa no terminal normal.
-    let kernel_labels = group_kernel_labels(groups, mount_path);
+    let kernel_labels = group::kernel_labels(groups, mount_path);
     let regret_kernel = regret.as_ref().map(|r| regret_kernel_label(r, mount_path));
 
     loop {
@@ -489,37 +489,11 @@ fn restore_inner(
     }
 }
 
-fn group_kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<group::GroupId, String> {
-    groups
-        .iter()
-        .map(|g| (g.id, group_kernel_label(g, toplevel)))
-        .collect()
-}
-
-fn group_kernel_label(group: &Group, toplevel: &Path) -> String {
-    let Some(root_m) = root_member(group).ok().flatten() else {
-        return "?".to_string();
-    };
-    rollback::member_snapshot_path(root_m, toplevel)
-        .map(|path| boot::kernel_label(&path))
-        .unwrap_or_else(|_| "?".to_string())
-}
-
 fn regret_kernel_label(regret: &RegretInfo, toplevel: &Path) -> String {
     let Some(root_e) = regret.entries.iter().find(|e| e.mountpoint == "/") else {
         return "?".to_string();
     };
     boot::kernel_label(&toplevel.join(&root_e.regret_subvol))
-}
-
-fn root_member(group: &Group) -> Result<Option<&Member>> {
-    for member in &group.members {
-        let mountpoint = snapper::config_subvolume(&member.config)?;
-        if mountpoint == "/" {
-            return Ok(Some(member));
-        }
-    }
-    Ok(None)
 }
 
 fn scan_groups_from_toplevel(toplevel: &Path, configs: &[String]) -> Result<Vec<Group>> {
@@ -791,7 +765,7 @@ fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
 /// do root exige regenerar o initramfs para fechar o caso de DKMS sem troca de
 /// kernel. Ok(false) só para grupos que não restauram root.
 fn boot_will_change(group: &Group, _toplevel: &Path) -> Result<bool> {
-    Ok(root_member(group)?.is_some())
+    Ok(group::root_member(group)?.is_some())
 }
 
 fn execute_restore_checkpoint(
@@ -979,7 +953,7 @@ pub fn list() -> Result<()> {
         if groups.is_empty() {
             snapshots::print_no_groups();
         } else {
-            let kernel_labels = group_kernel_labels(&groups, &mount_path);
+            let kernel_labels = group::kernel_labels(&groups, &mount_path);
             snapshots::print_groups(&groups, &kernel_labels, !printed_regret)?;
         }
         Ok(())

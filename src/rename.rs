@@ -44,7 +44,7 @@ fn interactive_plan(groups: &[Group]) -> Result<Option<(usize, String)>> {
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
     let result = {
-        let kernel_labels = crate::commands::group_kernel_labels(groups, &mount_path);
+        let kernel_labels = group::kernel_labels(groups, &mount_path);
         rename_ui::select_plan(groups, &kernel_labels)
     };
     let _ = btrfs::umount_toplevel(&mount_path);
@@ -89,4 +89,3 @@ fn rename_group(group: &Group, description: &str, expected_members: usize) -> Re
     rename_ui::print_done(group, description, expected_members);
     Ok(())
 }
-
