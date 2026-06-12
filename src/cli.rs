@@ -23,6 +23,14 @@ pub enum Command {
     Restore,
     /// Lista grupos existentes
     List,
+    /// Renomeia a descrição de um checkpoint snapg
+    Rename {
+        /// ID do checkpoint. Sem ID, abre seleção interativa.
+        id: Option<i64>,
+        /// Novo nome/descrição. Sem nome, pergunta interativamente.
+        #[arg(num_args = 0.., trailing_var_arg = true)]
+        description: Vec<String>,
+    },
     /// Apaga o grupo mais recente criado por save
     Delete {
         /// Pula confirmação interativa

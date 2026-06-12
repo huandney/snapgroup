@@ -220,6 +220,43 @@ pub fn prompt_hint(question: &str, hint: &str) -> String {
     format!("{}  {}", question, console::style(hint).dim())
 }
 
+/// Editor de linha mínimo com Esc-para-voltar. O `dialoguer::Input` não expõe
+/// Esc nem usa o `CONTENT_INDENT` (o tema só cobre `format_prompt`/select);
+/// este redesenha a linha a cada tecla com o indent da casa. Edição só no fim
+/// da linha (append/backspace) — suficiente para nomes curtos. `Ok(None)` =
+/// Esc (voltar). Enter com buffer vazio é ignorado: nome vazio não é aceito.
+pub fn input_line(prompt: &str, initial: &str) -> Result<Option<String>> {
+    let term = console::Term::stdout();
+    if !term.is_term() {
+        anyhow::bail!("entrada de texto requer um terminal interativo");
+    }
+    let mut buf = initial.to_string();
+    loop {
+        term.clear_line().context("limpar linha do prompt")?;
+        term.write_str(&format!("{CONTENT_INDENT}{prompt} {buf}"))
+            .context("desenhar prompt")?;
+        match term.read_key().context("ler tecla")? {
+            console::Key::Enter => {
+                let value = buf.trim().to_string();
+                if value.is_empty() {
+                    continue;
+                }
+                let _ = term.write_line("");
+                return Ok(Some(value));
+            }
+            console::Key::Escape => {
+                let _ = term.write_line("");
+                return Ok(None);
+            }
+            console::Key::Backspace => {
+                buf.pop();
+            }
+            console::Key::Char(c) if !c.is_control() => buf.push(c),
+            _ => {}
+        }
+    }
+}
+
 /// Confirmação consequente com dica: pergunta em negrito + hint em dim. Estiliza
 /// os dois separados pra que o negrito da pergunta não vaze pro hint.
 pub fn prompt_bold_hint(question: &str, hint: &str) -> String {
