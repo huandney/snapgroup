@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-beta] - 2026-06-12
+> Commits: `fd686fa`, `9c2fbe2`, `14df553`, `960ab73`, `355ab4d`, `b0bfe17`, `32055ae`, `7b75ed2`, `e93d5ac`, `47b0dad`, `f59641c`, `e8160cc`, `16017c4`, `f0e6eb1`, `412dee8`, `084eb9b`, `6aafcda`
+
+### Boot / Recovery
+- **Fix**: Validate the BLAKE2B hashes recorded in `limine.conf` as part of the "boot ready" check. A vmlinuz byte-match alone could declare a `/boot` bootable that Limine would refuse at the bootloader stage after an interrupted sync.
+- **Fix**: Always regenerate the initramfs on FAT32 restores. A DKMS driver update without a kernel change (e.g. nvidia) altered the initramfs while vmlinuz and hashes still matched, so the sync gate skipped regeneration and booted an initramfs incompatible with the restored root.
+- **Fix**: Never offer a direct reboot for a pending restore on FAT32 `/boot`; the gate always resyncs first, covering interrupted syncs and `pacman`/DKMS drift while pending.
+- **Fix**: Serialize `/boot` writes with the limine ecosystem's global mutex (`flock` on `/tmp/limine-global.lock`, 30s deadline), closing the race against pacman/mkinitcpio hooks.
+- **Fix**: Doctor recovery no longer overwrites the legitimate Regret: the replaced state becomes a discard and the previous Regret is preserved.
+- **Fix**: The rescue scan reads snapshot groups directly from the Btrfs top-level and only offers complete groups, instead of trusting a Snapper view that is blind during a rescue boot.
+
+### Restore / Pending
+- **Feature**: Pending restores are resolved through a gate shared by `restore`, `delete`, `save` and `rename`: finish (reboot, syncing `/boot` when needed) or cancel (return to the system still in use). Pending state is derived from the live mount, and the prompts preview destination subvol, expected kernel and what happens to `/boot`.
+- **Fix**: Cancelling an interrupted Regret undo no longer deletes the Regret: the undo uses a dedicated `_snapg_undo_*` marker and cancel swaps everything back without deleting.
+- **Fix**: Cancel syncs `/boot` before swapping subvols and gate reboots arm the boot cleanup, so an interruption can no longer leave a desynced `/boot` (or an orphaned subvol) invisible to the gate.
+
+### Commands
+- **Feature**: New `snapg rename` to edit a checkpoint's description across all members, interactively or via `snapg rename <id> [name...]`, with rollback on partial failure.
+- **Feature**: `snapg save` without a name opens a small wizard showing members and kernel, with the auto-generated name as an accept-on-Enter placeholder. Non-TTY callers keep the silent auto-name.
+
+### TUI
+- **Refine**: Prompts run in the alternate screen and results append inline, app-wide — the terminal reads as a command/result transcript (doctor reports included). Esc hints now match where Esc actually goes, and the save confirmation uses the same mountpoint badges as `list`.
+
 ## [0.5.0-beta] - 2026-06-04
 > Commits: `bb8208e`, `9461dfa`, `75ae17a`, `cb25b05`, `2939975`, `5a66b57`, `175fb1d`, `862d98a`, `5f65c69`, `9dec3ee`
 
