@@ -98,6 +98,16 @@ pub const MULTI_MARKER: usize = 6;
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// Dica canônica pros Select que voltam um passo com Esc.
+/// Convenção de hints de teclas — não inventar um terceiro formato:
+/// - selects do dialoguer: inline na pergunta, entre parênteses, via
+///   `prompt_hint`/`prompt_bold_hint` (rodapé abaixo da lista é impossível —
+///   o redraw do dialoguer engole qualquer linha impressa depois);
+/// - widgets custom full-screen (prompt de pending, `input_line`): rodapé em
+///   dim, sem parênteses, mesmos tokens;
+/// - tokens canônicos: "espaço marca", "enter confirma", "esc volta"/"esc sai",
+///   separados por " · ";
+/// - esc só é anunciado quando VOLTA um passo. Primeira página de um fluxo não
+///   ganha hint de esc: esc sai, comportamento padrão que não se anuncia.
 pub const HINT_BACK: &str = "(esc volta)";
 
 pub fn clear_screen() {
@@ -239,7 +249,13 @@ pub fn input_line(
     let mut buf = initial.to_string();
     loop {
         render_chrome();
-        println!("{CONTENT_INDENT}{}  {}", console::style(prompt).bold(), buf);
+        println!("{CONTENT_INDENT}{}", console::style(prompt).bold());
+        println!(
+            "{CONTENT_INDENT}{} {}{}",
+            console::style("❯").bold(),
+            buf,
+            console::style("▏").dim()
+        );
         println!();
         println!("{CONTENT_INDENT}{}", console::style(footer).dim());
         match term.read_key().context("ler tecla")? {
