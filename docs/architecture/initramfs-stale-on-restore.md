@@ -2,7 +2,9 @@
 
 > **Status:** **DECIDIDO — Opção A (sempre regenerar), implementada** no commit
 > `b0bfe17`. As opções abaixo ficam como registro do raciocínio que levou à
-> escolha. O residual de pending (§4) segue tratado como regra operacional.
+> escolha. O residual de pending (§4) foi depois **fechado em código** no commit
+> `32055ae`: pending com root + `/boot` FAT32 nunca é considerado synced — o
+> gate sempre ressincroniza antes de liberar o reboot.
 >
 > **Data:** 2026-06-06 (decidido 2026-06-09). **Branch:** `fix/doctor-restore-regret`.
 
@@ -165,10 +167,12 @@ partir do root **vivo** (`@_snapg_regret`, o antigo) e atualiza os hashes; aí
 `pending_boot_synced` compara `/boot` vs destino, vmlinuz/hash batem → oferece
 **Reiniciar** com initramfs do root errado.
 
-Tratamento atual previsto: **regra operacional** ("resolver o pending logo; não rodar
-pacman no pending"), consistente com a regra já existente do limine. Fechar isso em
-código exigiria sempre sincronizar no "Reiniciar" do pending (perde o reboot limpo
-instantâneo). Decisão acoplada à da §3 — registrar junto.
+**FECHADO em código (commit `32055ae`):** `pending_boot_synced` retorna `false`
+sempre que o pending envolve root e o `/boot` é FAT32 — o gate nunca oferece
+reboot direto nesse estado; sempre passa pelo resync (que regenera o initramfs,
+Opção A). O custo é perder o reboot limpo instantâneo em FAT32; a regra
+operacional ("resolver o pending logo") continua valendo só como higiene, não
+como proteção.
 
 ---
 

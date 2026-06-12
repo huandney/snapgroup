@@ -36,7 +36,9 @@
   com o ecossistema `limine-snapper-sync`. Detalhado na §8.
 - **Estado:** o trabalho do **gate + doctor + synced/desync** foi **commitado**
   (`960ab73`, pushed); este doc foi adicionado em `d0dd412`. O **lock do mutex
-  limine (Gap 1)** ainda **não foi implementado** — é a próxima tarefa.
+  limine (Gap 1)** foi **implementado** depois (flock em
+  `/tmp/limine-global.lock` dentro de `sync_fat32_paths`, com timeout de 30s e
+  gated na presença do limine) — ver §9.
 
 ---
 
@@ -576,14 +578,33 @@ pacman no pending"). **Não** fazer o bind mount.
   `limine_hashes_match`, e o predicado único `boot_ready` usado em `diagnose_boot`,
   `verify_synced`, no early-return de `sync_fat32_paths` e em `boot_already_synced`.
 
+### Feito depois (pós-revisão de 2026-06-11)
+
+- **Gap 1 do limine — IMPLEMENTADO** (`lock_limine_mutex` em `boot.rs`): flock em
+  `/tmp/limine-global.lock` dentro de `sync_fat32_paths` (cobre todos os call
+  sites), `LOCK_EX|LOCK_NB` em loop com deadline de 30s (mesmo timeout do limine),
+  gated na presença de `/usr/lib/limine/limine-mutex`, `OpenOptions` sem truncate.
+  Os 3 ajustes da §8.5 foram seguidos.
+- **Cancel sincroniza o `/boot` ANTES do swap** (`undo_restore_before_reboot`):
+  na ordem antiga (swap → sync), um Ctrl-C durante o sync deixava o `/boot`
+  meio-escrito já **sem pending** — invisível para o gate. Agora o sync roda
+  contra o `backup_subvol` (o chão vivo, mesmo conteúdo que ocupará o nome
+  ativo); interrompido, o pending sobrevive e o gate FAT32 ressincroniza.
+- **Gate arma o boot-cleanup ao rebootar** (`arm_pending_cleanup` +
+  `complete_pending_restore`): resolver um pending com subvol deslocado
+  `_snapg_undo_*`/`_snapg_discard_*` pelo gate não deixava o cleanup armado
+  (o arm vivia só no fluxo de restore normal) — o subvol órfão sobrevivia ao
+  reboot para sempre.
+
 ### NÃO feito (pendências — próximos passos)
 
-- **Gap 1 do limine** (lock do mutex `/tmp/limine-global.lock` dentro de
-  `sync_fat32_paths`, com timeout, gated na presença do limine) — **não implementado**.
-  Rebaixado de "SÉRIO" para condicional/baixo: o watcher fica inerte sem `inotifywait`
-  e o snapg não dispara o plugin de snapper no restore; o vetor real é só um
-  `pacman`/`snapper create` externo na janela pending. O flock segue sendo o fix
-  correto se quiser a garantia.
+- **ADR do "Regret consumido"** (item 4 do roadmap em
+  `aside-vs-stash-analysis.html`): após rebootar um undo de Regret, o slot
+  `_snapg_regret` fica vazio e o sistema substituído é varrido pelo boot-clean —
+  restaurar o Regret é a única troca de chão sem botão de arrependimento do
+  outro lado. Decidir (mesmo que a decisão seja "aceito, documentar").
+- **Teste manual em VM** (§9.2 + os cenários de Ctrl-C no cancel e de leak do
+  `_snapg_undo_*` via gate) antes de fechar a sequência como release.
 
 ---
 
