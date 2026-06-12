@@ -385,7 +385,7 @@ pub(crate) fn print_regret_restore_done(done_len: usize) {
 }
 
 pub(crate) fn print_cleanup_armed() {
-    println!("  cleanup automático armado para o próximo boot");
+    line(format_args!("cleanup automático armado para o próximo boot"));
 }
 
 pub(crate) fn print_cleanup_arm_failed(error: &anyhow::Error) {
@@ -539,12 +539,6 @@ fn render_pending_choice(
     header(title);
     line(format_args!("{intro}"));
     println!();
-    line(format_args!("{}", style("Ação selecionada").bold()));
-    match selected {
-        0 => print_pending_primary_preview(info),
-        _ => print_pending_cancel_preview(info),
-    }
-    println!();
     line(format_args!("{}", style(prompt).bold()));
     line(format_args!(
         "{} {}",
@@ -557,11 +551,17 @@ fn render_pending_choice(
         cancel_label
     ));
     println!();
+    line(format_args!("{}", style("Ação selecionada").bold()));
+    match selected {
+        0 => print_pending_primary_preview(info),
+        _ => print_pending_cancel_preview(info),
+    }
+    println!();
     line(format_args!("{}", style("enter confirma · esc volta").dim()));
 }
 
 fn print_pending_primary_preview(info: &PendingPromptInfo) {
-    let target = if info.undo_regret { "Regret restaurado" } else { "snapshot restaurado" };
+    let target = if info.undo_regret { "Regret restaurado" } else { "destino pendente" };
     print_pending_field(
         false,
         "vai iniciar em",

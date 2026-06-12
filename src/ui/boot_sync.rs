@@ -12,8 +12,18 @@ enum StepStatus {
     Failed,
 }
 
+#[derive(Clone, Copy)]
+enum PanelKind {
+    BootOnly,
+    Restore,
+    Cancel,
+}
+
 pub(crate) struct BootSyncPanel {
     steps: [StepStatus; STEP_COUNT],
+    kind: PanelKind,
+    btrfs: Option<StepStatus>,
+    current_boot_step: usize,
     current_step: usize,
     summary: String,
 }
@@ -22,6 +32,31 @@ impl BootSyncPanel {
     pub(crate) fn new() -> Self {
         Self {
             steps: [StepStatus::Pending; STEP_COUNT],
+            kind: PanelKind::BootOnly,
+            btrfs: None,
+            current_boot_step: 0,
+            current_step: 1,
+            summary: String::from("preparando sincronização"),
+        }
+    }
+
+    pub(crate) fn restore_after_btrfs() -> Self {
+        Self {
+            steps: [StepStatus::Pending; STEP_COUNT],
+            kind: PanelKind::Restore,
+            btrfs: Some(StepStatus::Done),
+            current_boot_step: 0,
+            current_step: 2,
+            summary: String::from("preparando sincronização"),
+        }
+    }
+
+    pub(crate) fn cancel_before_btrfs() -> Self {
+        Self {
+            steps: [StepStatus::Pending; STEP_COUNT],
+            kind: PanelKind::Cancel,
+            btrfs: Some(StepStatus::Pending),
+            current_boot_step: 0,
             current_step: 1,
             summary: String::from("preparando sincronização"),
         }
@@ -71,14 +106,21 @@ impl BootSyncPanel {
     }
 
     pub(crate) fn finish_synced(&mut self) {
-        self.current_step = STEP_COUNT;
+        self.current_step = self.display_step(4);
         self.summary = String::from("sincronização concluída");
         self.steps[4] = StepStatus::Synced;
         self.render();
     }
 
+    pub(crate) fn finish_btrfs(&mut self) {
+        self.btrfs = Some(StepStatus::Done);
+        self.current_step = self.btrfs_step().unwrap_or(self.current_step);
+        self.summary = String::from("Btrfs concluído");
+        self.render();
+    }
+
     pub(crate) fn fail_current(&mut self, summary: &str) {
-        let current = self.current_step.saturating_sub(1).min(STEP_COUNT - 1);
+        let current = self.current_boot_step.min(STEP_COUNT - 1);
         let idx = match self.steps[current] {
             StepStatus::Done | StepStatus::Synced => STEP_COUNT - 1,
             StepStatus::Pending | StepStatus::Running | StepStatus::Failed => current,
@@ -92,14 +134,16 @@ impl BootSyncPanel {
     }
 
     fn start(&mut self, idx: usize, summary: &str) {
-        self.current_step = idx + 1;
+        self.current_boot_step = idx;
+        self.current_step = self.display_step(idx);
         self.summary = summary.to_string();
         self.steps[idx] = StepStatus::Running;
         self.render();
     }
 
     fn finish(&mut self, idx: usize, summary: &str) {
-        self.current_step = idx + 1;
+        self.current_boot_step = idx;
+        self.current_step = self.display_step(idx);
         self.summary = summary.to_string();
         self.steps[idx] = StepStatus::Done;
         self.render();
@@ -107,34 +151,89 @@ impl BootSyncPanel {
 
     fn render(&self) {
         clear_screen();
-        header("Sincronização de boot");
+        header(self.title());
         println!();
         line(format_args!(
             "etapa {} de {} · {}",
-            self.current_step, STEP_COUNT, self.summary
+            self.current_step,
+            self.total_steps(),
+            self.summary
         ));
-        for (idx, label) in ["backup", "vmlinuz", "initramfs", "limine.conf", "estado"]
-            .iter()
-            .enumerate()
-        {
-            let last = idx == STEP_COUNT - 1;
-            let status = self.status_text(self.steps[idx]);
+        for (idx, (label, status)) in self.render_steps().iter().enumerate() {
+            let last = idx == self.total_steps() - 1;
+            let status_text = self.status_text(*status);
             let label = format!("{label:<12}");
-            match self.steps[idx] {
+            match *status {
                 StepStatus::Pending => {
-                    println!("{} {} {}", tree_branch(last), style(label).dim(), status);
+                    println!("{} {} {}", tree_branch(last), style(label).dim(), status_text);
                 }
                 StepStatus::Running => {
-                    println!("{} {} {}", tree_branch(last), style(label).bold(), status);
+                    println!("{} {} {}", tree_branch(last), style(label).bold(), status_text);
                 }
                 StepStatus::Done | StepStatus::Synced | StepStatus::Failed => {
-                    println!("{} {} {}", tree_branch(last), label, status);
+                    println!("{} {} {}", tree_branch(last), label, status_text);
                 }
             }
         }
         // Sem bloco "executando/comando": a linha de etapa já anuncia a ação, e
         // o spinner ao vivo (durante o initramfs) é desenhado logo abaixo daqui
         // pelo caller. O kernel aparece no próprio stream ("Starting build: …").
+    }
+
+    fn title(&self) -> &'static str {
+        match self.kind {
+            PanelKind::BootOnly => "Sincronização de boot",
+            PanelKind::Restore => "Restauração",
+            PanelKind::Cancel => "Cancelamento",
+        }
+    }
+
+    fn total_steps(&self) -> usize {
+        STEP_COUNT
+            + usize::from(self.btrfs.is_some())
+            + usize::from(matches!(self.kind, PanelKind::Restore))
+    }
+
+    fn display_step(&self, boot_idx: usize) -> usize {
+        match self.kind {
+            PanelKind::BootOnly | PanelKind::Cancel => boot_idx + 1,
+            PanelKind::Restore => boot_idx + 2,
+        }
+    }
+
+    fn btrfs_step(&self) -> Option<usize> {
+        self.btrfs?;
+        Some(match self.kind {
+            PanelKind::Restore => 1,
+            PanelKind::Cancel => STEP_COUNT + 1,
+            PanelKind::BootOnly => return None,
+        })
+    }
+
+    fn render_steps(&self) -> Vec<(&'static str, StepStatus)> {
+        let boot = [
+            ("backup /boot", self.steps[0]),
+            ("vmlinuz", self.steps[1]),
+            ("initramfs", self.steps[2]),
+            ("limine.conf", self.steps[3]),
+            ("verificação", self.steps[4]),
+        ];
+        let mut rows = Vec::with_capacity(self.total_steps());
+        if matches!(self.kind, PanelKind::Restore)
+            && let Some(status) = self.btrfs
+        {
+            rows.push(("Btrfs", status));
+        }
+        rows.extend(boot);
+        if matches!(self.kind, PanelKind::Cancel)
+            && let Some(status) = self.btrfs
+        {
+            rows.push(("Btrfs", status));
+        }
+        if matches!(self.kind, PanelKind::Restore) {
+            rows.push(("reboot", StepStatus::Pending));
+        }
+        rows
     }
 
     fn status_text(&self, status: StepStatus) -> String {

@@ -49,10 +49,6 @@ pub fn boot_fstype(boot: &Path) -> Result<String> {
 /// o que carregou no boot atual, não reflete o estado escrito em /boot
 /// (um `pacman -Syu` sem reboot deixa kernel novo no FAT32 e antigo
 /// rodando; pular sync nesse caso quebra o boot seguinte).
-pub fn sync_fat32(restored_root: &Path) -> Result<()> {
-    sync_fat32_paths(restored_root, Path::new("/boot"))
-}
-
 const LIMINE_MUTEX_LIB: &str = "/usr/lib/limine/limine-mutex";
 const LIMINE_LOCK_PATH: &str = "/tmp/limine-global.lock";
 
@@ -99,6 +95,39 @@ fn lock_limine_mutex() -> Result<Option<fs::File>> {
 }
 
 pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
+    sync_fat32_paths_with_panel(restored_root, boot, &mut panel)
+}
+
+pub(crate) fn sync_fat32_after_restore(restored_root: &Path) -> Result<()> {
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::restore_after_btrfs();
+    sync_fat32_paths_with_panel(restored_root, Path::new("/boot"), &mut panel)
+}
+
+pub(crate) struct CancelBootSync {
+    panel: crate::ui::boot_sync::BootSyncPanel,
+}
+
+impl CancelBootSync {
+    pub(crate) fn finish_btrfs(mut self) {
+        self.panel.finish_btrfs();
+    }
+}
+
+pub(crate) fn sync_fat32_before_cancel(remaining_root: &Path) -> Result<Option<CancelBootSync>> {
+    if !is_fat32() {
+        return Ok(None);
+    }
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::cancel_before_btrfs();
+    sync_fat32_paths_with_panel(remaining_root, Path::new("/boot"), &mut panel)?;
+    Ok(Some(CancelBootSync { panel }))
+}
+
+fn sync_fat32_paths_with_panel(
+    restored_root: &Path,
+    boot: &Path,
+    panel: &mut crate::ui::boot_sync::BootSyncPanel,
+) -> Result<()> {
     if !is_fat32_path(boot) {
         return Ok(());
     }
@@ -107,7 +136,6 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // (fim da função), inclusive em erro.
     let _limine_mutex = lock_limine_mutex()?;
 
-    let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
     let groups = discover_kernel_groups(boot)?;
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
@@ -137,7 +165,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         panel.reuse_backup();
     }
 
-    if let Err(e) = sync_inner(restored_root, boot, &groups, &mut panel) {
+    if let Err(e) = sync_inner(restored_root, boot, &groups, panel) {
         panel.fail_current("sincronização falhou");
         restore_backup_after_failure(boot);
         return Err(e);

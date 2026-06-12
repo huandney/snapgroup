@@ -339,7 +339,8 @@ fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
     let result = (|| -> Result<()> {
         if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
             let dest_root = mount_path.join(&root.current_subvol);
-            boot::sync_fat32(&dest_root).context("sincronizar /boot com o destino do restore")?;
+            boot::sync_fat32_after_restore(&dest_root)
+                .context("sincronizar /boot com o destino do restore")?;
         }
         // O fluxo original pode ter sido interrompido antes de armar o
         // cleanup; sem isto, o subvol deslocado sobrevive ao reboot.
@@ -763,7 +764,7 @@ fn execute_restore_root_to_snapshot(
     crate::ui::restore::print_root_restore_done(number, &done);
 
     let restored_root = toplevel.join(root_subvol);
-    if let Err(e) = boot::sync_fat32(&restored_root) {
+    if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
         return abort_reboot_boot_desync(
             &restored_root,
             e,
@@ -820,7 +821,7 @@ fn execute_restore_checkpoint(
             // sistema. Bloqueia o reboot em vez de só avisar.
             if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
                 let restored_root = mount_path.join(&root.current_subvol);
-                if let Err(e) = boot::sync_fat32(&restored_root) {
+                if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
                     return abort_reboot_boot_desync(
                         &restored_root,
                         e,
@@ -860,7 +861,7 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
         let restored_root_path = mount_path.join(&root_member.current_subvol);
 
-        if let Err(e) = boot::sync_fat32(&restored_root_path) {
+        if let Err(e) = boot::sync_fat32_after_restore(&restored_root_path) {
             return abort_reboot_boot_desync(
                 &restored_root_path,
                 e,
@@ -1141,17 +1142,22 @@ fn undo_restore_before_reboot(
     // inversa (swap primeiro), uma interrupção aqui deixava o /boot
     // dessincronizado já sem pending — invisível para o gate, só um doctor
     // explícito detectava.
-    if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+    let cancel_boot_sync = if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
         let remaining_root = mount_path.join(&root.backup_subvol);
-        boot::sync_fat32(&remaining_root)
-            .context("sincronizar /boot com o sistema atual; nada foi desfeito")?;
-    }
+        boot::sync_fat32_before_cancel(&remaining_root)
+            .context("sincronizar /boot com o sistema atual; nada foi desfeito")?
+    } else {
+        None
+    };
 
     if any_undo {
         rollback::cancel_regret_undo(done, mount_path)
             .context("cancelar restauração de Regret antes do reboot")?;
     } else {
         rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
+    }
+    if let Some(sync) = cancel_boot_sync {
+        sync.finish_btrfs();
     }
 
     crate::ui::restore::print_restore_undone(done.len());
