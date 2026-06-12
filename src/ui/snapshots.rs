@@ -13,11 +13,15 @@ use std::collections::HashMap;
 /// seleção do que restaurar mora no restore — checkpoint completo é grátis no
 /// CoW e parcial quebraria o sinal "grupo incompleto = suspeito" do doctor),
 /// campo de nome no editor padrão. Primeira página do fluxo: Esc sai.
-pub(crate) fn prompt_save_name(mountpoints: &mut [String], kernel: &str) -> Result<Option<String>> {
+pub(crate) fn prompt_save_name(
+    mountpoints: &mut [String],
+    kernel: &str,
+    placeholder: &str,
+) -> Result<Option<String>> {
     let _alt = AltScreen::enter();
     let badges = member_badges(mountpoints);
     let kernel = kernel.to_string();
-    input_line("Nome", "", "enter confirma · esc sai", move || {
+    input_line("Nome", "", placeholder, "enter confirma · esc sai", move || {
         clear_screen();
         header("Salvar checkpoint");
         line(format_args!("{:<9} {}", "membros", badges));

@@ -33,7 +33,7 @@ pub(crate) fn prompt_description_screen(group: &Group) -> Result<Option<String>>
 }
 
 fn prompt_description(group: &Group, footer: &str) -> Result<Option<String>> {
-    input_line("Novo nome", group::description(group), footer, || {
+    input_line("Novo nome", group::description(group), "", footer, || {
         clear_screen();
         header("Renomear checkpoint");
         line(format_args!("ID atual     #{}", group.id));

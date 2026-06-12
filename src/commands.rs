@@ -54,19 +54,22 @@ pub fn save(description: Option<String>) -> Result<()> {
     }
 
     // Sem nome: wizard interativo (membros + kernel como informação, campo de
-    // nome). Sem TTY (script/cron), mantém o nome automático de antes — o
-    // prompt falharia e quebraria automações que nunca pediram interação.
+    // nome com o auto-nome como placeholder — Enter direto o aceita). Sem TTY
+    // (script/cron), usa o mesmo auto-nome sem prompt — interatividade
+    // quebraria automações que nunca a pediram.
+    let auto_name = format!("snapg save {id}");
     let desc = match description {
         Some(d) => d,
         None if crate::ui::term::stdout_is_tty() => {
             let kernel = boot::kernel_label(Path::new("/"));
-            let Some(d) = snapshots::prompt_save_name(&mut mountpoints, &kernel)? else {
+            let Some(d) = snapshots::prompt_save_name(&mut mountpoints, &kernel, &auto_name)?
+            else {
                 snapshots::print_save_cancelled();
                 return Ok(());
             };
             d
         }
-        None => format!("snapg save {id}"),
+        None => auto_name,
     };
 
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.

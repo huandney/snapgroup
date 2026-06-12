@@ -237,9 +237,15 @@ pub fn prompt_hint(question: &str, hint: &str) -> String {
 /// prompt de pending), com o hint num rodapé dim — fora da linha editável.
 /// Edição só no fim da linha (append/backspace) — suficiente para nomes curtos.
 /// `Ok(None)` = Esc. Enter com buffer vazio é ignorado: nome vazio não é aceito.
+/// `initial` entra no buffer (editável — o rename pré-carrega o nome atual);
+/// `placeholder` é texto-fantasma em dim quando o buffer está vazio: Enter o
+/// aceita, qualquer tecla digitada o substitui, e ele volta se o buffer
+/// esvaziar. Com placeholder vazio, Enter sem texto é ignorado (nome vazio
+/// não é aceito).
 pub fn input_line(
     prompt: &str,
     initial: &str,
+    placeholder: &str,
     footer: &str,
     render_chrome: impl Fn(),
 ) -> Result<Option<String>> {
@@ -251,10 +257,16 @@ pub fn input_line(
     loop {
         render_chrome();
         println!("{CONTENT_INDENT}{}", console::style(prompt).bold());
+        let ghost = buf.is_empty() && !placeholder.is_empty();
+        let text = if ghost {
+            console::style(placeholder).dim()
+        } else {
+            console::style(buf.as_str())
+        };
         println!(
             "{CONTENT_INDENT}{} {}{}",
             console::style("❯").bold(),
-            buf,
+            text,
             console::style("▏").dim()
         );
         println!();
@@ -262,10 +274,12 @@ pub fn input_line(
         match term.read_key().context("ler tecla")? {
             console::Key::Enter => {
                 let value = buf.trim().to_string();
-                if value.is_empty() {
-                    continue;
+                if !value.is_empty() {
+                    return Ok(Some(value));
                 }
-                return Ok(Some(value));
+                if !placeholder.is_empty() {
+                    return Ok(Some(placeholder.to_string()));
+                }
             }
             console::Key::Escape => return Ok(None),
             console::Key::Backspace => {
