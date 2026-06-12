@@ -257,6 +257,8 @@ pub(crate) fn select_root_snapshot(
     let max = (console::Term::stdout().size().1 as usize)
         .saturating_sub(CONTENT_INDENT.chars().count() + SELECT_MARKER);
 
+    // Prompt: alt screen preserva o scrollback do usuário.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Restaurar só o / — qual kernel?");
 
@@ -300,7 +302,7 @@ pub(crate) fn print_no_restore_points() {
 }
 
 pub(crate) fn print_no_root_snapshots() {
-    clear_screen();
+    // Resultado: apenda inline, sem limpar o terminal.
     header("Restaurar só o /");
     println!();
     line(format_args!(

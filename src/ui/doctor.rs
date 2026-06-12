@@ -1,8 +1,8 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{
-    SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch, tree_stem,
-    truncate_for_terminal,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch,
+    tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -15,6 +15,8 @@ pub(crate) enum UndoDoneAction {
 
 pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<Option<usize>> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
+    // Prompt: alt screen preserva o scrollback; o relatório imprime inline depois.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Diagnóstico de boot");
     dialoguer::Select::with_theme(&THEME)
@@ -69,6 +71,8 @@ pub(crate) fn select_rescue_action(
     default_kernel: &str,
     boot_kernel: &str,
 ) -> Result<Option<usize>> {
+    // Prompt autocontido (reimprime o contexto): alt screen, resultado inline.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
@@ -136,7 +140,6 @@ pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {
 }
 
 pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
-    clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
         "{} você está num snapshot de resgate",
@@ -170,8 +173,10 @@ pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
     );
 }
 
+/// Resultado: apenda inline (transcrição), nunca limpa o terminal — um clear
+/// aqui apagava o scrollback e, no re-report pós-sync, os próprios painéis de
+/// sync recém-impressos.
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
-    clear_screen();
     header("Diagnóstico de boot");
     print_target(target, diagnosis);
     print_diagnosis_inner(&target.root, diagnosis);
