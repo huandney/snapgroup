@@ -41,6 +41,14 @@ pub fn save(description: Option<String>) -> Result<()> {
         );
     }
 
+    // Gate: não criar checkpoints com uma restauração pendente de reboot —
+    // resolve antes (concluir ou cancelar). Sem isto, o save prossegue num
+    // estado transitório (root vivo = `_snapg_regret`, `.snapshots` já movido
+    // pro destino) e só não destrói o Regret por acidente de derivação de nome.
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
+    }
+
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
 
@@ -86,8 +94,8 @@ fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
 
     // Gate: uma restauração pendente de reboot não convive com um novo restore.
     // Resolve antes — concluir (reboot) ou cancelar — em vez de empilhar.
-    if let Some(done) = pending_restore_from_live(&configs)? {
-        return gate_pending_restore(done);
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
     }
 
     // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
@@ -149,6 +157,14 @@ fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::
         return Ok(None);
     }
     Ok(Some(done))
+}
+
+pub(crate) fn gate_pending_restore_if_any(configs: &[String]) -> Result<bool> {
+    let Some(done) = pending_restore_from_live(configs)? else {
+        return Ok(false);
+    };
+    gate_pending_restore(done)?;
+    Ok(true)
 }
 
 fn pending_current_subvol(live_subvol: &str) -> Option<String> {
@@ -886,8 +902,8 @@ pub fn delete(yes: bool) -> Result<()> {
     // Gate: não apagar checkpoints com uma restauração pendente de reboot —
     // resolve antes (concluir ou cancelar).
     let configs = snapper::list_configs()?;
-    if let Some(done) = pending_restore_from_live(&configs)? {
-        return gate_pending_restore(done);
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
     }
 
     let groups = group::list_groups()?;

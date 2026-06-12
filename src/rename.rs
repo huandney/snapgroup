@@ -1,4 +1,5 @@
 use crate::btrfs;
+use crate::commands;
 use crate::group::{self, Group};
 use crate::rollback;
 use crate::snapper;
@@ -7,6 +8,10 @@ use anyhow::{Context, Result, bail};
 
 pub fn run(id: Option<group::GroupId>, description: Vec<String>) -> Result<()> {
     let configs = snapper::list_configs()?;
+    if commands::gate_pending_restore_if_any(&configs)? {
+        return Ok(());
+    }
+
     let groups = group::list_groups()?;
     if groups.is_empty() {
         rename_ui::print_no_groups();
