@@ -1,8 +1,8 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{
-    SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch, tree_stem,
-    truncate_for_terminal,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch,
+    tree_stem, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -13,8 +13,10 @@ pub(crate) enum UndoDoneAction {
     ShowDiagnosis,
 }
 
-pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
+pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<Option<usize>> {
     let labels: Vec<&str> = targets.iter().map(|target| target.label.as_str()).collect();
+    // Prompt: alt screen preserva o scrollback; o relatório imprime inline depois.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Diagnóstico de boot");
     dialoguer::Select::with_theme(&THEME)
@@ -23,19 +25,8 @@ pub(crate) fn select_target(targets: &[DoctorTarget]) -> Result<usize> {
         .default(0)
         .clear(true)
         .report(false)
-        .interact()
+        .interact_opt()
         .context("selecionar sistema")
-}
-
-pub(crate) fn select_undo_done_action() -> Result<UndoDoneAction> {
-    clear_screen();
-    header("Diagnóstico de boot");
-    line(format_args!(
-        "{} restauração desfeita sem reboot",
-        style("✓").green().bold()
-    ));
-    line(format_args!("Regret anterior restaurado, quando existia."));
-    wait_done_action()
 }
 
 /// Espera enter/esc após uma ação terminal cujo status já está na tela (relatório
@@ -79,8 +70,9 @@ pub(crate) fn select_rescue_action(
     current_kernel: &str,
     default_kernel: &str,
     boot_kernel: &str,
-    can_undo_pending_restore: bool,
 ) -> Result<Option<usize>> {
+    // Prompt autocontido (reimprime o contexto): alt screen, resultado inline.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
@@ -117,20 +109,13 @@ pub(crate) fn select_rescue_action(
     // um item do Select quebra a medição de largura, e item que dá wrap faz o
     // dialoguer "comer" as linhas acima a cada seta. A cor dos paths fica nas
     // linhas de diagnóstico acima, impressas direto.
-    let mut choices = Vec::new();
-    if can_undo_pending_restore {
-        choices.push(
-            "Desfazer restauração sem reboot — volta ao estado anterior e restaura o Regret antigo"
-                .to_string(),
-        );
-    }
-    choices.extend([
+    let choices = [
         format!(
             "Manter o root atual (kernel {default_kernel}) — ajusta o /boot · mantém root e home"
         ),
         "Restaurar só o / — escolher kernel · mantém home e root".to_string(),
-        "Mudar o que boota — restore completo · outro snapshot ou desfazer".to_string(),
-    ]);
+        "Mudar o que boota — restore completo · checkpoint ou Regret".to_string(),
+    ];
     let items: Vec<String> = choices
     .iter()
     .map(|t| truncate_for_terminal(t, SELECT_MARKER))
@@ -155,7 +140,6 @@ pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {
 }
 
 pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
-    clear_screen();
     header("Diagnóstico de boot");
     line(format_args!(
         "{} você está num snapshot de resgate",
@@ -189,8 +173,10 @@ pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
     );
 }
 
+/// Resultado: apenda inline (transcrição), nunca limpa o terminal — um clear
+/// aqui apagava o scrollback e, no re-report pós-sync, os próprios painéis de
+/// sync recém-impressos.
 pub(crate) fn print_report(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
-    clear_screen();
     header("Diagnóstico de boot");
     print_target(target, diagnosis);
     print_diagnosis_inner(&target.root, diagnosis);
@@ -287,6 +273,14 @@ fn print_diagnosis_inner(root: &Path, diagnosis: &BootDiagnosis) {
         BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
             println!(
                 "{} {:<COL$} {} incompleta: kernels casam, mas há backup remanescente",
+                tree_branch(true),
+                "estado",
+                style("✗").red().bold()
+            );
+        }
+        BootHealth::NeedsSync(BootIssue::HashMismatch) => {
+            println!(
+                "{} {:<COL$} {} kernels casam, mas os hashes do limine.conf divergem (Limine recusa o boot)",
                 tree_branch(true),
                 "estado",
                 style("✗").red().bold()

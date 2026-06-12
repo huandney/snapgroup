@@ -10,13 +10,22 @@ pub fn run(root: Option<PathBuf>, boot: Option<PathBuf>, apply: bool) -> Result<
     // não o subvol que boota por padrão, sincronizar `/boot` daqui miraria o
     // root errado. Recusa e instrui. Args explícitos fazem bypass: quem passa
     // --root sabe o alvo.
-    if root.is_none()
-        && boot.is_none()
-        && let Some(ctx) = boot::detect_rescue_boot()?
-    {
-        return resolve_rescue(ctx, apply);
+    if root.is_none() && boot.is_none() {
+        // Restauração pendente de reboot: o `/` montado é um `*_snapg_regret`, o
+        // que diverge do fstab e o `detect_rescue_boot` confundiria com resgate.
+        // Mas não é resgate — é o mesmo estado que restore/delete resolvem com
+        // reiniciar/cancelar. Trata aqui, com o mesmo prompt, antes do resgate.
+        if crate::commands::has_pending_restore()? {
+            let _lock = crate::lock::acquire()?;
+            return crate::commands::doctor_resolve_pending();
+        }
+        if let Some(ctx) = boot::detect_rescue_boot()? {
+            return resolve_rescue(ctx, apply);
+        }
     }
-    let target = select_target(root, boot)?;
+    let Some(target) = select_target(root, boot)? else {
+        return Ok(());
+    };
     diagnose_and_apply(&target, apply)?;
     Ok(())
 }
@@ -41,39 +50,16 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
         let current_kernel = boot::kernel_label(Path::new("/"));
         let default_kernel = boot::kernel_label(&mount.path);
         let boot_kernel = boot::boot_kernel_label(Path::new("/boot"));
-        let can_undo_pending_restore = crate::commands::has_pending_restore()?;
 
         let Some(choice) = doctor_ui::select_rescue_action(
             &ctx,
             &current_kernel,
             &default_kernel,
             &boot_kernel,
-            can_undo_pending_restore,
         )?
         else {
             return Ok(()); // ESC no menu do doctor: sai
         };
-
-        if can_undo_pending_restore && choice == 0 {
-            drop(mount);
-            {
-                let _lock = crate::lock::acquire()?;
-                crate::commands::undo_pending_restore()?;
-            }
-            match doctor_ui::select_undo_done_action()? {
-                doctor_ui::UndoDoneAction::Exit => return Ok(()),
-                doctor_ui::UndoDoneAction::ShowDiagnosis => {
-                    let target = DoctorTarget::new(
-                        "sistema atual".to_string(),
-                        PathBuf::from("/"),
-                        PathBuf::from("/boot"),
-                    );
-                    let _ = diagnose_and_apply(&target, false)?;
-                    return Ok(());
-                }
-            }
-        }
-        let choice = if can_undo_pending_restore { choice - 1 } else { choice };
 
         match choice {
             // A: ajusta o "/boot" contra o /@ montado. Terminal — o `apply`
@@ -118,7 +104,7 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                 drop(mount);
                 {
                     let _lock = crate::lock::acquire()?;
-                    crate::commands::restore()?;
+                    crate::commands::restore_preserving_regret()?;
                 }
             }
         }
@@ -188,26 +174,26 @@ pub fn handle_boot_sync_failure(
     Ok(())
 }
 
-fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<DoctorTarget> {
+fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<Option<DoctorTarget>> {
     if let Some(root) = root {
         let boot = boot.unwrap_or_else(|| root.join("boot"));
-        return Ok(DoctorTarget::new(
+        return Ok(Some(DoctorTarget::new(
             format!("root={} boot={}", root.display(), boot.display()),
             root,
             boot,
-        ));
+        )));
     }
     if let Some(boot) = boot {
         let root = PathBuf::from("/");
-        return Ok(DoctorTarget::new(
+        return Ok(Some(DoctorTarget::new(
             format!("root={} boot={}", root.display(), boot.display()),
             root,
             boot,
-        ));
+        )));
     }
 
     if let Some(target) = current_system_target()? {
-        return Ok(target);
+        return Ok(Some(target));
     }
 
     let targets = mounted_system_targets()?;
@@ -218,8 +204,10 @@ fn select_target(root: Option<PathBuf>, boot: Option<PathBuf>) -> Result<DoctorT
         );
     }
 
-    let idx = doctor_ui::select_target(&targets)?;
-    Ok(targets.into_iter().nth(idx).expect("índice selecionado existe"))
+    let Some(idx) = doctor_ui::select_target(&targets)? else {
+        return Ok(None);
+    };
+    Ok(Some(targets.into_iter().nth(idx).expect("índice selecionado existe")))
 }
 
 fn current_system_target() -> Result<Option<DoctorTarget>> {
@@ -288,6 +276,14 @@ fn print_diagnosis(root: &Path, boot_path: &Path) -> Result<bool> {
 
 fn diagnosis_for(root: &Path, boot_path: &Path) -> Result<boot::BootDiagnosis> {
     validate_target(root, boot_path)?;
+    // No pending o `/` montado é o `*_snapg_regret` (chão antigo), não o subvol
+    // que vai bootar. Comparar o /boot contra ele acusa um falso "difere"; o que
+    // importa é o destino. Mira o destino montando o top-level.
+    if root == Path::new("/")
+        && let Some(diagnosis) = crate::commands::pending_dest_diagnosis(boot_path)?
+    {
+        return Ok(diagnosis);
+    }
     boot::diagnose_boot(root, boot_path)
 }
 

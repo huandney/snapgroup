@@ -1,25 +1,53 @@
 use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, CONTENT_INDENT, HINT_MULTI, THEME, app_header, branch, clear_screen,
-    confirm, content_width, header, line, prompt_hint, section_header, short_datetime,
-    truncate_for_terminal,
+    AltScreen, CONTENT_INDENT, HINT_MULTI, PAGE_INDENT, THEME, app_header, clear_screen,
+    confirm, content_width, ellipsize, header, input_line, line, prompt_hint,
+    section_header, short_datetime, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
 use std::collections::HashMap;
 
-pub(crate) fn print_save_created(id: i64, desc: &str, created: &[(String, u32)]) {
+/// Wizard do `snapg save` sem nome: membros e kernel como informação (a
+/// seleção do que restaurar mora no restore — checkpoint completo é grátis no
+/// CoW e parcial quebraria o sinal "grupo incompleto = suspeito" do doctor),
+/// campo de nome no editor padrão. Primeira página do fluxo: Esc sai.
+pub(crate) fn prompt_save_name(
+    mountpoints: &mut [String],
+    kernel: &str,
+    placeholder: &str,
+) -> Result<Option<String>> {
+    let _alt = AltScreen::enter();
+    let badges = member_badges(mountpoints);
+    let kernel = kernel.to_string();
+    input_line("Nome", "", placeholder, "enter confirma · esc sai", move || {
+        clear_screen();
+        header("Salvar checkpoint");
+        line(format_args!("{:<9} {}", "membros", badges));
+        line(format_args!("{:<9} {}", "kernel", kernel));
+        println!();
+    })
+}
+
+pub(crate) fn print_save_cancelled() {
+    println!("save cancelado");
+}
+
+/// Confirmação do save no vocabulário do `list`: nome primeiro, badges de
+/// mountpoint (root primeiro) e ID em dim. Os números por-config do snapper
+/// são detalhe interno — nenhum outro comando os pede. PAGE_INDENT alinha a
+/// linha com os section headers.
+pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]) {
     println!(
-        "{} grupo {id} criado ({} membros)  {}  {desc}",
+        "{PAGE_INDENT}{} {} salvo  {}  {}  {}  {}",
         style("✓").green().bold(),
-        created.len(),
-        style("·").dim()
+        ellipsize(desc, NAME_COL_MAX),
+        style("·").dim(),
+        style(member_badges(mountpoints)).dim(),
+        style("·").dim(),
+        style(format!("#{id}")).dim()
     );
-    let total = created.len();
-    for (i, (cfg, n)) in created.iter().enumerate() {
-        println!("{} {:<10} #{n}", branch(i + 1 == total), cfg);
-    }
 }
 
 /// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
@@ -364,6 +392,15 @@ fn member_badges(mountpoints: &mut [String]) -> String {
         .map(|m| format!("[{m}]"))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub(crate) fn print_pending_restore_status() {
+    app_header();
+    section_header("⏳", "Restauração pendente de reboot");
+    line(format_args!(
+        "Rode 'snapg restore' para concluir (reiniciar) ou cancelar a restauração."
+    ));
+    println!();
 }
 
 pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {

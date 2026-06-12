@@ -98,6 +98,17 @@ pub const MULTI_MARKER: usize = 6;
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// Dica canônica pros Select que voltam um passo com Esc.
+/// Convenção de hints de teclas — não inventar um terceiro formato:
+/// - selects do dialoguer: inline na pergunta, entre parênteses, via
+///   `prompt_hint`/`prompt_bold_hint` (rodapé abaixo da lista é impossível —
+///   o redraw do dialoguer engole qualquer linha impressa depois);
+/// - widgets custom full-screen (prompt de pending, `input_line`): rodapé em
+///   dim, sem parênteses, mesmos tokens;
+/// - tokens canônicos: "espaço marca", "enter confirma", "esc volta"/"esc sai",
+///   separados por " · ";
+/// - esc só é anunciado quando VOLTA um passo. Primeira página de um fluxo não
+///   ganha hint de esc, salvo gates operacionais onde "sair sem resolver" é
+///   uma escolha relevante e deve aparecer explicitamente como "esc sai".
 pub const HINT_BACK: &str = "(esc volta)";
 
 pub fn clear_screen() {
@@ -220,6 +231,66 @@ pub fn prompt_hint(question: &str, hint: &str) -> String {
     format!("{}  {}", question, console::style(hint).dim())
 }
 
+/// Editor de linha mínimo com Esc-para-sair/voltar. O `dialoguer::Input` não
+/// expõe Esc nem usa o `CONTENT_INDENT` (o tema só cobre `format_prompt`/select).
+/// Redesenha a tela inteira a cada tecla via `render_chrome` (mesmo padrão do
+/// prompt de pending), com o hint num rodapé dim — fora da linha editável.
+/// Edição só no fim da linha (append/backspace) — suficiente para nomes curtos.
+/// `Ok(None)` = Esc. Enter com buffer vazio é ignorado: nome vazio não é aceito.
+/// `initial` entra no buffer (editável — o rename pré-carrega o nome atual);
+/// `placeholder` é texto-fantasma em dim quando o buffer está vazio: Enter o
+/// aceita, qualquer tecla digitada o substitui, e ele volta se o buffer
+/// esvaziar. Com placeholder vazio, Enter sem texto é ignorado (nome vazio
+/// não é aceito).
+pub fn input_line(
+    prompt: &str,
+    initial: &str,
+    placeholder: &str,
+    footer: &str,
+    render_chrome: impl Fn(),
+) -> Result<Option<String>> {
+    let term = console::Term::stdout();
+    if !term.is_term() {
+        anyhow::bail!("entrada de texto requer um terminal interativo");
+    }
+    let mut buf = initial.to_string();
+    loop {
+        render_chrome();
+        println!("{CONTENT_INDENT}{}", console::style(prompt).bold());
+        let ghost = buf.is_empty() && !placeholder.is_empty();
+        let text = if ghost {
+            console::style(placeholder).dim()
+        } else {
+            console::style(buf.as_str())
+        };
+        println!(
+            "{CONTENT_INDENT}{} {}{}",
+            console::style("❯").bold(),
+            text,
+            console::style("▏").dim()
+        );
+        println!();
+        println!("{CONTENT_INDENT}{}", console::style(footer).dim());
+        match term.read_key().context("ler tecla")? {
+            console::Key::Enter => {
+                let value = buf.trim().to_string();
+                if !value.is_empty() {
+                    return Ok(Some(value));
+                }
+                if !placeholder.is_empty() {
+                    return Ok(Some(placeholder.to_string()));
+                }
+            }
+            console::Key::Escape => return Ok(None),
+            console::Key::Backspace => {
+                buf.pop();
+            }
+            console::Key::Char(c) if !c.is_control() => buf.push(c),
+            _ => {}
+        }
+    }
+}
+
 /// Confirmação consequente com dica: pergunta em negrito + hint em dim. Estiliza
 /// os dois separados pra que o negrito da pergunta não vaze pro hint.
 pub fn prompt_bold_hint(question: &str, hint: &str) -> String {
@@ -244,6 +315,23 @@ pub fn short_datetime(s: &str) -> String {
     }
     let hm: String = time.chars().take(5).collect();
     format!("{date} {hm}")
+}
+
+/// True se stdout é um terminal interativo. Callers usam para decidir entre
+/// wizard e comportamento não-interativo (ex.: save sem nome em script).
+pub fn stdout_is_tty() -> bool {
+    console::Term::stdout().is_term()
+}
+
+/// Corta `s` em `max` chars com reticências — o mesmo corte das colunas de
+/// nome (list e pickers), para texto cujo limite é fixo e não a largura do
+/// terminal (esse caso é o `truncate_for_terminal`).
+pub fn ellipsize(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
 }
 
 /// Trunca texto pra caber numa linha de item interativo sem wrap. `marker_len` é
