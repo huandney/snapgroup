@@ -9,7 +9,7 @@ use crate::ui::term::{
     prompt_hint, regret_title, short_datetime, tree_branch, tree_stem, truncate_for_terminal,
     wrap_text,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
 use std::collections::HashMap;
 use std::path::Path;
@@ -68,6 +68,16 @@ pub(crate) enum PendingSyncAction {
     SyncBoot,
     Cancel,
     Nothing,
+}
+
+pub(crate) struct PendingPromptInfo {
+    pub(crate) boot_needs_sync: bool,
+    pub(crate) undo_regret: bool,
+    pub(crate) destination_subvol: String,
+    pub(crate) destination_kernel: String,
+    pub(crate) current_subvol: String,
+    pub(crate) current_kernel: String,
+    pub(crate) regret_subvol: String,
 }
 
 /// Ação selecionada na TUI.
@@ -409,33 +419,19 @@ pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
 /// Prompt quando o usuário aciona restore/delete com uma restauração já aplicada
 /// mas não reiniciada. Não há checkpoints a oferecer nesse estado: ou conclui
 /// (reboot) ou cancela (volta ao estado de antes da restauração).
-pub(crate) fn select_pending_action() -> Result<PendingAction> {
-    clear_screen();
-    header("Restauração pendente de reboot");
-    line(format_args!(
-        "Há uma restauração aplicada que ainda não foi reiniciada. Reinicie para"
-    ));
-    line(format_args!(
-        "concluí-la, ou cancele para voltar ao estado atual (kernel e subvolumes"
-    ));
-    line(format_args!("de antes da restauração — home e root atuais preservados)."));
-    println!();
-    let actions = [PendingAction::Reboot, PendingAction::Cancel];
-    let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("O que fazer com a restauração pendente?")
-        .items(&[
-            "Reiniciar agora (concluir a restauração)",
-            "Cancelar a restauração (voltar ao estado atual)",
-        ])
-        .default(0)
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(PendingAction::Nothing);
-    };
-    Ok(actions[choice])
+pub(crate) fn select_pending_action(info: &PendingPromptInfo) -> Result<PendingAction> {
+    match select_pending_choice(
+        "Restauração pendente de reboot",
+        "Há uma restauração aplicada que ainda não foi reiniciada.",
+        "O que fazer com a restauração pendente?",
+        pending_reboot_label(info),
+        pending_cancel_label(info),
+        info,
+    )? {
+        Some(0) => Ok(PendingAction::Reboot),
+        Some(_) => Ok(PendingAction::Cancel),
+        None => Ok(PendingAction::Nothing),
+    }
 }
 
 /// Pending em /boot FAT32 ou dessincronizado: reiniciar direto não é seguro.
@@ -464,32 +460,146 @@ pub(crate) fn confirm_run_doctor() -> Result<bool> {
 
 /// Prompt do doctor para um pending que precisa sincronizar o /boot com o
 /// destino, ou cancelar a restauração.
-pub(crate) fn select_pending_sync_action() -> Result<PendingSyncAction> {
+pub(crate) fn select_pending_sync_action(info: &PendingPromptInfo) -> Result<PendingSyncAction> {
+    match select_pending_choice(
+        "Doctor — sincronizar /boot com o destino",
+        "Escolha qual estado deve ficar pronto antes do próximo reboot.",
+        "O que fazer?",
+        pending_sync_label(info),
+        pending_cancel_label(info),
+        info,
+    )? {
+        Some(0) => Ok(PendingSyncAction::SyncBoot),
+        Some(_) => Ok(PendingSyncAction::Cancel),
+        None => Ok(PendingSyncAction::Nothing),
+    }
+}
+
+/// Só aparece quando o /boot já está coerente (`resolve_pending_clean`), então
+/// não há variante "preparar /boot" aqui — essa é a do prompt de sync.
+fn pending_reboot_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Reiniciar no Regret restaurado";
+    }
+    "Reiniciar no snapshot restaurado"
+}
+
+fn pending_sync_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Preparar /boot para o Regret restaurado";
+    }
+    "Preparar /boot para o snapshot restaurado"
+}
+
+/// Cancelar um undo devolve o Regret ao slot de undo e volta ao sistema atual —
+/// não "restaura" o Regret (isso é o que o próprio undo faz).
+fn pending_cancel_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Cancelar undo e voltar ao sistema atual";
+    }
+    "Desfazer restauração pendente"
+}
+
+fn select_pending_choice(
+    title: &str,
+    intro: &str,
+    prompt: &str,
+    primary_label: &str,
+    cancel_label: &str,
+    info: &PendingPromptInfo,
+) -> Result<Option<usize>> {
+    let term = console::Term::stdout();
+    // Sem TTY, read_key devolve Key::Unknown em loop — viraria busy-loop
+    // redesenhando a tela. Falha limpa, como o dialoguer fazia.
+    if !term.is_term() {
+        bail!("o prompt de restauração pendente requer um terminal interativo");
+    }
+    let mut selected = 0usize;
+    loop {
+        render_pending_choice(title, intro, prompt, primary_label, cancel_label, info, selected);
+        match term.read_key().context("aguardar seleção pendente")? {
+            console::Key::ArrowUp | console::Key::ArrowDown => selected = 1 - selected,
+            console::Key::Enter => return Ok(Some(selected)),
+            console::Key::Escape => return Ok(None),
+            _ => {}
+        }
+    }
+}
+
+fn render_pending_choice(
+    title: &str,
+    intro: &str,
+    prompt: &str,
+    primary_label: &str,
+    cancel_label: &str,
+    info: &PendingPromptInfo,
+    selected: usize,
+) {
     clear_screen();
-    header("Doctor — sincronizar /boot com o destino");
+    header(title);
+    line(format_args!("{intro}"));
+    println!();
+    line(format_args!("{}", style("Ação selecionada").bold()));
+    match selected {
+        0 => print_pending_primary_preview(info),
+        _ => print_pending_cancel_preview(info),
+    }
+    println!();
+    line(format_args!("{}", style(prompt).bold()));
     line(format_args!(
-        "Sincronizar copia o kernel/initramfs do destino para o /boot."
+        "{} {}",
+        if selected == 0 { ">" } else { " " },
+        primary_label
     ));
     line(format_args!(
-        "Cancelar volta ao estado de antes da restauração (home e root preservados)."
+        "{} {}",
+        if selected == 1 { ">" } else { " " },
+        cancel_label
     ));
     println!();
-    let actions = [PendingSyncAction::SyncBoot, PendingSyncAction::Cancel];
-    let Some(choice) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt("O que fazer?")
-        .items(&[
-            "Sincronizar o /boot",
-            "Cancelar a restauração (voltar ao estado atual)",
-        ])
-        .default(0)
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(PendingSyncAction::Nothing);
-    };
-    Ok(actions[choice])
+    line(format_args!("{}", style("enter confirma · esc volta").dim()));
+}
+
+fn print_pending_primary_preview(info: &PendingPromptInfo) {
+    let target = if info.undo_regret { "Regret restaurado" } else { "snapshot restaurado" };
+    print_pending_field(
+        false,
+        "vai iniciar em",
+        &format!("{target}  {}", info.destination_subvol),
+    );
+    print_pending_field(false, "kernel esperado", &info.destination_kernel);
+    print_pending_field(true, "/boot", pending_primary_boot_text(info));
+}
+
+fn print_pending_cancel_preview(info: &PendingPromptInfo) {
+    print_pending_field(
+        false,
+        "desfaz para",
+        &format!("sistema atual ainda em uso  {}", info.current_subvol),
+    );
+    if info.undo_regret {
+        print_pending_field(false, "Regret", &format!("preservado em {}", info.regret_subvol));
+    }
+    print_pending_field(false, "kernel esperado", &info.current_kernel);
+    print_pending_field(true, "/boot", pending_cancel_boot_text(info));
+}
+
+fn pending_primary_boot_text(info: &PendingPromptInfo) -> &'static str {
+    if info.boot_needs_sync {
+        return "será preparado para esse snapshot";
+    }
+    "já está coerente com esse snapshot"
+}
+
+fn pending_cancel_boot_text(info: &PendingPromptInfo) -> &'static str {
+    if info.boot_needs_sync {
+        return "será sincronizado para o sistema atual";
+    }
+    "já está coerente com o sistema atual"
+}
+
+fn print_pending_field(last: bool, label: &str, value: &str) {
+    println!("{} {:<24} {}", tree_branch(last), label, value);
 }
 
 pub(crate) fn print_restore_undone(done_len: usize) {

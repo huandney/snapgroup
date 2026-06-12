@@ -5,8 +5,8 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    Fat32BootAction, PendingAction, PendingSyncAction, PostRestoreAction, RegretEntry,
-    RegretInfo, RestorePlan, select_restore_plan,
+    Fat32BootAction, PendingAction, PendingPromptInfo, PendingSyncAction, PostRestoreAction,
+    RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm};
@@ -203,7 +203,8 @@ fn gate_pending_restore(done: Vec<rollback::Done>) -> Result<()> {
 
 /// /boot casa com o destino: reiniciar é seguro. Reiniciar ou cancelar.
 fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
-    match crate::ui::restore::select_pending_action()? {
+    let info = pending_prompt_info(done, false)?;
+    match crate::ui::restore::select_pending_action(&info)? {
         PendingAction::Reboot => reboot_now(),
         PendingAction::Cancel => cancel_pending_restore(done),
         PendingAction::Nothing => Ok(()),
@@ -213,7 +214,8 @@ fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
 /// Sincronizar o /boot com o destino, ou cancelar. Compartilhado pelo doctor e
 /// pelo gate quando o pending precisa provar /boot antes do reboot.
 fn resolve_pending_sync(done: &[rollback::Done]) -> Result<()> {
-    match crate::ui::restore::select_pending_sync_action()? {
+    let info = pending_prompt_info(done, true)?;
+    match crate::ui::restore::select_pending_sync_action(&info)? {
         PendingSyncAction::SyncBoot => complete_pending_restore(done),
         PendingSyncAction::Cancel => cancel_pending_restore(done),
         PendingSyncAction::Nothing => Ok(()),
@@ -243,6 +245,38 @@ fn pending_boot_synced(done: &[rollback::Done]) -> Result<bool> {
     let result = boot::boot_already_synced(&dest_root);
     let _ = btrfs::umount_toplevel(&mount_path);
     result
+}
+
+fn pending_prompt_info(
+    done: &[rollback::Done],
+    boot_needs_sync: bool,
+) -> Result<PendingPromptInfo> {
+    let first = done.first().context("pending sem membros")?;
+    let root = done.iter().find(|d| d.mountpoint == "/");
+    let primary = root.unwrap_or(first);
+    let mut destination_kernel = String::from("?");
+
+    if let Some(root) = root {
+        let uuid = btrfs::fs_uuid("/")?;
+        let mount_path = rollback::toplevel_mount_path(&uuid);
+        btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+        let _guard = ToplevelMountGuard { path: mount_path.clone() };
+        destination_kernel = boot::kernel_label(&mount_path.join(&root.current_subvol));
+    }
+
+    let current_kernel = root
+        .map(|_| boot::kernel_label(Path::new("/")))
+        .unwrap_or_else(|| String::from("?"));
+
+    Ok(PendingPromptInfo {
+        boot_needs_sync,
+        undo_regret: done.iter().any(done_is_regret_undo),
+        destination_subvol: primary.current_subvol.clone(),
+        destination_kernel,
+        current_subvol: primary.backup_subvol.clone(),
+        current_kernel,
+        regret_subvol: rollback::regret_name(&primary.current_subvol),
+    })
 }
 
 /// Desmonta o top-level ao sair de escopo, mesmo em erro/early-return.
