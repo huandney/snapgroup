@@ -303,6 +303,12 @@ pub fn short_datetime(s: &str) -> String {
     format!("{date} {hm}")
 }
 
+/// True se stdout é um terminal interativo. Callers usam para decidir entre
+/// wizard e comportamento não-interativo (ex.: save sem nome em script).
+pub fn stdout_is_tty() -> bool {
+    console::Term::stdout().is_term()
+}
+
 /// Corta `s` em `max` chars com reticências — o mesmo corte das colunas de
 /// nome (list e pickers), para texto cujo limite é fixo e não a largura do
 /// terminal (esse caso é o `truncate_for_terminal`).

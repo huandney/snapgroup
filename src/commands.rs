@@ -30,7 +30,6 @@ impl RestoreRegretPolicy {
 
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
-    let desc = description.unwrap_or_else(|| format!("snapg save {id}"));
 
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
@@ -49,6 +48,27 @@ pub fn save(description: Option<String>) -> Result<()> {
         return Ok(());
     }
 
+    let mut mountpoints = Vec::new();
+    for cfg in &configs {
+        mountpoints.push(snapper::config_subvolume(cfg)?);
+    }
+
+    // Sem nome: wizard interativo (membros + kernel como informação, campo de
+    // nome). Sem TTY (script/cron), mantém o nome automático de antes — o
+    // prompt falharia e quebraria automações que nunca pediram interação.
+    let desc = match description {
+        Some(d) => d,
+        None if crate::ui::term::stdout_is_tty() => {
+            let kernel = boot::kernel_label(Path::new("/"));
+            let Some(d) = snapshots::prompt_save_name(&mut mountpoints, &kernel)? else {
+                snapshots::print_save_cancelled();
+                return Ok(());
+            };
+            d
+        }
+        None => format!("snapg save {id}"),
+    };
+
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
 
@@ -56,11 +76,9 @@ pub fn save(description: Option<String>) -> Result<()> {
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
     kill_regrets(&configs)?;
 
-    let mut mountpoints = Vec::new();
     for cfg in &configs {
         snapper::create(cfg, &desc, id)
             .with_context(|| format!("criar snapshot em '{cfg}'"))?;
-        mountpoints.push(snapper::config_subvolume(cfg)?);
     }
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
