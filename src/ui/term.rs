@@ -107,7 +107,8 @@ pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// - tokens canônicos: "espaço marca", "enter confirma", "esc volta"/"esc sai",
 ///   separados por " · ";
 /// - esc só é anunciado quando VOLTA um passo. Primeira página de um fluxo não
-///   ganha hint de esc: esc sai, comportamento padrão que não se anuncia.
+///   ganha hint de esc, salvo gates operacionais onde "sair sem resolver" é
+///   uma escolha relevante e deve aparecer explicitamente como "esc sai".
 pub const HINT_BACK: &str = "(esc volta)";
 
 pub fn clear_screen() {
