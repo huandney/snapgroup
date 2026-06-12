@@ -2,8 +2,8 @@ use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_MULTI, PAGE_INDENT, THEME, app_header, clear_screen,
-    confirm, content_width, header, line, prompt_hint, section_header, short_datetime,
-    truncate_for_terminal,
+    confirm, content_width, ellipsize, header, line, prompt_hint, section_header,
+    short_datetime, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -15,8 +15,9 @@ use std::collections::HashMap;
 /// linha com os section headers.
 pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]) {
     println!(
-        "{PAGE_INDENT}{} {desc} salvo  {}  {}  {}  {}",
+        "{PAGE_INDENT}{} {} salvo  {}  {}  {}  {}",
         style("✓").green().bold(),
+        ellipsize(desc, NAME_COL_MAX),
         style("·").dim(),
         style(member_badges(mountpoints)).dim(),
         style("·").dim(),

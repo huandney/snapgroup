@@ -303,6 +303,17 @@ pub fn short_datetime(s: &str) -> String {
     format!("{date} {hm}")
 }
 
+/// Corta `s` em `max` chars com reticências — o mesmo corte das colunas de
+/// nome (list e pickers), para texto cujo limite é fixo e não a largura do
+/// terminal (esse caso é o `truncate_for_terminal`).
+pub fn ellipsize(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(1)).collect();
+    format!("{cut}…")
+}
+
 /// Trunca texto pra caber numa linha de item interativo sem wrap. `marker_len` é
 /// só a largura do marcador do tema (`SELECT_MARKER` ou `MULTI_MARKER`); o
 /// CONTENT_INDENT, constante em todo item, é somado aqui pra que nenhum caller
