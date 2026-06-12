@@ -326,6 +326,9 @@ pub(crate) fn print_cancelled() {
 }
 
 pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
+    // Roda depois que o wizard já saiu do alt screen — sem este guard, o
+    // clear_screen apagaria o scrollback real do usuário.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Restauração");
     println!();
@@ -438,6 +441,9 @@ pub(crate) fn select_pending_action(info: &PendingPromptInfo) -> Result<PendingA
 /// Pending em /boot FAT32 ou dessincronizado: reiniciar direto não é seguro.
 /// Pergunta se sincroniza antes de liberar o reboot.
 pub(crate) fn confirm_run_doctor() -> Result<bool> {
+    // Prompt no terminal normal (o gate roda antes de qualquer wizard) — o alt
+    // screen preserva o scrollback do usuário.
+    let _alt = AltScreen::enter();
     clear_screen();
     header("Restauração pendente — sincronizar /boot");
     line(format_args!(
@@ -515,6 +521,10 @@ fn select_pending_choice(
     if !term.is_term() {
         bail!("o prompt de restauração pendente requer um terminal interativo");
     }
+    // O gate roda no terminal normal; o alt screen evita que o redraw por
+    // tecla apague o scrollback. A execução (painéis de sync) imprime inline
+    // depois que o guard cai.
+    let _alt = AltScreen::enter();
     let mut selected = 0usize;
     loop {
         render_pending_choice(title, intro, prompt, primary_label, cancel_label, info, selected);
