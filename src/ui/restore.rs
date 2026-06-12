@@ -586,9 +586,9 @@ fn print_pending_cancel_preview(info: &PendingPromptInfo) {
 
 fn pending_primary_boot_text(info: &PendingPromptInfo) -> &'static str {
     if info.boot_needs_sync {
-        return "será preparado para esse snapshot";
+        return "será preparado para esse destino";
     }
-    "já está coerente com esse snapshot"
+    "já está coerente com esse destino"
 }
 
 fn pending_cancel_boot_text(info: &PendingPromptInfo) -> &'static str {
