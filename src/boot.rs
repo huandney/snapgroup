@@ -49,36 +49,99 @@ pub fn boot_fstype(boot: &Path) -> Result<String> {
 /// o que carregou no boot atual, não reflete o estado escrito em /boot
 /// (um `pacman -Syu` sem reboot deixa kernel novo no FAT32 e antigo
 /// rodando; pular sync nesse caso quebra o boot seguinte).
-pub fn sync_fat32(restored_root: &Path) -> Result<()> {
-    sync_fat32_paths(restored_root, Path::new("/boot"))
+const LIMINE_MUTEX_LIB: &str = "/usr/lib/limine/limine-mutex";
+const LIMINE_LOCK_PATH: &str = "/tmp/limine-global.lock";
+
+/// Adquire o mutex global do ecossistema limine antes de escrever em /boot.
+///
+/// Os pacman hooks, o limine-entry-tool e os scripts de mkinitcpio serializam
+/// escritas no /boot com `flock` em /tmp/limine-global.lock (timeout de 30s).
+/// O lock próprio do snapg só serializa instâncias do snapg; sem este, snapg e
+/// um hook de pacman podiam escrever no /boot ao mesmo tempo. `Ok(None)`
+/// quando o limine não está instalado — não cria lixo em /tmp.
+fn lock_limine_mutex() -> Result<Option<fs::File>> {
+    if !Path::new(LIMINE_MUTEX_LIB).exists() {
+        return Ok(None);
+    }
+    // Sem truncate: o arquivo é compartilhado com o tooling do limine e o
+    // lock é no inode, não no conteúdo.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(LIMINE_LOCK_PATH)
+        .with_context(|| format!("abrir {LIMINE_LOCK_PATH}"))?;
+
+    use std::os::fd::AsRawFd;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Ok(Some(file));
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(err).with_context(|| format!("flock {LIMINE_LOCK_PATH}"));
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "outro processo segura o lock do limine ({LIMINE_LOCK_PATH}) há mais de 30s \
+                 (pacman/mkinitcpio em andamento?). Aguarde ele terminar e tente de novo."
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
+    sync_fat32_paths_with_panel(restored_root, boot, &mut panel)
+}
+
+pub(crate) fn sync_fat32_after_restore(restored_root: &Path) -> Result<()> {
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::restore_after_btrfs();
+    sync_fat32_paths_with_panel(restored_root, Path::new("/boot"), &mut panel)
+}
+
+pub(crate) struct CancelBootSync {
+    panel: crate::ui::boot_sync::BootSyncPanel,
+}
+
+impl CancelBootSync {
+    pub(crate) fn finish_btrfs(mut self) {
+        self.panel.finish_btrfs();
+    }
+}
+
+pub(crate) fn sync_fat32_before_cancel(remaining_root: &Path) -> Result<Option<CancelBootSync>> {
+    if !is_fat32() {
+        return Ok(None);
+    }
+    let mut panel = crate::ui::boot_sync::BootSyncPanel::cancel_before_btrfs();
+    sync_fat32_paths_with_panel(remaining_root, Path::new("/boot"), &mut panel)?;
+    Ok(Some(CancelBootSync { panel }))
+}
+
+fn sync_fat32_paths_with_panel(
+    restored_root: &Path,
+    boot: &Path,
+    panel: &mut crate::ui::boot_sync::BootSyncPanel,
+) -> Result<()> {
     if !is_fat32_path(boot) {
         return Ok(());
     }
 
-    let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
+    // Segura o mutex do limine durante backup, sync e verify. Liberado no drop
+    // (fim da função), inclusive em erro.
+    let _limine_mutex = lock_limine_mutex()?;
+
     let groups = discover_kernel_groups(boot)?;
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
     }
 
-    // Gate: se o /boot já casa com o snapshot (restore de mesmo kernel), não há
-    // o que sincronizar. Pula backup (~130MB), cópia e mkinitcpio — e a janela
-    // de interrupção junto. O caminho pesado só roda quando o kernel difere.
-    //
-    // Exceção: backup remanescente = sync anterior interrompido. Aí o gate é
-    // pulado mesmo com vmlinuz casando, porque o initramfs pode ter ficado velho
-    // na janela entre copiar o vmlinuz e regenerá-lo. O resync completo o refaz.
-    // Short-circuit: havendo backup remanescente, nem avalia o match do vmlinuz —
-    // essa leitura pode falhar em estado parcial e abortaria o reparo antes de
-    // regenerar. Só checa o match quando NÃO interrompido.
     let interrupted = boot_backup_remnant(boot);
-    if !interrupted && boot_matches_snapshot(restored_root, &groups)? {
-        panel.already_synced();
-        return Ok(());
-    }
 
     let critical = critical_boot_files(boot, &groups);
     // No resync de interrupção NÃO recriar o backup: o remanescente é o último
@@ -102,7 +165,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
         panel.reuse_backup();
     }
 
-    if let Err(e) = sync_inner(restored_root, boot, &groups, &mut panel) {
+    if let Err(e) = sync_inner(restored_root, boot, &groups, panel) {
         panel.fail_current("sincronização falhou");
         restore_backup_after_failure(boot);
         return Err(e);
@@ -113,7 +176,7 @@ pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     // trecho não ficar parado.
     panel.start_verify();
     let pb = crate::ui::term::spinner("verificando /boot contra o snapshot…".to_string());
-    if let Err(e) = verify_synced(restored_root, &groups) {
+    if let Err(e) = verify_synced(restored_root, boot, &groups) {
         pb.finish_and_clear();
         panel.fail_current("sincronização falhou");
         restore_backup_after_failure(boot);
@@ -188,7 +251,6 @@ fn sync_inner(
                 snap_vmlinuz.display()
             );
         }
-
         for dest in &group.vmlinuz_paths {
             panel.start_vmlinuz();
             fs::copy(&snap_vmlinuz, dest).with_context(|| {
@@ -242,7 +304,7 @@ pub fn boot_already_synced_paths(candidate_root: &Path, boot: &Path) -> Result<b
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
     }
-    boot_matches_snapshot(candidate_root, &groups)
+    boot_ready(candidate_root, boot, &groups)
 }
 
 /// Motivo de um `/boot` FAT32 estar dessincronizado, para a UI explicar a ação.
@@ -253,6 +315,11 @@ pub enum BootIssue {
     InterruptedSync,
     /// O vmlinuz em /boot diverge do kernel do root alvo.
     KernelMismatch,
+    /// Os hashes BLAKE2B do limine.conf não batem com os arquivos do /boot. O
+    /// Limine recusa a entrada no estágio do bootloader (boot trava antes do
+    /// kernel). Vmlinuz pode até casar — um sync interrompido deixa o hash e o
+    /// arquivo dessincronizados entre si.
+    HashMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -499,10 +566,15 @@ pub fn diagnose_boot(root: &Path, boot: &Path) -> Result<BootDiagnosis> {
     // problema corrigível em vez de confiar no vmlinuz isolado.
     let health = if boot_backup_remnant(boot) {
         BootHealth::NeedsSync(BootIssue::InterruptedSync)
-    } else if boot_matches_snapshot(root, &groups)? {
-        BootHealth::Synced
-    } else {
+    } else if !boot_matches_snapshot(root, &groups)? {
         BootHealth::NeedsSync(BootIssue::KernelMismatch)
+    } else if !limine_hashes_match(boot)? {
+        // Vmlinuz casa, mas o Limine valida cada entrada pelo hash BLAKE2B do
+        // limine.conf no boot. Hash velho com arquivo novo (sync interrompido)
+        // faz o bootloader recusar a entrada antes de carregar o kernel.
+        BootHealth::NeedsSync(BootIssue::HashMismatch)
+    } else {
+        BootHealth::Synced
     };
     Ok(BootDiagnosis {
         fstype,
@@ -553,16 +625,31 @@ fn boot_matches_snapshot(restored_root: &Path, groups: &[KernelGroup]) -> Result
     Ok(true)
 }
 
+/// `/boot` está pronto pra bootar `restored_root`? Une os dois sinais que o
+/// Limine valida no boot: vmlinuz idêntico ao do snapshot E hashes do
+/// limine.conf coerentes com os arquivos. Esse predicado serve para diagnóstico
+/// e fluxo pendente; o sync FAT32 não usa isso como licença para pular
+/// mkinitcpio, porque initramfs pode divergir sem troca de vmlinuz.
+fn boot_ready(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Result<bool> {
+    Ok(boot_matches_snapshot(restored_root, groups)? && limine_hashes_match(boot)?)
+}
+
 /// Verificação pós-sync: se o /boot não casa com o snapshot depois de copiar
 /// kernel e regenerar initramfs, o sync não surtiu efeito (parcial/interrompido).
 /// Bootar nesse estado cai em emergency mode (kernel não acha seus módulos, ex:
 /// "unknown filesystem type vfat"), então vira erro explícito em vez de um
 /// reboot silencioso pra um sistema que não sobe.
-fn verify_synced(restored_root: &Path, groups: &[KernelGroup]) -> Result<()> {
-    if boot_matches_snapshot(restored_root, groups)? {
-        return Ok(());
+fn verify_synced(restored_root: &Path, boot: &Path, groups: &[KernelGroup]) -> Result<()> {
+    if !boot_matches_snapshot(restored_root, groups)? {
+        bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
     }
-    bail!("/boot dessincronizado: não corresponde ao snapshot após o sync");
+    // Mesmo com vmlinuz e initramfs no lugar, o Limine recusa entradas cujo hash
+    // no limine.conf não bate com o arquivo. Verificar aqui evita declarar o
+    // restore pronto pra reboot e o bootloader travar antes do kernel.
+    if !limine_hashes_match(boot)? {
+        bail!("/boot dessincronizado: hashes do limine.conf não batem com os arquivos");
+    }
+    Ok(())
 }
 
 /// Normaliza uma linha de progresso do mkinitcpio pra linha viva: remove a
@@ -844,6 +931,46 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Verifica que cada entrada do limine.conf com hash registrado bate com o
+/// BLAKE2B do arquivo referenciado — o mesmo check que o Limine faz no boot. Só
+/// conta linhas que têm `#hash` E cujo arquivo existe: hash ausente não é
+/// validado pelo Limine, e arquivo ausente já é pego pelo scan de kernels.
+/// `limine.conf` ausente → `Ok(true)` (nada a verificar / sistema sem limine).
+fn limine_hashes_match(boot: &Path) -> Result<bool> {
+    let path = boot.join("limine.conf");
+    if !path.exists() {
+        return Ok(true);
+    }
+    let content = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
+    for line in content.lines() {
+        let Some(recorded) = limine_recorded_hash(line) else {
+            continue;
+        };
+        let Some(boot_path) = limine_boot_path_from_line(boot, line) else {
+            continue;
+        };
+        if !boot_path.exists() {
+            continue;
+        }
+        if blake2b_hex(&boot_path)? != recorded {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Hash registrado após o `#` numa linha de path do limine.conf, se houver. A URI
+/// `boot():/...` não contém `#`, então o último `#` separa o hash. Linha sem `#`
+/// ou com hash vazio → `None` (nada registrado para validar).
+fn limine_recorded_hash(line: &str) -> Option<&str> {
+    let (_, hash) = line.rsplit_once('#')?;
+    let hash = hash.trim();
+    if hash.is_empty() {
+        return None;
+    }
+    Some(hash)
+}
+
 fn refresh_limine_hash_for_line(boot: &Path, line: &str) -> Result<String> {
     let Some(boot_path) = limine_boot_path_from_line(boot, line) else {
         return Ok(line.to_string());
@@ -900,8 +1027,8 @@ fn blake2b_hex(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         boot_backup_remnant, boot_mountpoint_in, classify_boot_file, clean_mkinitcpio_line,
-        fstab_declares_vfat_boot, kernel_label, limine_boot_path_from_line, parse_fstab_root_subvol,
-        subvols_diverge,
+        fstab_declares_vfat_boot, kernel_label, limine_boot_path_from_line, limine_recorded_hash,
+        parse_fstab_root_subvol, subvols_diverge,
     };
     use std::path::Path;
 
@@ -931,6 +1058,20 @@ mod tests {
         std::fs::create_dir_all(base.join("usr/lib/modules/7.0.3-1-cachyos")).unwrap();
         assert_eq!(kernel_label(&base), "7.0.3-1-cachyos");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn limine_recorded_hash_extracts_only_present_hashes() {
+        // Linha de path com hash: pega o que vem após o último '#', sem espaços.
+        assert_eq!(
+            limine_recorded_hash("    kernel_path: boot():/vmlinuz-linux#abc123 "),
+            Some("abc123")
+        );
+        // Sem '#' → nada registrado pra validar.
+        assert_eq!(limine_recorded_hash("    kernel_path: boot():/vmlinuz-linux"), None);
+        // Hash vazio após '#' → None (não trata "" como hash).
+        assert_eq!(limine_recorded_hash("    kernel_path: boot():/vmlinuz#"), None);
+        assert_eq!(limine_recorded_hash("    kernel_path: boot():/vmlinuz#   "), None);
     }
 
     #[test]

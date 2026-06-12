@@ -5,15 +5,28 @@ use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
-    PostRestoreAction, RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
+    Fat32BootAction, PendingAction, PendingPromptInfo, PendingSyncAction, PostRestoreAction,
+    RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Clone, Copy)]
+enum RestoreRegretPolicy {
+    Update,
+    PreserveExisting,
+}
+
+impl RestoreRegretPolicy {
+    fn needs_rescue_root_scan(self) -> bool {
+        matches!(self, RestoreRegretPolicy::PreserveExisting)
+    }
+}
 
 pub fn save(description: Option<String>) -> Result<()> {
     let id = epoch_now()?;
@@ -26,6 +39,14 @@ pub fn save(description: Option<String>) -> Result<()> {
              sudo snapper -c root create-config /\n  \
              sudo snapper -c home create-config /home"
         );
+    }
+
+    // Gate: não criar checkpoints com uma restauração pendente de reboot —
+    // resolve antes (concluir ou cancelar). Sem isto, o save prossegue num
+    // estado transitório (root vivo = `_snapg_regret`, `.snapshots` já movido
+    // pro destino) e só não destrói o Regret por acidente de derivação de nome.
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
     }
 
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
@@ -58,21 +79,40 @@ fn kill_regrets(configs: &[String]) -> Result<()> {
 }
 
 pub fn restore() -> Result<()> {
+    restore_with_policy(RestoreRegretPolicy::Update)
+}
+
+pub fn restore_preserving_regret() -> Result<()> {
+    restore_with_policy(RestoreRegretPolicy::PreserveExisting)
+}
+
+fn restore_with_policy(regret_policy: RestoreRegretPolicy) -> Result<()> {
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada");
     }
 
-    let groups = group::list_groups()?;
+    // Gate: uma restauração pendente de reboot não convive com um novo restore.
+    // Resolve antes — concluir (reboot) ou cancelar — em vez de empilhar.
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
+    }
 
     // Preflight: aborta antes de montar/deletar se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
+
+    let mut groups = group::list_groups()?;
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
-    let result = restore_inner(&groups, &configs, &mount_path);
+    let result = (|| -> Result<()> {
+        if regret_policy.needs_rescue_root_scan() {
+            groups = scan_groups_from_toplevel(&mount_path, &configs)?;
+        }
+        restore_inner(&groups, &configs, &mount_path, regret_policy)
+    })();
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
@@ -94,73 +134,16 @@ pub fn restore_root_only() -> Result<()> {
     result
 }
 
-pub fn has_pending_restore() -> Result<bool> {
-    let configs = snapper::list_configs()?;
-    if configs.is_empty() {
-        return Ok(false);
-    }
-
-    let uuid = btrfs::fs_uuid("/")?;
-    let mount_path = rollback::toplevel_mount_path(&uuid);
-    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-
-    let result = pending_restore_from_live(&mount_path, &configs).map(|p| p.is_some());
-    let _ = btrfs::umount_toplevel(&mount_path);
-    result
-}
-
-pub fn undo_pending_restore() -> Result<()> {
-    let configs = snapper::list_configs()?;
-    if configs.is_empty() {
-        bail!("nenhuma config snapper encontrada");
-    }
-
-    let uuid = btrfs::fs_uuid("/")?;
-    let mount_path = rollback::toplevel_mount_path(&uuid);
-    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-
-    let result = (|| -> Result<()> {
-        let Some((done, asides)) = pending_restore_from_live(&mount_path, &configs)? else {
-            bail!("nenhuma restauração pendente de reboot encontrada");
-        };
-        undo_restore_before_reboot(&done, &asides, &mount_path)
-    })();
-
-    let _ = btrfs::umount_toplevel(&mount_path);
-    result
-}
-
-fn pending_restore_from_live(
-    toplevel: &Path,
-    configs: &[String],
-) -> Result<Option<(Vec<rollback::Done>, Vec<rollback::AsidedRegret>)>> {
+fn pending_restore_from_live(configs: &[String]) -> Result<Option<Vec<rollback::Done>>> {
     let mut done = Vec::new();
-    let mut asides = Vec::new();
 
     for cfg in configs {
         let mountpoint = snapper::config_subvolume(cfg)?;
         let live_subvol = btrfs::subvol_relative_path(Path::new(&mountpoint))
             .with_context(|| format!("descobrir subvol ativo de '{cfg}'"))?;
-        let Some(current_subvol) = live_subvol.strip_suffix("_snapg_regret") else {
+        let Some(current_subvol) = pending_current_subvol(&live_subvol) else {
             continue;
         };
-        let current_subvol = current_subvol.to_string();
-        if !toplevel.join(&current_subvol).exists() {
-            bail!(
-                "restauração pendente inconsistente: {} existe, mas {} não",
-                live_subvol,
-                current_subvol
-            );
-        }
-
-        let aside_subvol = rollback::regret_aside_name(&current_subvol);
-        if toplevel.join(&aside_subvol).exists() {
-            asides.push(rollback::AsidedRegret {
-                config: cfg.clone(),
-                regret_subvol: live_subvol.clone(),
-                aside_subvol,
-            });
-        }
 
         done.push(rollback::Done {
             config: cfg.clone(),
@@ -173,7 +156,224 @@ fn pending_restore_from_live(
     if done.is_empty() {
         return Ok(None);
     }
-    Ok(Some((done, asides)))
+    Ok(Some(done))
+}
+
+pub(crate) fn gate_pending_restore_if_any(configs: &[String]) -> Result<bool> {
+    let Some(done) = pending_restore_from_live(configs)? else {
+        return Ok(false);
+    };
+    gate_pending_restore(done)?;
+    Ok(true)
+}
+
+fn pending_current_subvol(live_subvol: &str) -> Option<String> {
+    if let Some(current) = live_subvol.strip_suffix("_snapg_regret") {
+        return (!current.is_empty()).then(|| current.to_string());
+    }
+
+    if let Some((current, label)) = live_subvol.split_once("_snapg_undo_")
+        && !current.is_empty()
+        && !label.is_empty()
+    {
+        return Some(current.to_string());
+    }
+
+    let (current, label) = live_subvol.split_once("_snapg_discard_")?;
+    (!current.is_empty() && !label.is_empty()).then(|| current.to_string())
+}
+
+/// Há uma restauração aplicada mas ainda não reiniciada? Leitura pura, sem lock.
+pub fn has_pending_restore() -> Result<bool> {
+    let configs = snapper::list_configs()?;
+    Ok(pending_restore_from_live(&configs)?.is_some())
+}
+
+/// Ponto de entrada do doctor para um pending: sincronizar o /boot com o destino
+/// e reiniciar, ou cancelar. O lock global DEVE estar pego pelo caller.
+pub fn doctor_resolve_pending() -> Result<()> {
+    let configs = snapper::list_configs()?;
+    let Some(done) = pending_restore_from_live(&configs)? else {
+        return Ok(());
+    };
+    if pending_boot_synced(&done)? {
+        resolve_pending_clean(&done)
+    } else {
+        resolve_pending_sync(&done)
+    }
+}
+
+/// Gate de `restore`/`delete` (sob o lock do caller) quando há uma restauração
+/// aplicada mas ainda não reiniciada. Sem checkpoints a oferecer:
+/// - /boot casa com o destino → reiniciar é seguro: reiniciar / cancelar;
+/// - /boot FAT32 ou não comprovadamente seguro → sincronizar antes do reboot.
+fn gate_pending_restore(done: Vec<rollback::Done>) -> Result<()> {
+    if pending_boot_synced(&done)? {
+        resolve_pending_clean(&done)
+    } else if crate::ui::restore::confirm_run_doctor()? {
+        resolve_pending_sync(&done)
+    } else {
+        Ok(())
+    }
+}
+
+/// /boot casa com o destino: reiniciar é seguro. Reiniciar ou cancelar.
+fn resolve_pending_clean(done: &[rollback::Done]) -> Result<()> {
+    let info = pending_prompt_info(done, false)?;
+    match crate::ui::restore::select_pending_action(&info)? {
+        PendingAction::Reboot => {
+            arm_pending_cleanup(done)?;
+            reboot_now()
+        }
+        PendingAction::Cancel => cancel_pending_restore(done),
+        PendingAction::Nothing => Ok(()),
+    }
+}
+
+/// Arma o boot-cleanup antes de um reboot que resolve um pending cujo subvol
+/// deslocado (`_snapg_undo_*`/`_snapg_discard_*`) precisa ser varrido no
+/// próximo boot. O arm do fluxo de restore normal não cobre o gate: se a
+/// operação original foi interrompida antes de armar, resolver o pending por
+/// aqui deixaria o subvol órfão no top-level para sempre.
+fn arm_pending_cleanup(done: &[rollback::Done]) -> Result<()> {
+    if !done.iter().any(done_needs_boot_cleanup) {
+        return Ok(());
+    }
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let _guard = ToplevelMountGuard { path: mount_path.clone() };
+    arm_cleanup_for_restore(done, &mount_path)
+}
+
+/// Sincronizar o /boot com o destino, ou cancelar. Compartilhado pelo doctor e
+/// pelo gate quando o pending precisa provar /boot antes do reboot.
+fn resolve_pending_sync(done: &[rollback::Done]) -> Result<()> {
+    let info = pending_prompt_info(done, true)?;
+    match crate::ui::restore::select_pending_sync_action(&info)? {
+        PendingSyncAction::SyncBoot => complete_pending_restore(done),
+        PendingSyncAction::Cancel => cancel_pending_restore(done),
+        PendingSyncAction::Nothing => Ok(()),
+    }
+}
+
+/// O /boot já casa com o subvol de destino (o que vai bootar)?
+///
+/// Em pending com root + FAT32, nunca dá reboot direto: um sync anterior pode ter
+/// sido interrompido, ou o /boot pode ter sido alterado por pacman/DKMS antes do
+/// reboot. `boot_already_synced` compara vmlinuz/hashes, mas não prova que o
+/// initramfs corresponde aos módulos do root de destino em restores de mesmo
+/// kernel. Força resync antes de liberar reboot.
+///
+/// Em /boot não-FAT32 (nativo) é coerente — o kernel vive dentro do snapshot.
+fn pending_boot_synced(done: &[rollback::Done]) -> Result<bool> {
+    let Some(root) = done.iter().find(|d| d.mountpoint == "/") else {
+        return Ok(true);
+    };
+    if boot::is_fat32() {
+        return Ok(false);
+    }
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let dest_root = mount_path.join(&root.current_subvol);
+    let result = boot::boot_already_synced(&dest_root);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+fn pending_prompt_info(
+    done: &[rollback::Done],
+    boot_needs_sync: bool,
+) -> Result<PendingPromptInfo> {
+    let first = done.first().context("pending sem membros")?;
+    let root = done.iter().find(|d| d.mountpoint == "/");
+    let primary = root.unwrap_or(first);
+    let mut destination_kernel = String::from("?");
+
+    if let Some(root) = root {
+        let uuid = btrfs::fs_uuid("/")?;
+        let mount_path = rollback::toplevel_mount_path(&uuid);
+        btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+        let _guard = ToplevelMountGuard { path: mount_path.clone() };
+        destination_kernel = boot::kernel_label(&mount_path.join(&root.current_subvol));
+    }
+
+    let current_kernel = root
+        .map(|_| boot::kernel_label(Path::new("/")))
+        .unwrap_or_else(|| String::from("?"));
+
+    Ok(PendingPromptInfo {
+        boot_needs_sync,
+        undo_regret: done.iter().any(done_is_regret_undo),
+        destination_subvol: primary.current_subvol.clone(),
+        destination_kernel,
+        current_subvol: primary.backup_subvol.clone(),
+        current_kernel,
+        regret_subvol: rollback::regret_name(&primary.current_subvol),
+    })
+}
+
+/// Desmonta o top-level ao sair de escopo, mesmo em erro/early-return.
+struct ToplevelMountGuard {
+    path: PathBuf,
+}
+
+impl Drop for ToplevelMountGuard {
+    fn drop(&mut self) {
+        let _ = btrfs::umount_toplevel(&self.path);
+    }
+}
+
+/// Diagnóstico de `/boot` contra o subvol de destino de uma restauração pendente
+/// (o que vai bootar), não contra o `*_snapg_regret` vivo. No pending o `/` é o
+/// chão antigo renomeado; diagnosticar contra ele acusa um falso "difere", já que
+/// o `/boot` está coerente com o destino. `Ok(None)` quando não há pending — o
+/// caller cai no diagnóstico normal.
+pub(crate) fn pending_dest_diagnosis(boot_path: &Path) -> Result<Option<boot::BootDiagnosis>> {
+    let configs = snapper::list_configs()?;
+    let Some(done) = pending_restore_from_live(&configs)? else {
+        return Ok(None);
+    };
+    let Some(root) = done.iter().find(|d| d.mountpoint == "/") else {
+        return Ok(None);
+    };
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let _guard = ToplevelMountGuard { path: mount_path.clone() };
+    let dest_root = mount_path.join(&root.current_subvol);
+    Ok(Some(boot::diagnose_boot(&dest_root, boot_path)?))
+}
+
+/// Garante o /boot coerente com o subvol que vai bootar (o destino do restore)
+/// e então pergunta se reinicia agora.
+fn complete_pending_restore(done: &[rollback::Done]) -> Result<()> {
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let result = (|| -> Result<()> {
+        if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+            let dest_root = mount_path.join(&root.current_subvol);
+            boot::sync_fat32_after_restore(&dest_root)
+                .context("sincronizar /boot com o destino do restore")?;
+        }
+        // O fluxo original pode ter sido interrompido antes de armar o
+        // cleanup; sem isto, o subvol deslocado sobrevive ao reboot.
+        arm_cleanup_for_restore(done, &mount_path)
+    })();
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result?;
+    prompt_reboot()
+}
+
+fn cancel_pending_restore(done: &[rollback::Done]) -> Result<()> {
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let result = undo_restore_before_reboot(done, &mount_path);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
 }
 
 fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
@@ -215,7 +415,9 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
     execute_restore_root_to_snapshot(mount_path, root_subvol, number)
 }
 
-/// Descobre regrets existentes no toplevel.
+/// Descobre o Regret archived (estado anterior a um restore já efetivado por
+/// reboot) no toplevel. O pending (restauração não reiniciada) não entra aqui —
+/// é tratado pelo gate em `restore`/`delete`, não como Regret restaurável.
 fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<RegretInfo>> {
     let mut entries = Vec::new();
     for cfg in configs {
@@ -237,17 +439,30 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
     if entries.is_empty() {
         return Ok(None);
     }
-    // Creation time do primeiro regret (todos criados no mesmo instante).
-    let first_path = toplevel.join(&entries[0].regret_subvol);
-    let creation_time = btrfs::subvol_creation_time(&first_path)
-        .unwrap_or_else(|_| String::from("data desconhecida"));
     Ok(Some(RegretInfo {
+        creation_time: regret_creation_time(toplevel, &entries),
         entries,
-        creation_time,
     }))
 }
 
-fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Result<()> {
+fn regret_creation_time(toplevel: &Path, entries: &[RegretEntry]) -> String {
+    let Some(first) = entries.first() else {
+        return String::from("data desconhecida");
+    };
+    // otime do subvol restaurado (o ativo) = instante do restore: a Fase 1 o
+    // cria com create_snapshot. O regret_subvol é o chão antigo renomeado, cujo
+    // otime é a data de nascimento daquele subvol (instalação ou restore antigo)
+    // — irrelevante pro evento que o usuário associa ao Regret.
+    btrfs::subvol_creation_time(&toplevel.join(&first.current_subvol))
+        .unwrap_or_else(|_| String::from("data desconhecida"))
+}
+
+fn restore_inner(
+    groups: &[Group],
+    configs: &[String],
+    mount_path: &Path,
+    regret_policy: RestoreRegretPolicy,
+) -> Result<()> {
     let regret = discover_regrets(mount_path, configs)?;
 
     if groups.is_empty() && regret.is_none() {
@@ -256,40 +471,38 @@ fn restore_inner(groups: &[Group], configs: &[String], mount_path: &Path) -> Res
     }
 
     // Wizard interativo no alternate screen; ao sair, executa no terminal normal.
-    let kernel_labels = group_kernel_labels(groups, mount_path);
+    let kernel_labels = group::kernel_labels(groups, mount_path);
     let regret_kernel = regret.as_ref().map(|r| regret_kernel_label(r, mount_path));
 
-    match select_restore_plan(
-        groups,
-        regret.as_ref(),
-        &kernel_labels,
-        regret_kernel.as_deref(),
-    )? {
-        None => {
-            crate::ui::restore::print_cancelled();
-            Ok(())
+    loop {
+        match select_restore_plan(
+            groups,
+            regret.as_ref(),
+            &kernel_labels,
+            regret_kernel.as_deref(),
+        )? {
+            None => {
+                crate::ui::restore::print_cancelled();
+                return Ok(());
+            }
+            Some(RestorePlan::Checkpoint(selected)) => {
+                if should_warn_fat32(&selected, mount_path) {
+                    match crate::ui::restore::confirm_fat32_boot()? {
+                        Fat32BootAction::Continue => {}
+                        Fat32BootAction::Back => continue,
+                        Fat32BootAction::Cancel => {
+                            crate::ui::restore::print_cancelled_boot_risk();
+                            return Ok(());
+                        }
+                    }
+                }
+                return execute_restore_checkpoint(&selected, mount_path, regret_policy);
+            }
+            Some(RestorePlan::Regret(selected)) => {
+                return execute_restore_regret(selected, mount_path);
+            }
         }
-        Some(RestorePlan::Checkpoint(selected)) => {
-            execute_restore_checkpoint(&selected, mount_path)
-        }
-        Some(RestorePlan::Regret(selected)) => execute_restore_regret(selected, mount_path),
     }
-}
-
-fn group_kernel_labels(groups: &[Group], toplevel: &Path) -> HashMap<group::GroupId, String> {
-    groups
-        .iter()
-        .map(|g| (g.id, group_kernel_label(g, toplevel)))
-        .collect()
-}
-
-fn group_kernel_label(group: &Group, toplevel: &Path) -> String {
-    let Some(root_m) = root_member(group).ok().flatten() else {
-        return "?".to_string();
-    };
-    rollback::member_snapshot_path(root_m, toplevel)
-        .map(|path| boot::kernel_label(&path))
-        .unwrap_or_else(|_| "?".to_string())
 }
 
 fn regret_kernel_label(regret: &RegretInfo, toplevel: &Path) -> String {
@@ -299,14 +512,40 @@ fn regret_kernel_label(regret: &RegretInfo, toplevel: &Path) -> String {
     boot::kernel_label(&toplevel.join(&root_e.regret_subvol))
 }
 
-fn root_member(group: &Group) -> Result<Option<&Member>> {
-    for member in &group.members {
-        let mountpoint = snapper::config_subvolume(&member.config)?;
-        if mountpoint == "/" {
-            return Ok(Some(member));
+fn scan_groups_from_toplevel(toplevel: &Path, configs: &[String]) -> Result<Vec<Group>> {
+    let mut by_id: HashMap<group::GroupId, Vec<Member>> = HashMap::new();
+    for cfg in configs {
+        let Some(subvol) = config_snapshot_subvol(cfg)? else {
+            continue;
+        };
+        for member in scan_config_members_from_toplevel(toplevel, &subvol, cfg)? {
+            let Some(id) = group::extract_id(&member.snapshot) else {
+                continue;
+            };
+            by_id.entry(id).or_default().push(member);
         }
     }
-    Ok(None)
+
+    let mut groups: Vec<Group> = by_id
+        .into_iter()
+        .filter_map(|(id, mut members)| {
+            if members.len() != configs.len() {
+                return None;
+            }
+            members.sort_by(|a, b| a.config.cmp(&b.config));
+            Some(Group { id, members })
+        })
+        .collect();
+    groups.sort_by_key(|g| std::cmp::Reverse(g.id));
+    Ok(groups)
+}
+
+fn config_snapshot_subvol(config: &str) -> Result<Option<String>> {
+    let mountpoint = snapper::config_subvolume(config)?;
+    if mountpoint == "/" {
+        return Ok(boot::default_root_subvol());
+    }
+    Ok(Some(rollback::base_subvol_of_mountpoint(&mountpoint)?))
 }
 
 /// Um snapshot de root varrido direto do toplevel (`@/.snapshots/N/snapshot`),
@@ -350,22 +589,146 @@ fn scan_root_snapshots(toplevel: &Path, root_subvol: &str) -> Result<Vec<RootSna
     Ok(snaps)
 }
 
+fn scan_config_members_from_toplevel(
+    toplevel: &Path,
+    subvol: &str,
+    config: &str,
+) -> Result<Vec<Member>> {
+    let dir = toplevel.join(subvol).join(".snapshots");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut members = Vec::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("ler {}", dir.display()))? {
+        let entry = entry?;
+        let Some(number) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let src = entry.path().join("snapshot");
+        let Some(snapshot) = snapshot_from_info_xml(&entry.path().join("info.xml"), &src, number)?
+        else {
+            continue;
+        };
+        members.push(Member {
+            config: config.to_string(),
+            snapshot,
+        });
+    }
+    Ok(members)
+}
+
+fn snapshot_from_info_xml(
+    info_xml: &Path,
+    snapshot_path: &Path,
+    number: u32,
+) -> Result<Option<snapper::Snapshot>> {
+    // Fallback de resgate para o mesmo contrato que `snapper::list` entrega no
+    // caminho normal. O Snapper fica cego ao root quando `/` é um snapshot
+    // Limine, então este parser manual lê só os campos necessários do info.xml.
+    let content = fs::read_to_string(info_xml).with_context(|| format!("ler {}", info_xml.display()))?;
+    let Some(group_id) = snapgroup_id_from_info_xml(&content) else {
+        return Ok(None);
+    };
+    let mut userdata = serde_json::Map::new();
+    userdata.insert(
+        "snapgroup-id".to_string(),
+        serde_json::Value::String(group_id),
+    );
+    Ok(Some(snapper::Snapshot {
+        number,
+        kind: xml_text(&content, "type").unwrap_or_default(),
+        date: xml_text(&content, "date")
+            .unwrap_or_else(|| btrfs::subvol_creation_time(snapshot_path).unwrap_or_default()),
+        user: xml_text(&content, "user").unwrap_or_default(),
+        description: xml_text(&content, "description").unwrap_or_default(),
+        cleanup: xml_text(&content, "cleanup").unwrap_or_default(),
+        userdata: Some(serde_json::Value::Object(userdata)),
+    }))
+}
+
 /// Nome de um backup feito pelo snapgroup: a `<description>` do `info.xml`, mas
 /// só quando o snapshot tem `snapgroup-id` no userdata (senão é timeline/pacman,
 /// sem nome útil). Extração mínima de string — sem crate de XML. `None` se não
 /// for snapgroup, o arquivo não existir, ou a descrição for vazia.
 fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
     let content = fs::read_to_string(info_xml).ok()?;
-    if !content.contains("snapgroup-id") {
+    snapgroup_id_from_info_xml(&content)?;
+    xml_text(&content, "description").filter(|val| !val.is_empty())
+}
+
+fn snapgroup_id_from_info_xml(content: &str) -> Option<String> {
+    for block in xml_blocks(content, "userdata") {
+        let Some(key) = xml_text(block, "key") else {
+            continue;
+        };
+        if key != "snapgroup-id" {
+            continue;
+        }
+        let value = xml_text(block, "value")?;
+        if is_digits(&value) {
+            return Some(value);
+        }
         return None;
     }
-    let open = "<description>";
-    let close = "</description>";
-    let start = content.find(open)? + open.len();
+
+    snapgroup_id_from_inline_userdata(content)
+}
+
+fn snapgroup_id_from_inline_userdata(content: &str) -> Option<String> {
+    let marker = "snapgroup-id=";
+    let start = content.find(marker)? + marker.len();
+    let id: String = content[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    is_digits(&id).then_some(id)
+}
+
+fn is_digits(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|c| c.is_ascii_digit())
+}
+
+fn xml_blocks<'a>(content: &'a str, tag: &str) -> Vec<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut blocks = Vec::new();
+    let mut rest = content;
+    while let Some(start) = rest.find(&open) {
+        rest = &rest[start + open.len()..];
+        let Some(end) = rest.find(&close) else {
+            break;
+        };
+        blocks.push(&rest[..end]);
+        rest = &rest[end + close.len()..];
+    }
+    blocks
+}
+
+fn xml_text(content: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = content.find(&open)? + open.len();
     let rest = &content[start..];
-    let end = rest.find(close)?;
-    let val = rest[..end].trim();
-    (!val.is_empty()).then(|| val.to_string())
+    let end = rest.find(&close)?;
+    Some(unescape_xml(rest[..end].trim()))
+}
+
+fn unescape_xml(value: &str) -> String {
+    if !value.contains('&') {
+        return value.to_string();
+    }
+
+    value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Restaura SÓ o root (`/`) para o snapshot `number`, com o subvol-alvo
@@ -383,14 +746,15 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
+    let label = btrfs::now_local_label().context("obter label de tempo")?;
     let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
-    let result = rollback::rollback_root_explicit(toplevel, root_subvol, &src);
+    let result = rollback::rollback_root_explicit_preserving_regret(toplevel, root_subvol, &src, &label);
     pb.finish_and_clear();
-    let rollback = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
-    crate::ui::restore::print_root_restore_done(number, &rollback.done);
+    let done = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
+    crate::ui::restore::print_root_restore_done(number, &done);
 
     let restored_root = toplevel.join(root_subvol);
-    if let Err(e) = boot::sync_fat32(&restored_root) {
+    if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
         return abort_reboot_boot_desync(
             &restored_root,
             e,
@@ -399,13 +763,12 @@ fn execute_restore_root_to_snapshot(
         );
     }
 
-    finish_restore_with_undo(&[rollback.done], &rollback.preserved_regret_asides, toplevel)
+    finish_restore_with_undo(&[done], toplevel)
 }
 
-/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Avisa só
-/// quando o sync vai de fato mexer no /boot legado: kernel idêntico ao do
-/// snapshot → sync no-op → não incomoda. Qualquer falha de detecção cai no
-/// aviso (fail-safe) — nunca silencia por incerteza.
+/// Decide se o aviso de /boot FAT32 deve aparecer antes do rollback. Se o root
+/// participa, o sync de boot roda completo: vmlinuz idêntico não prova que o
+/// initramfs casa com o root restaurado (DKMS/hooks/config).
 fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
     if !boot::is_fat32() {
         return false;
@@ -414,41 +777,30 @@ fn should_warn_fat32(group: &Group, toplevel: &Path) -> bool {
     boot_will_change(group, toplevel).unwrap_or(true)
 }
 
-/// Ok(true) se o sync pós-rollback vai escrever em /boot (kernel do snapshot
-/// difere do /boot atual). Ok(false) se será no-op: mesmo kernel, ou grupo que
-/// não restaura root. Err em falha real de leitura — o caller trata como aviso.
-fn boot_will_change(group: &Group, toplevel: &Path) -> Result<bool> {
-    let Some(root_m) = root_member(group)? else {
-        return Ok(false);
-    };
-    let snapshot_root = rollback::member_snapshot_path(root_m, toplevel)?;
-    Ok(!boot::boot_already_synced(&snapshot_root)?)
+/// Ok(true) se o sync pós-rollback vai tocar /boot. Em FAT32, qualquer restore
+/// do root exige regenerar o initramfs para fechar o caso de DKMS sem troca de
+/// kernel. Ok(false) só para grupos que não restauram root.
+fn boot_will_change(group: &Group, _toplevel: &Path) -> Result<bool> {
+    Ok(group::root_member(group)?.is_some())
 }
 
 fn execute_restore_checkpoint(
     group: &Group,
     mount_path: &Path,
+    regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
-    if should_warn_fat32(group, mount_path) && !crate::ui::restore::confirm_fat32_boot()? {
-        crate::ui::restore::print_cancelled_boot_risk();
-        return Ok(());
-    }
-
-    let configs: Vec<String> = group.members.iter().map(|m| m.config.clone()).collect();
-
-    // Move o regret anterior pra aside (não deleta): preserva o botão de
-    // arrependimento antigo até o reboot. Isso permite desfazer um restore sem
-    // reboot no futuro restaurando o estado anterior completo, inclusive o
-    // Regret que existia antes deste restore. O cleanup durável apaga o aside
-    // só no próximo boot, quando o novo root já virou realidade.
-    let asides = rollback::aside_existing_regrets(mount_path, &configs)?;
-
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
         group.members.len()
     ));
-    let outcome = rollback::rollback_group(group, mount_path);
+    let outcome = match regret_policy {
+        RestoreRegretPolicy::Update => rollback::rollback_group(group, mount_path),
+        RestoreRegretPolicy::PreserveExisting => {
+            let label = btrfs::now_local_label().context("obter label de tempo")?;
+            rollback::rollback_group_preserving_regret(group, mount_path, &label)
+        }
+    };
     pb.finish_and_clear();
     match outcome {
         Ok(done) => {
@@ -459,34 +811,20 @@ fn execute_restore_checkpoint(
             // sistema. Bloqueia o reboot em vez de só avisar.
             if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
                 let restored_root = mount_path.join(&root.current_subvol);
-                if let Err(e) = boot::sync_fat32(&restored_root) {
+                if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
                     return abort_reboot_boot_desync(
                         &restored_root,
                         e,
-                        "rode 'snapg restore' e selecione o Regret \
-                         (↺ Regret — Estado Anterior à Restauração) para voltar ao \
-                         sistema bootável atual antes de qualquer reboot.",
+                        "rode 'snapg restore' e escolha 'Cancelar a restauração' \
+                         para voltar ao sistema bootável atual antes de qualquer reboot.",
                     );
                 }
             }
 
-            finish_restore_with_undo(&done, &asides, mount_path)
+            finish_restore_with_undo(&done, mount_path)
         }
         Err(rerr) => {
-            match handle_partial(group, rerr, mount_path)? {
-                // Estado limpo conhecido: slots de regret canônicos livres.
-                PartialOutcome::Clean => {
-                    rollback::restore_asides(&asides, mount_path)
-                        .context("restaurar regret anterior após reversão limpa")?;
-                    if !asides.is_empty() {
-                        crate::ui::restore::print_previous_regret_restored();
-                    }
-                }
-                // Estado ambíguo: preserva o aside e instrui recuperação manual.
-                PartialOutcome::Indeterminate => {
-                    crate::ui::restore::print_preserved_asides(&asides, mount_path);
-                }
-            }
+            handle_partial(group, rerr, mount_path)?;
             bail!("rollback do grupo {} não concluído", group.id)
         }
     }
@@ -513,7 +851,7 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
         let restored_root_path = mount_path.join(&root_member.current_subvol);
 
-        if let Err(e) = boot::sync_fat32(&restored_root_path) {
+        if let Err(e) = boot::sync_fat32_after_restore(&restored_root_path) {
             return abort_reboot_boot_desync(
                 &restored_root_path,
                 e,
@@ -538,40 +876,36 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     prompt_reboot()
 }
 
-/// Veredito do estado do sistema vivo após uma falha de rollback. Decide se o
-/// regret anterior (aside) pode voltar automaticamente ao nome canônico.
-enum PartialOutcome {
-    /// Estado limpo conhecido: slots `_snapg_regret` canônicos livres.
-    /// Fase 1 falhou (nada tocado), ou `revert_partial` concluiu.
-    Clean,
-    /// Estado ambíguo: recuperação manual escolhida, ou `revert_partial`
-    /// falhou no meio. O slot canônico pode estar ocupado — não mexer.
-    Indeterminate,
-}
-
-fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<PartialOutcome> {
+fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<()> {
     crate::ui::restore::print_partial_failure(g.id, &rerr);
 
     // Fase 1 falhou: sistema vivo 100% intocado, nenhum regret novo criado.
     if rerr.done.is_empty() {
-        return Ok(PartialOutcome::Clean);
+        return Ok(());
     }
 
     if !crate::ui::restore::confirm_revert_partial(rerr.done.len())? {
         crate::ui::restore::print_manual_recovery(&rerr.done, mount_path);
-        return Ok(PartialOutcome::Indeterminate);
+        return Ok(());
     }
 
     if let Err(re) = rollback::revert_partial(&rerr.done, mount_path) {
         crate::ui::restore::print_auto_revert_failed(&re, mount_path);
-        return Ok(PartialOutcome::Indeterminate);
+        return Ok(());
     }
 
     crate::ui::restore::print_partial_reverted();
-    Ok(PartialOutcome::Clean)
+    Ok(())
 }
 
 pub fn delete(yes: bool) -> Result<()> {
+    // Gate: não apagar checkpoints com uma restauração pendente de reboot —
+    // resolve antes (concluir ou cancelar).
+    let configs = snapper::list_configs()?;
+    if gate_pending_restore_if_any(&configs)? {
+        return Ok(());
+    }
+
     let groups = group::list_groups()?;
     if groups.is_empty() {
         snapshots::print_no_groups();
@@ -621,6 +955,9 @@ pub fn list() -> Result<()> {
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
 
     let result = (|| -> Result<()> {
+        if pending_restore_from_live(&configs)?.is_some() {
+            snapshots::print_pending_restore_status();
+        }
         let regret = discover_regrets(&mount_path, &configs)?;
         let mut printed_regret = false;
         if let Some(r) = regret {
@@ -632,7 +969,7 @@ pub fn list() -> Result<()> {
         if groups.is_empty() {
             snapshots::print_no_groups();
         } else {
-            let kernel_labels = group_kernel_labels(&groups, &mount_path);
+            let kernel_labels = group::kernel_labels(&groups, &mount_path);
             snapshots::print_groups(&groups, &kernel_labels, !printed_regret)?;
         }
         Ok(())
@@ -715,9 +1052,8 @@ fn boot_clean_inner(mount_path: &Path) -> Result<()> {
 }
 
 /// Descobre sobras pós-restore no toplevel:
-/// - `_snapg_discard_*`, deixados por `revert_regret`;
-/// - `.snapgroup_regret_aside`, Regret antigo preservado durante checkpoint
-///   restore para permitir desfazer sem reboot.
+/// - `_snapg_discard_*`, deixados pelo doctor/restore preservando Regret.
+/// - `_snapg_undo_*`, deixados por `revert_regret`.
 fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
     let cfg_map = config_subvol_map()?;
     let mut found = Vec::new();
@@ -725,9 +1061,9 @@ fn discover_boot_cleanup_targets(toplevel: &Path) -> Result<Vec<(String, std::pa
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
         for (_, _, current) in &cfg_map {
-            let prefix = format!("{current}_snapg_discard_");
-            let aside = rollback::regret_aside_name(current);
-            if name.starts_with(&prefix) || name == aside {
+            let discard_prefix = rollback::discard_prefix(current);
+            let undo_prefix = rollback::undo_prefix(current);
+            if name.starts_with(&discard_prefix) || name.starts_with(&undo_prefix) {
                 found.push((name, entry.path()));
                 break;
             }
@@ -764,17 +1100,16 @@ fn abort_reboot_boot_desync(restored_root: &Path, e: anyhow::Error, recovery: &s
 
 fn finish_restore_with_undo(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
     match crate::ui::restore::select_post_restore_action()? {
-        PostRestoreAction::Undo => undo_restore_before_reboot(done, asides, mount_path),
+        PostRestoreAction::Undo => undo_restore_before_reboot(done, mount_path),
         PostRestoreAction::RebootNow => {
-            arm_cleanup_for_restore(done, asides, mount_path)?;
+            arm_cleanup_for_restore(done, mount_path)?;
             reboot_now()
         }
         PostRestoreAction::RebootLater => {
-            arm_cleanup_for_restore(done, asides, mount_path)?;
+            arm_cleanup_for_restore(done, mount_path)?;
             crate::ui::restore::print_manual_reboot();
             Ok(())
         }
@@ -783,23 +1118,36 @@ fn finish_restore_with_undo(
 
 fn undo_restore_before_reboot(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
-    rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
-    rollback::restore_asides(asides, mount_path)
-        .context("restaurar Regret anterior após desfazer restauração")?;
+    let any_undo = done.iter().any(done_is_regret_undo);
+    if any_undo && !done.iter().all(done_is_regret_undo) {
+        bail!("pending misto entre undo de Regret e restore normal; abortando cancelamento");
+    }
 
-    if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
-        let restored_root = mount_path.join(&root.current_subvol);
-        if let Err(e) = boot::sync_fat32(&restored_root) {
-            return abort_reboot_boot_desync(
-                &restored_root,
-                e,
-                "desfazer aplicado, mas /boot precisa casar com o root restaurado. \
-                 Rode 'snapg doctor --apply' antes de reiniciar.",
-            );
-        }
+    // Sincroniza o /boot com o sistema que vai permanecer ANTES do swap dos
+    // subvols: o backup_subvol é o chão vivo, o mesmo conteúdo que ocupará o
+    // nome ativo depois. Se o sync for interrompido (Ctrl-C), o pending ainda
+    // existe e o gate FAT32 ressincroniza na próxima execução. Na ordem
+    // inversa (swap primeiro), uma interrupção aqui deixava o /boot
+    // dessincronizado já sem pending — invisível para o gate, só um doctor
+    // explícito detectava.
+    let cancel_boot_sync = if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+        let remaining_root = mount_path.join(&root.backup_subvol);
+        boot::sync_fat32_before_cancel(&remaining_root)
+            .context("sincronizar /boot com o sistema atual; nada foi desfeito")?
+    } else {
+        None
+    };
+
+    if any_undo {
+        rollback::cancel_regret_undo(done, mount_path)
+            .context("cancelar restauração de Regret antes do reboot")?;
+    } else {
+        rollback::revert_partial(done, mount_path).context("desfazer restauração antes do reboot")?;
+    }
+    if let Some(sync) = cancel_boot_sync {
+        sync.finish_btrfs();
     }
 
     crate::ui::restore::print_restore_undone(done.len());
@@ -808,10 +1156,9 @@ fn undo_restore_before_reboot(
 
 fn arm_cleanup_for_restore(
     done: &[rollback::Done],
-    asides: &[rollback::AsidedRegret],
     mount_path: &Path,
 ) -> Result<()> {
-    if asides.is_empty() {
+    if !done.iter().any(done_needs_boot_cleanup) {
         return Ok(());
     }
 
@@ -824,6 +1171,19 @@ fn arm_cleanup_for_restore(
         Err(e) => crate::ui::restore::print_cleanup_arm_failed(&e),
     }
     Ok(())
+}
+
+fn done_needs_boot_cleanup(done: &rollback::Done) -> bool {
+    done.backup_subvol
+        .starts_with(&rollback::discard_prefix(&done.current_subvol))
+        || done
+            .backup_subvol
+            .starts_with(&rollback::undo_prefix(&done.current_subvol))
+}
+
+fn done_is_regret_undo(done: &rollback::Done) -> bool {
+    done.backup_subvol
+        .starts_with(&rollback::undo_prefix(&done.current_subvol))
 }
 
 fn prompt_reboot() -> Result<()> {
@@ -846,4 +1206,120 @@ fn reboot_now() -> Result<()> {
         bail!("systemctl reboot -i falhou com status {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pending_current_subvol, snapgroup_id_from_info_xml, xml_text};
+
+    #[test]
+    fn detects_pending_current_from_live_subvol_names() {
+        assert_eq!(
+            pending_current_subvol("@_snapg_regret").as_deref(),
+            Some("@")
+        );
+        assert_eq!(
+            pending_current_subvol("@home_snapg_discard_20260609-120000").as_deref(),
+            Some("@home")
+        );
+        assert_eq!(
+            pending_current_subvol("@root_snapg_undo_20260609-120000").as_deref(),
+            Some("@root")
+        );
+        assert_eq!(pending_current_subvol("@home"), None);
+        assert_eq!(pending_current_subvol("_snapg_regret"), None);
+        assert_eq!(pending_current_subvol("@home_snapg_discard_"), None);
+        assert_eq!(pending_current_subvol("@root_snapg_undo_"), None);
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_from_key_value_userdata() {
+        let xml = r#"
+            <snapshot>
+              <userdata>
+                <key>snapgroup-id</key>
+                <value>1790000000</value>
+              </userdata>
+            </snapshot>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000000")
+        );
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_from_equals_userdata() {
+        let xml = r#"<userdata>snapgroup-id=1790000001</userdata>"#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000001")
+        );
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_from_matching_userdata_block() {
+        let xml = r#"
+            <snapshot>
+              <userdata>
+                <key>numeric-other</key>
+                <value>111</value>
+              </userdata>
+              <userdata>
+                <key>snapgroup-id</key>
+                <value>1790000002</value>
+              </userdata>
+            </snapshot>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000002")
+        );
+    }
+
+    #[test]
+    fn rejects_non_numeric_snapgroup_id_value() {
+        let xml = r#"
+            <userdata>
+              <key>snapgroup-id</key>
+              <value>179x</value>
+            </userdata>
+        "#;
+
+        assert_eq!(snapgroup_id_from_info_xml(xml), None);
+    }
+
+    #[test]
+    fn extracts_snapgroup_id_with_whitespace_and_newlines() {
+        // xml_text faz trim do conteúdo interno, então key/value indentados em
+        // múltiplas linhas ainda casam. Guarda de regressão dessa tolerância.
+        let xml = r#"
+            <userdata>
+              <key>
+                snapgroup-id
+              </key>
+              <value>
+                1790000003
+              </value>
+            </userdata>
+        "#;
+
+        assert_eq!(
+            snapgroup_id_from_info_xml(xml).as_deref(),
+            Some("1790000003")
+        );
+    }
+
+    #[test]
+    fn reads_and_unescapes_xml_text() {
+        let xml = r#"<description>root &amp; boot &lt;ok&gt;</description>"#;
+
+        assert_eq!(
+            xml_text(xml, "description").as_deref(),
+            Some("root & boot <ok>")
+        );
+    }
 }

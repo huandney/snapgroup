@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Aside vs Stash — análise e melhor dos mundos · snapg</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --bg-code: #11151c;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    margin: 0;
+    padding: 0;
+    font-size: 17px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 22px 18px 80px; }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0.2em 0 0.1em; color: #fff; }
+  h2 {
+    font-size: 1.32rem; margin: 2.1em 0 0.55em; padding-bottom: 0.28em;
+    border-bottom: 1px solid var(--border); color: #fff; line-height: 1.3;
+  }
+  h3 { font-size: 1.1rem; margin: 1.5em 0 0.4em; color: #e6edf3; }
+  p, li { margin: 0.55em 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--bg-code); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 5px; font-size: 0.86em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    color: #e6edf3; word-break: break-word;
+  }
+  pre {
+    background: var(--bg-code); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; overflow-x: auto; font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  .lead { color: var(--muted); font-size: 1.02rem; }
+  .tag {
+    display: inline-block; font-size: 0.72rem; font-weight: 600;
+    padding: 2px 9px; border-radius: 999px; vertical-align: middle;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 1em 0; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--bg-soft); color: #fff; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td code { font-size: 0.8em; }
+  .box {
+    border-radius: 10px; padding: 14px 16px; margin: 1.3em 0;
+    border: 1px solid var(--border); background: var(--bg-soft);
+  }
+  .box .box-title { font-weight: 700; margin: 0 0 0.35em; display: flex; align-items: center; gap: 8px; }
+  .box.key { border-left: 4px solid var(--accent); }
+  .box.warn { border-left: 4px solid var(--red); }
+  .box.warn .box-title { color: var(--red); }
+  .box.good { border-left: 4px solid var(--green); }
+  .box.good .box-title { color: var(--green); }
+  .box.note { border-left: 4px solid var(--yellow); }
+  .box.note .box-title { color: var(--yellow); }
+  .pill-ok { color: var(--green); font-weight: 600; }
+  .pill-bad { color: var(--red); font-weight: 600; }
+  .toc { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px 14px; }
+  .toc ol { margin: 0.3em 0 0; padding-left: 1.3em; }
+  .toc li { margin: 0.25em 0; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2.4em 0; }
+  .meta { color: var(--muted); font-size: 0.85rem; }
+  .small { font-size: 0.85rem; color: var(--muted); }
+  ul.tight li { margin: 0.3em 0; }
+  .arrow { color: var(--purple); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Aside vs Stash — análise e a “melhor dos mundos”</h1>
+<p class="lead">Como o deslocamento do Regret funcionava na <strong>0.5.0 (aside)</strong>, como funciona <strong>hoje (stash + pending)</strong>, os problemas que isso causou, qual o desenho ideal, e o que vale manter mesmo se voltarmos ao modo aside.</p>
+<p class="meta">Projeto: <code>snapg</code> · branch <code>fix/doctor-restore-regret</code> · status: <strong style="color:#3fb950">primitivo do aside implementado</strong> (commit <code>7b75ed2</code>)</p>
+
+<div class="toc">
+  <strong>Conteúdo</strong>
+  <ol>
+    <li><a href="#modelo">O modelo do Regret (recap)</a></li>
+    <li><a href="#aside">Aside (0.5.0)</a></li>
+    <li><a href="#stash">Stash (atual)</a></li>
+    <li><a href="#tabela">Comparação direta</a></li>
+    <li><a href="#problemas">Os problemas que tivemos</a></li>
+    <li><a href="#colisao">Por que o undo exige um aside (prova)</a></li>
+    <li><a href="#durabilidade">A restrição da durabilidade</a></li>
+    <li><a href="#melhor">A melhor dos mundos: deslocamento preservado</a></li>
+    <li><a href="#manter">O que manter mesmo voltando ao aside</a></li>
+    <li><a href="#roadmap">Recomendação / roadmap</a></li>
+  </ol>
+</div>
+
+<h2 id="modelo">1. O modelo do Regret (recap)</h2>
+<p>O snapg restaura grupos de snapshots Btrfs renomeando o subvol ativo e promovendo a cópia restaurada. O <strong>Regret</strong> é o botão de “desfazer”:</p>
+<ul class="tight">
+  <li><code>@</code>, <code>@home</code>, … <span class="arrow">→</span> subvols ativos canônicos.</li>
+  <li><code>&lt;subvol&gt;_snapg_regret</code> <span class="arrow">→</span> o Regret: o chão vivo anterior, <em>renomeado</em> (não é cópia). O mount sobrevive por inode.</li>
+  <li><code>&lt;subvol&gt;.snapgroup_prep</code> <span class="arrow">→</span> cópia writable intermediária do snapshot-destino (Fase 1).</li>
+  <li><code>&lt;subvol&gt;_snapg_discard_&lt;label&gt;</code> <span class="arrow">→</span> estado <strong>descartável</strong>, limpo no próximo boot pelo <code>snapg-cleanup</code>.</li>
+</ul>
+<div class="box key">
+  <div class="box-title">Conceito central</div>
+  <p>O <code>_snapg_regret</code> <strong>não é uma foto congelada</strong> — é o chão vivo renomeado. <strong>Antes do reboot</strong> ele é o presente vivo (desfazer é grátis). <strong>Depois do reboot</strong> ele para de ser escrito e vira de fato um instantâneo (restaurá-lo é viagem real, cria <code>_snapg_discard</code>).</p>
+</div>
+
+<h2 id="aside">2. Aside <span class="tag">0.5.0 · removido</span></h2>
+<p><strong>O que era:</strong> quando um restore de checkpoint ocorria e <em>já existia</em> um Regret pendente, o Regret <strong>anterior</strong> era movido para um nome aside — <code>&lt;subvol&gt;.snapgroup_regret_aside</code> — em vez de deletado, para preservar o botão de undo antigo até o reboot.</p>
+
+<h3>Para que servia</h3>
+<p>Sustentar a <strong>feature de encadear restores</strong>: restaurar “por cima” de um pending sem perder o undo anterior. Durante esse restore havia <strong>dois</strong> Regrets em jogo simultaneamente — o novo (o chão deste restore, que vira <code>_snapg_regret</code> na Fase 2) e o anterior (movido para o aside).</p>
+
+<h3>Mecânica e o ramo frágil</h3>
+<ul class="tight">
+  <li>No erro, <code>revert_partial</code> “pisava” no Regret <strong>novo</strong> para trazer o chão de volta ao nome ativo.</li>
+  <li>Depois <code>restore_asides</code> trazia o anterior de volta ao slot canônico — <strong>só se o estado fosse limpo</strong> (<code>PartialOutcome::Clean</code>).</li>
+  <li>Em estado <strong>ambíguo</strong> (<code>PartialOutcome::Indeterminate</code>), o aside ficava órfão para <strong>recuperação manual</strong> — caía no colo do usuário.</li>
+</ul>
+
+<div class="box warn">
+  <div class="box-title">⚠ Por que foi removido</div>
+  <p>Coordenar dois Regrets, com um ramo ambíguo que exigia recuperação manual, era <strong>a peça mais sutil e frágil do projeto</strong>. Além de <strong>estado global</strong>: descoberta, UI e cleanup todos conheciam <code>Aside</code> (<code>aside_existing_regrets</code>, <code>restore_asides</code>, <code>regret_aside_name</code>, <code>AsidedRegret</code>, <code>PartialOutcome::{Clean,Indeterminate}</code>). Eram ~97 ocorrências em 4 arquivos.</p>
+</div>
+
+<h2 id="stash">3. Stash <span class="tag">atual · commit 9c2fbe2</span></h2>
+<p><strong>O que é:</strong> durante o rename-dance do commit, o Regret <strong>archived</strong> anterior, em vez de ser deletado <em>eagerly</em>, é <strong>stasheado</strong> — renomeado para <code>&lt;current&gt;_snapg_discard_old-regret_&lt;label&gt;_&lt;pid&gt;</code> <strong>antes</strong> do rename. Em cada etapa de falha tenta restaurá-lo; no sucesso, apaga.</p>
+
+<h3>Para que serve</h3>
+<p><strong>Só atomicidade de falha.</strong> A versão anterior deletava o Regret antigo cedo, quebrando a invariante “uma falha nunca te deixa pior”: se o restore falhasse, você perdia o undo <em>mesmo sem o sistema ter mudado</em>. O stash conserta isso — e <strong>não</strong> sustenta a feature de encadear (que foi cortada).</p>
+
+<h3>Detalhes que importam</h3>
+<ul class="tight">
+  <li>Usa o <strong>prefixo <code>_snapg_discard_</code></strong> de propósito: se o delete falhar, o <code>boot-clean</code> varre como rede de segurança.</li>
+  <li>É <strong>escopado por processo</strong> (<code>&lt;pid&gt;</code>).</li>
+  <li>É um <strong>detalhe privado</strong> de <code>commit_prepared_subvol</code> — vive dentro de <em>uma</em> chamada, sem UI, e a detecção de pending <strong>nunca</strong> o vê.</li>
+  <li>~35 linhas, contra ~62 do aside.</li>
+</ul>
+
+<div class="box note">
+  <div class="box-title">O complemento do stash: bloqueio de pending</div>
+  <p>A 0.5.0 usava o aside para permitir restore-sobre-pending. O atual <strong>proíbe</strong> esse estado (uma categoria de Regret, não duas). A colisão de slot é resolvida na <strong>política</strong> (proibir o estado), não no <strong>mecanismo</strong>. O <code>pending</code> emerge de um fato físico: o subvol vivo termina em <code>_snapg_regret</code>.</p>
+</div>
+
+<h2 id="tabela">4. Comparação direta</h2>
+<p>No fundo, <strong>aside e stash fazem a mesma jogada física</strong>: tirar um subvol precioso do nome ativo, para um slot nomeado. A diferença é <strong>política</strong>: tempo de vida, visibilidade e quando é consumido.</p>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Eixo</th><th>Aside (0.5.0)</th><th>Stash (atual)</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>O que desloca</strong></td><td>o Regret anterior num restore-sobre-pending</td><td>o Regret anterior dentro do rename-dance do commit</td></tr>
+    <tr><td><strong>Propósito</strong></td><td>manter o undo antigo <em>usável</em> através de um sucesso (feature: encadear)</td><td>só atomicidade: não perder o undo se o restore <em>falhar</em></td></tr>
+    <tr><td><strong>No sucesso</strong></td><td>preservado (vira undo de novo)</td><td>deletado (consumido)</td></tr>
+    <tr><td><strong>Na falha</strong></td><td>restaurado — com ramo <span class="pill-bad">ambíguo</span> (manual)</td><td>restaurado, <span class="pill-ok">sem</span> ramo ambíguo</td></tr>
+    <tr><td><strong>Tempo de vida</strong></td><td>longo (até o reboot)</td><td>curtíssimo (uma chamada de commit)</td></tr>
+    <tr><td><strong>Visibilidade</strong></td><td><span class="pill-bad">pública</span>: descoberta, UI, cleanup</td><td><span class="pill-ok">privada</span>: detalhe interno</td></tr>
+    <tr><td><strong>Nome</strong></td><td><code>*.snapgroup_regret_aside</code></td><td><code>*_snapg_discard_old-regret_*_&lt;pid&gt;</code></td></tr>
+    <tr><td><strong>Custo</strong></td><td>~62 linhas + estado global</td><td>~35 linhas, confinado</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="box key">
+  <div class="box-title">A leitura correta</div>
+  <p>A refatoração <strong>não</strong> removeu o “mecanismo de deslocar”. Removeu a <strong>feature</strong> (encadear) e o <strong>estado global</strong> (<code>Aside</code> em 4 lugares). O stash manteve o mecanismo, mas <em>confinado e efêmero</em>. Isso é simplificação <strong>arquitetural</strong> — menos estados de produto — não minificação.</p>
+</div>
+
+<h2 id="problemas">5. Os problemas que tivemos</h2>
+<p>Esta sessão fechou três bugs de <code>/boot</code> e bateu num quarto, que é o que reabre a discussão do aside.</p>
+
+<h3>5.1 “Travou no Limine” <span class="tag">corrigido</span></h3>
+<p>O doctor declarava o <code>/boot</code> saudável comparando <strong>só os bytes do vmlinuz</strong>, cego para os <strong>hashes BLAKE2B do <code>limine.conf</code></strong> — que é o que o Limine valida no boot. Resultado real: o doctor dizia “✓” e o bootloader recusava a entrada → boot travado, saída por snapshot. <span class="small">Fix: <code>limine_hashes_match</code>, <code>BootIssue::HashMismatch</code>, predicado único <code>boot_ready</code>.</span></p>
+
+<h3>5.2 DKMS de mesmo kernel <span class="tag">corrigido</span></h3>
+<p>Update de driver (ex: nvidia <code>.03</code>→<code>.04</code>) muda o <em>initramfs</em> mas não o vmlinuz. Restaurar um snapshot anterior deixava o <code>/boot</code> com initramfs incoerente; vmlinuz e hashes “batiam”. <span class="small">Fix: sempre regenerar o initramfs no restore FAT32 (removido o short-circuit de <code>sync_fat32_paths</code>).</span></p>
+
+<h3>5.3 Resync no pending FAT32 <span class="tag">corrigido</span></h3>
+<p>O gate de pending oferecia reboot via <code>boot_ready</code>, cego ao <strong>backup remanescente</strong> (interrupção) e à deriva por pacman. <span class="small">Fix: <code>pending_boot_synced</code> retorna <code>false</code> em FAT32 → sempre ressincroniza antes do reboot.</span></p>
+
+<h3>5.4 Undo do Regret interrompido <span class="tag" style="border-color:var(--green);color:var(--green)">corrigido · 7b75ed2</span></h3>
+<p class="small" style="margin-top:0">Resolvido pelo primitivo do aside (<a href="#melhor">§8</a>): o deslocado passou a usar <code>_snapg_undo_*</code> e o cancel virou o swap inverso que preserva o Regret. A descrição abaixo é o estado <em>antes</em> do fix, mantida como contexto.</p>
+<p>É o problema que conecta com o aside. O <code>revert_regret</code> (<code>rollback.rs:508</code>) faz:</p>
+<pre><code>@               <span class="arrow">→</span> @_snapg_discard_&lt;label&gt;   (o ativo antigo vira "descarte")
+@_snapg_regret  <span class="arrow">→</span> @                         (o conteúdo do Regret vira ativo)</code></pre>
+<ul class="tight">
+  <li>O Regret é <strong>consumido</strong> (vira <code>@</code>). Some do menu — <span class="pill-ok">correto</span>: você está nele.</li>
+  <li>Mas o estado pós-undo (vivo = <code>_snapg_discard</code>, <code>@</code> = Regret) <strong>não é detectado como pending</strong> (a detecção casava só <code>_snapg_regret</code>).</li>
+  <li>Ctrl-C durante o <code>/boot</code> sync que segue <span class="arrow">→</span> cai no <code>detect_rescue_boot</code> (vivo ≠ fstab), recuperável por acaso pela opção A, mas <strong>mal-modelado</strong> e <strong>sem “cancelar o undo”</strong>.</li>
+</ul>
+<div class="box warn">
+  <div class="box-title">⚠ O bug de perda de dado</div>
+  <p>O ajuste de fazer o pending detectar <code>_snapg_discard_*</code> conserta o menu e habilita o resync — <strong>mas</strong> destrava o “Cancelar”, que vai para <code>revert_partial</code>, cujo passo 3 <strong>deleta o <code>@</code></strong> assumindo que é um prep descartável. No undo, <code>@</code> é o <strong>conteúdo do Regret</strong> <span class="arrow">→</span> <strong>cancelar apaga o Regret.</strong></p>
+  <p style="margin-bottom:0"><strong>Causa raiz:</strong> <code>_snapg_discard_*</code> ficou <strong>ambíguo</strong> — significa duas coisas que o cancel não distingue:</p>
+</div>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Origem do <code>_snapg_discard_*</code></th><th><code>@</code> é…</th><th>Cancelar deveria…</th></tr></thead>
+  <tbody>
+    <tr><td>restore / doctor interrompido</td><td>cópia nova (prep) descartável</td><td><span class="pill-ok">deletar</span> <code>@</code> (revert_partial certo)</td></tr>
+    <tr><td>restauração de Regret interrompida</td><td>o próprio Regret (precioso)</td><td><span class="pill-bad">NÃO deletar</span> — preservar o Regret</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="colisao">6. Por que o undo do Regret <em>exige</em> um aside (prova)</h2>
+<p>“Restaurar o Regret” tem uma <strong>colisão de slot fundamental</strong>. Seja <code>R</code> o Regret (em <code>_snapg_regret</code>) e <code>A</code> o ativo atual (em <code>@</code>):</p>
+<ul class="tight">
+  <li>Você quer <code>@ = R</code> e <code>A</code> preservado para poder cancelar.</li>
+  <li>Para <code>R</code> ir para <code>@</code>, o <code>A</code> tem que sair de <code>@</code> para <strong>algum</strong> slot.</li>
+  <li>Se <code>A → _snapg_regret</code> (reusa o slot), o estado vira um <strong>pending normal</strong> (vivo = <code>_snapg_regret</code>, <code>@ = R</code>) — e o cancel normal <strong>deleta <code>@</code></strong>, que agora é <code>R</code> (precioso). <span class="pill-bad">Bug.</span></li>
+  <li>Logo, <code>A</code> <strong>tem</strong> que ir para um <strong>slot distinto</strong> — um aside — para o cancel saber que <code>@ = R</code> é precioso e fazer o <strong>swap inverso</strong> em vez de deletar.</li>
+</ul>
+<div class="box key">
+  <div class="box-title">Conclusão inescapável</div>
+  <p>Um undo do Regret <strong>cancelável e crash-safe</strong> é <strong>fisicamente impossível</strong> sem um slot durável distinto para o estado deslocado. Esse slot <strong>é</strong> o aside da 0.5.0. O <code>revert_regret</code> atual evitou o aside (renomeando <code>R → @</code> direto e jogando <code>A</code> num <code>_snapg_discard_</code>) — e é exatamente daí que nasce a ambiguidade.</p>
+</div>
+<p>Cancel correto, com o slot distinto (aqui chamado <code>_snapg_undo_</code>):</p>
+<pre><code>@ (conteúdo do Regret)       <span class="arrow">→</span> @_snapg_regret   (Regret volta ao slot)
+@_snapg_undo_&lt;label&gt; (ativo A)  <span class="arrow">→</span> @                (ativo volta)
+# nada é deletado</code></pre>
+
+<h2 id="durabilidade">7. A restrição da durabilidade</h2>
+<p>Há uma tentação de “manter o nome <code>_snapg_discard_*</code> e carregar a semântica num <code>enum PendingKind</code> em memória”. <strong>Não funciona</strong>, e o motivo é o coração do problema:</p>
+<div class="box warn">
+  <div class="box-title">⚠ Memória não sobrevive ao Ctrl-C</div>
+  <p>O problema inteiro é <em>recuperar depois que o processo morreu</em>. Na próxima execução, a <strong>única</strong> coisa que existe é o <strong>estado em disco</strong> — o nome do subvol. Se o nome é <code>_snapg_discard_*</code> ambíguo, <strong>não dá para computar</strong> se é descartável ou precioso. O <code>enum</code> teria que ser populado a partir de algo durável que distinga — e se o nome é o único sinal e ele é ambíguo, você está preso.</p>
+</div>
+<p>Logo, a distinção <strong>obrigatoriamente</strong> mora em disco. Só há duas formas crash-safe:</p>
+<ol class="tight">
+  <li><strong>Nome distinto</strong> (<code>_snapg_undo_*</code> / <code>_snapg_aside_*</code>) — é a ideia do aside da 0.5.0.</li>
+  <li><strong>Marcador em arquivo</strong> — que é o manifesto que evitamos (estado lateral, mais complexo).</li>
+</ol>
+<p>Não há terceira via. “<code>discard</code> ambíguo + enum em memória” é a não-solução.</p>
+
+<h2 id="melhor">8. A melhor dos mundos: <em>deslocamento preservado</em></h2>
+<p>Há <strong>um</strong> conceito embaixo dos três casos (stash, aside, undo): <strong>deslocamento preservado</strong> — mover um subvol precioso para um nome <strong>durável, distinto, não-descartável</strong>, com (a) restaurar-no-rollback e (b) consumir-no-commit. A política muda por fluxo:</p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Instância</th><th>Quando consome</th><th>Quando restaura</th></tr></thead>
+  <tbody>
+    <tr><td><strong>stash</strong> (commit)</td><td>no sucesso do commit</td><td>na falha do commit</td></tr>
+    <tr><td><strong>undo-aside</strong> (revert_regret)</td><td>no reboot do undo</td><td>no cancel do undo</td></tr>
+    <tr><td><s>aside-chaining</s></td><td colspan="2"><span class="pill-bad">cortado</span> — era a parte frágil (encadear + ramo ambíguo)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>O desenho</h3>
+<ul class="tight">
+  <li><strong>Dois nomes com semântica clara:</strong>
+    <ul class="tight">
+      <li><code>_snapg_discard_*</code> = <strong>descartável</strong> (cancel pode deletar, boot-clean varre).</li>
+      <li>nome <strong>preservado</strong> (ex.: <code>_snapg_aside_*</code> ou <code>_snapg_undo_*</code>) = <strong>nunca</strong> auto-deletado por cancel; tem caminho de restauração definido.</li>
+    </ul>
+  </li>
+  <li>O <strong>stash</strong> pode continuar com o prefixo discard <em>se</em> quiser a rede do boot-clean — ele é efêmero e privado, tudo bem ser varrido na falha.</li>
+  <li>O <strong>undo-aside</strong> usa o nome preservado; o cancel faz o <strong>swap inverso</strong>.</li>
+  <li>A distinção mora <strong>no nome (durável)</strong>, tratada <strong>localmente</strong> por cada fluxo — <strong>sem</strong> reintroduzir o estado global <code>Aside</code> que descoberta/UI/cleanup conheciam.</li>
+</ul>
+<div class="box good">
+  <div class="box-title">✓ O que isso entrega</div>
+  <p>Atomicidade de falha (do <strong>stash</strong>) + tratamento de colisão e preservação (do <strong>aside</strong>) + undo cancelável crash-safe — de <strong>um</strong> conceito, sem a feature frágil de encadeamento e sem a sprawl de estado global. É literalmente “o bom do aside + o bom do stash”.</p>
+</div>
+<div class="box note">
+  <div class="box-title">Custo honesto</div>
+  <p>Não é de graça: o <strong>cancel/pending</strong> passa a ter que <em>entender</em> o slot preservado (para o swap inverso). Isso é, sim, um estado durável que o sistema rastreia — o tipo que a refatoração reduziu. A diferença para o aside antigo: aqui é <strong>um</strong> conceito, no nome, por fluxo — não três coisas ad-hoc nem estado em 4 lugares. A alternativa <em>sem</em> estado novo é <strong>não oferecer cancel</strong> no undo interrompido (só concluir).</p>
+</div>
+
+<h2 id="manter">9. O que manter mesmo voltando ao aside</h2>
+<p>Ponto-chave: a decisão aside-vs-stash é <strong>estreita</strong> — é só sobre <em>como o Regret deslocado é nomeado e coordenado</em>. <strong>Tudo</strong> o que esta branch endureceu em <code>/boot</code>, doctor e detecção é <strong>ortogonal</strong> e deve ser mantido, voltemos ao aside ou não.</p>
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Mudança desta branch</th><th>Por que manter</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Validação de hash do <code>limine.conf</code></strong> (<code>limine_hashes_match</code>, <code>BootIssue::HashMismatch</code>, <code>boot_ready</code> unificado)</td><td>Conserta o “travou no Limine”. Independe do Regret.</td></tr>
+    <tr><td><strong>Diagnóstico do pending contra o destino</strong> (<code>pending_dest_diagnosis</code>, <code>ToplevelMountGuard</code>)</td><td>Mata o falso “✗ difere”. Independe do Regret.</td></tr>
+    <tr><td><strong>Sempre regenerar initramfs no restore FAT32</strong> (Opção A)</td><td>Fecha o buraco DKMS de mesmo kernel.</td></tr>
+    <tr><td><strong>Resync no pending FAT32</strong> (<code>pending_boot_synced → false</code>)</td><td>Cobre Ctrl-C e deriva por pacman no pending.</td></tr>
+    <tr><td><strong>pending derivado do mount</strong> (<code>strip_suffix</code>)</td><td>Detecção por fato físico &gt; bookkeeping. Boa base, com ou sem aside.</td></tr>
+    <tr><td><strong><code>scan_groups_from_toplevel</code></strong></td><td>Resgate lê o top-level Btrfs e forma grupos completos.</td></tr>
+    <tr><td><strong>Doctor preserva o Regret</strong> (<code>RestoreRegretPolicy::PreserveExisting</code>)</td><td>Doctor não destrói mais o undo legítimo.</td></tr>
+    <tr><td><strong>Parser <code>info.xml</code> + testes</strong></td><td>Robustez sem crate de XML. Independe de tudo.</td></tr>
+    <tr><td><strong>Gate synced/desync + <code>SyncBoot</code>/<code>prompt_reboot</code></strong></td><td>Sync desacoplado do reboot; UX correta do pending.</td></tr>
+    <tr><td><strong>Simetria de hash no <code>verify_synced</code></strong></td><td>Sync não declara pronto com <code>limine.conf</code> inconsistente.</td></tr>
+  </tbody>
+</table>
+</div>
+<div class="box good">
+  <div class="box-title">✓ Resumo</div>
+  <p>Voltar ao aside (mesmo em bloco) <strong>não</strong> deveria reverter nenhuma das linhas acima — elas são sobre a <em>correção do <code>/boot</code></em>, não sobre o mecanismo de deslocamento. O que se discute é só o <code>revert_regret</code> / o slot do Regret deslocado.</p>
+</div>
+
+<h2 id="roadmap">10. Recomendação / roadmap</h2>
+<ol>
+  <li><strong>Não reverter ao aside em bloco.</strong> Isso traria de volta a coordenação de dois Regrets e o ramo ambíguo (a parte frágil). Resgatamos só <strong>o primitivo</strong> (slot preservado), não a feature.</li>
+  <li><span class="pill-ok">✓ Feito (7b75ed2).</span> Em vez do stopgap de “bloquear o Cancelar”, foi direto ao <strong>primitivo do aside</strong>: nome durável distinto <code>_snapg_undo_*</code> + <code>cancel_regret_undo</code> (swap inverso) que devolve o Regret ao slot <code>_snapg_regret</code> e o ativo ao <code>@</code>, com <code>.snapshots</code> simétrico e rollback em falha — <strong>nada é deletado</strong>. O <code>_snapg_discard_*</code> continua descartável (prep do doctor), e o roteamento do cancel decide pela semântica do nome. boot-clean varre os dois.</li>
+  <li><span class="pill-bad">Pendente:</span> exercício em <strong>btrfs real</strong> — o teste unitário usa diretórios comuns, então o movimento do <code>.snapshots</code> aninhado no cancel e o caso de <strong>undo parcial</strong> (Ctrl-C no meio do loop) não são cobertos. Vão no teste manual §9.2.5.</li>
+  <li><strong>Doc/ADR de modelo (aberto):</strong> “o Regret é <em>consumido</em> ao rebootar o undo, ou o estado anterior vira o <em>novo</em> Regret (desfazer/refazer em cadeia)?”. O fix atual preserva o Regret só no <strong>cancel</strong>; a versão forte de “Regret sempre possível” (após reboot) depende dessa escolha e <strong>não</strong> foi implementada.</li>
+</ol>
+<p class="small">Lembrete transversal: nada disso vira release válida sem o teste manual em VM (restore com kernel/driver diferente em FAT32, Ctrl-C, recuperar) — os caminhos de integração de <code>/boot</code> e do <code>.snapshots</code> no cancel não têm teste automatizado.</p>
+
+<hr>
+<p class="meta">snapg · análise de design · este documento registra raciocínio; a decisão final é do mantenedor.</p>
+
+</div>
+</body>
+</html>

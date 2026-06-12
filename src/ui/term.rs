@@ -98,6 +98,16 @@ pub const MULTI_MARKER: usize = 6;
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";
 /// Dica canônica pros Select que voltam um passo com Esc.
+/// Convenção de hints de teclas — não inventar um terceiro formato:
+/// - selects do dialoguer: inline na pergunta, entre parênteses, via
+///   `prompt_hint`/`prompt_bold_hint` (rodapé abaixo da lista é impossível —
+///   o redraw do dialoguer engole qualquer linha impressa depois);
+/// - widgets custom full-screen (prompt de pending, `input_line`): rodapé em
+///   dim, sem parênteses, mesmos tokens;
+/// - tokens canônicos: "espaço marca", "enter confirma", "esc volta"/"esc sai",
+///   separados por " · ";
+/// - esc só é anunciado quando VOLTA um passo. Primeira página de um fluxo não
+///   ganha hint de esc: esc sai, comportamento padrão que não se anuncia.
 pub const HINT_BACK: &str = "(esc volta)";
 
 pub fn clear_screen() {
@@ -218,6 +228,52 @@ pub fn prompt_bold(question: &str) -> String {
 /// Prompt de seleção com dica de navegação: pergunta normal + hint em dim.
 pub fn prompt_hint(question: &str, hint: &str) -> String {
     format!("{}  {}", question, console::style(hint).dim())
+}
+
+/// Editor de linha mínimo com Esc-para-sair/voltar. O `dialoguer::Input` não
+/// expõe Esc nem usa o `CONTENT_INDENT` (o tema só cobre `format_prompt`/select).
+/// Redesenha a tela inteira a cada tecla via `render_chrome` (mesmo padrão do
+/// prompt de pending), com o hint num rodapé dim — fora da linha editável.
+/// Edição só no fim da linha (append/backspace) — suficiente para nomes curtos.
+/// `Ok(None)` = Esc. Enter com buffer vazio é ignorado: nome vazio não é aceito.
+pub fn input_line(
+    prompt: &str,
+    initial: &str,
+    footer: &str,
+    render_chrome: impl Fn(),
+) -> Result<Option<String>> {
+    let term = console::Term::stdout();
+    if !term.is_term() {
+        anyhow::bail!("entrada de texto requer um terminal interativo");
+    }
+    let mut buf = initial.to_string();
+    loop {
+        render_chrome();
+        println!("{CONTENT_INDENT}{}", console::style(prompt).bold());
+        println!(
+            "{CONTENT_INDENT}{} {}{}",
+            console::style("❯").bold(),
+            buf,
+            console::style("▏").dim()
+        );
+        println!();
+        println!("{CONTENT_INDENT}{}", console::style(footer).dim());
+        match term.read_key().context("ler tecla")? {
+            console::Key::Enter => {
+                let value = buf.trim().to_string();
+                if value.is_empty() {
+                    continue;
+                }
+                return Ok(Some(value));
+            }
+            console::Key::Escape => return Ok(None),
+            console::Key::Backspace => {
+                buf.pop();
+            }
+            console::Key::Char(c) if !c.is_control() => buf.push(c),
+            _ => {}
+        }
+    }
 }
 
 /// Confirmação consequente com dica: pergunta em negrito + hint em dim. Estiliza

@@ -105,6 +105,21 @@ pub fn delete(config: &str, number: u32) -> Result<()> {
     Ok(())
 }
 
+pub fn modify_description(config: &str, number: u32, description: &str) -> Result<()> {
+    let n = number.to_string();
+    let out = Command::new("snapper")
+        .args(["-c", config, "modify", "--description", description, &n])
+        .output()
+        .context("snapper modify falhou")?;
+    if !out.status.success() {
+        bail!(
+            "snapper modify -c {config} {n}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 /// Lê SUBVOLUME diretamente do arquivo de config — formato é shell-like
 /// (`SUBVOLUME="/home"`), parsing trivial sem depender da formatação tabular
 /// do `snapper get-config` que pode mudar entre versões.

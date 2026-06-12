@@ -5,11 +5,12 @@ use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold_hint,
-    prompt_hint, regret_title, short_datetime, tree_branch, tree_stem, truncate_for_terminal,
+    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold,
+    prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
+    truncate_for_terminal,
     wrap_text,
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use console::style;
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,7 +24,9 @@ pub(crate) struct RegretEntry {
     pub(crate) regret_subvol: String,
 }
 
-/// Regret ativo com data de criação (metadata BTRFS).
+/// Regret ativo: estado anterior à última restauração já efetivada por reboot,
+/// com a data do restore que o estabeleceu. O pending (restauração não
+/// reiniciada) não passa por aqui — é resolvido por `select_pending_action`.
 pub(crate) struct RegretInfo {
     pub(crate) entries: Vec<RegretEntry>,
     pub(crate) creation_time: String,
@@ -41,6 +44,41 @@ pub(crate) enum PostRestoreAction {
     RebootNow,
     Undo,
     RebootLater,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Fat32BootAction {
+    Continue,
+    Back,
+    Cancel,
+}
+
+/// Ação para um restore já aplicado mas ainda não reiniciado (pending), com o
+/// /boot coerente com o destino — reiniciar é seguro.
+#[derive(Clone, Copy)]
+pub(crate) enum PendingAction {
+    Reboot,
+    Cancel,
+    Nothing,
+}
+
+/// Ação quando o /boot está dessincronizado do destino (doctor): reiniciar cego
+/// quebraria o boot, então a opção é sincronizar antes de perguntar pelo reboot.
+#[derive(Clone, Copy)]
+pub(crate) enum PendingSyncAction {
+    SyncBoot,
+    Cancel,
+    Nothing,
+}
+
+pub(crate) struct PendingPromptInfo {
+    pub(crate) boot_needs_sync: bool,
+    pub(crate) undo_regret: bool,
+    pub(crate) destination_subvol: String,
+    pub(crate) destination_kernel: String,
+    pub(crate) current_subvol: String,
+    pub(crate) current_kernel: String,
+    pub(crate) regret_subvol: String,
 }
 
 /// Ação selecionada na TUI.
@@ -287,7 +325,7 @@ pub(crate) fn print_cancelled() {
     println!("cancelado");
 }
 
-pub(crate) fn confirm_fat32_boot() -> Result<bool> {
+pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
     clear_screen();
     header("Restauração");
     println!();
@@ -298,7 +336,19 @@ pub(crate) fn confirm_fat32_boot() -> Result<bool> {
     println!();
     line(format_args!("Se a sincronização for interrompida, rode {}.", style("snapg doctor").bold()));
     println!();
-    confirm("Continuar?")
+    let actions = [Fat32BootAction::Continue, Fat32BootAction::Cancel];
+    let Some(choice) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt(prompt_bold_hint("Continuar?", HINT_BACK))
+        .items(&["Sim", "Não"])
+        .default(1)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(Fat32BootAction::Back);
+    };
+    Ok(actions[choice])
 }
 
 pub(crate) fn print_cancelled_boot_risk() {
@@ -330,17 +380,13 @@ pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback
     }
 }
 
-pub(crate) fn print_previous_regret_restored() {
-    eprintln!("  regret anterior restaurado");
-}
-
 pub(crate) fn print_regret_restore_done(done_len: usize) {
     println!("{} regret restaurado ({} membros)", style("✓").green().bold(), done_len);
     println!("  subvols atuais preservados como discard (limpos no próximo boot)");
 }
 
 pub(crate) fn print_cleanup_armed() {
-    println!("  cleanup automático armado para o próximo boot");
+    line(format_args!("cleanup automático armado para o próximo boot"));
 }
 
 pub(crate) fn print_cleanup_arm_failed(error: &anyhow::Error) {
@@ -369,6 +415,193 @@ pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
         return Ok(PostRestoreAction::RebootLater);
     };
     Ok(actions[choice])
+}
+
+/// Prompt quando o usuário aciona restore/delete com uma restauração já aplicada
+/// mas não reiniciada. Não há checkpoints a oferecer nesse estado: ou conclui
+/// (reboot) ou cancela (volta ao estado de antes da restauração).
+pub(crate) fn select_pending_action(info: &PendingPromptInfo) -> Result<PendingAction> {
+    match select_pending_choice(
+        "Restauração pendente de reboot",
+        "Há uma restauração aplicada que ainda não foi reiniciada.",
+        "O que fazer com a restauração pendente?",
+        pending_reboot_label(info),
+        pending_cancel_label(info),
+        info,
+    )? {
+        Some(0) => Ok(PendingAction::Reboot),
+        Some(_) => Ok(PendingAction::Cancel),
+        None => Ok(PendingAction::Nothing),
+    }
+}
+
+/// Pending em /boot FAT32 ou dessincronizado: reiniciar direto não é seguro.
+/// Pergunta se sincroniza antes de liberar o reboot.
+pub(crate) fn confirm_run_doctor() -> Result<bool> {
+    clear_screen();
+    header("Restauração pendente — sincronizar /boot");
+    line(format_args!(
+        "Há uma restauração aplicada que ainda não foi reiniciada. Como o /boot"
+    ));
+    line(format_args!(
+        "pode estar fora do snapshot BTRFS, sincronize antes de reiniciar para"
+    ));
+    line(format_args!("garantir que o initramfs corresponde ao root de destino."));
+    println!();
+    let choice = dialoguer::Select::with_theme(&THEME)
+        .with_prompt(prompt_bold("Rodar o doctor para sincronizar o /boot?"))
+        .items(&["Sim", "Não"])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?;
+    Ok(matches!(choice, Some(0)))
+}
+
+/// Prompt do doctor para um pending que precisa sincronizar o /boot com o
+/// destino, ou cancelar a restauração.
+pub(crate) fn select_pending_sync_action(info: &PendingPromptInfo) -> Result<PendingSyncAction> {
+    match select_pending_choice(
+        "Doctor — sincronizar /boot com o destino",
+        "Escolha qual estado deve ficar pronto antes do próximo reboot.",
+        "O que fazer?",
+        pending_sync_label(info),
+        pending_cancel_label(info),
+        info,
+    )? {
+        Some(0) => Ok(PendingSyncAction::SyncBoot),
+        Some(_) => Ok(PendingSyncAction::Cancel),
+        None => Ok(PendingSyncAction::Nothing),
+    }
+}
+
+/// Só aparece quando o /boot já está coerente (`resolve_pending_clean`), então
+/// não há variante "preparar /boot" aqui — essa é a do prompt de sync.
+fn pending_reboot_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Reiniciar no Regret restaurado";
+    }
+    "Reiniciar no snapshot restaurado"
+}
+
+fn pending_sync_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Preparar /boot para o Regret restaurado";
+    }
+    "Preparar /boot para o snapshot restaurado"
+}
+
+/// Cancelar um undo devolve o Regret ao slot de undo e volta ao sistema atual —
+/// não "restaura" o Regret (isso é o que o próprio undo faz).
+fn pending_cancel_label(info: &PendingPromptInfo) -> &'static str {
+    if info.undo_regret {
+        return "Cancelar undo e voltar ao sistema atual";
+    }
+    "Desfazer restauração pendente"
+}
+
+fn select_pending_choice(
+    title: &str,
+    intro: &str,
+    prompt: &str,
+    primary_label: &str,
+    cancel_label: &str,
+    info: &PendingPromptInfo,
+) -> Result<Option<usize>> {
+    let term = console::Term::stdout();
+    // Sem TTY, read_key devolve Key::Unknown em loop — viraria busy-loop
+    // redesenhando a tela. Falha limpa, como o dialoguer fazia.
+    if !term.is_term() {
+        bail!("o prompt de restauração pendente requer um terminal interativo");
+    }
+    let mut selected = 0usize;
+    loop {
+        render_pending_choice(title, intro, prompt, primary_label, cancel_label, info, selected);
+        match term.read_key().context("aguardar seleção pendente")? {
+            console::Key::ArrowUp | console::Key::ArrowDown => selected = 1 - selected,
+            console::Key::Enter => return Ok(Some(selected)),
+            console::Key::Escape => return Ok(None),
+            _ => {}
+        }
+    }
+}
+
+fn render_pending_choice(
+    title: &str,
+    intro: &str,
+    prompt: &str,
+    primary_label: &str,
+    cancel_label: &str,
+    info: &PendingPromptInfo,
+    selected: usize,
+) {
+    clear_screen();
+    header(title);
+    line(format_args!("{intro}"));
+    println!();
+    line(format_args!("{}", style(prompt).bold()));
+    line(format_args!(
+        "{} {}",
+        if selected == 0 { ">" } else { " " },
+        primary_label
+    ));
+    line(format_args!(
+        "{} {}",
+        if selected == 1 { ">" } else { " " },
+        cancel_label
+    ));
+    println!();
+    line(format_args!("{}", style("Ação selecionada").bold()));
+    match selected {
+        0 => print_pending_primary_preview(info),
+        _ => print_pending_cancel_preview(info),
+    }
+    println!();
+    // Primeira página do gate: Esc sai do comando, não "volta" a lugar nenhum.
+    line(format_args!("{}", style("enter confirma · esc sai").dim()));
+}
+
+fn print_pending_primary_preview(info: &PendingPromptInfo) {
+    let target = if info.undo_regret { "Regret restaurado" } else { "destino pendente" };
+    print_pending_field(
+        false,
+        "vai iniciar em",
+        &format!("{target}  {}", info.destination_subvol),
+    );
+    print_pending_field(false, "kernel esperado", &info.destination_kernel);
+    print_pending_field(true, "/boot", pending_primary_boot_text(info));
+}
+
+fn print_pending_cancel_preview(info: &PendingPromptInfo) {
+    print_pending_field(
+        false,
+        "desfaz para",
+        &format!("sistema atual ainda em uso  {}", info.current_subvol),
+    );
+    if info.undo_regret {
+        print_pending_field(false, "Regret", &format!("preservado em {}", info.regret_subvol));
+    }
+    print_pending_field(false, "kernel esperado", &info.current_kernel);
+    print_pending_field(true, "/boot", pending_cancel_boot_text(info));
+}
+
+fn pending_primary_boot_text(info: &PendingPromptInfo) -> &'static str {
+    if info.boot_needs_sync {
+        return "será preparado para esse destino";
+    }
+    "já está coerente com esse destino"
+}
+
+fn pending_cancel_boot_text(info: &PendingPromptInfo) -> &'static str {
+    if info.boot_needs_sync {
+        return "será sincronizado para o sistema atual";
+    }
+    "já está coerente com o sistema atual"
+}
+
+fn print_pending_field(last: bool, label: &str, value: &str) {
+    println!("{} {:<24} {}", tree_branch(last), label, value);
 }
 
 pub(crate) fn print_restore_undone(done_len: usize) {
@@ -521,7 +754,6 @@ pub(crate) fn review_checkpoint_restore(
         for wrapped in wrap_text(desc, content_width()) {
             line(format_args!("{wrapped}"));
         }
-        println!();
     }
 
     let has_skip = !skipped.is_empty();
@@ -621,32 +853,6 @@ pub(crate) fn print_auto_revert_failed(error: &anyhow::Error, mount_path: &Path)
 pub(crate) fn print_partial_reverted() {
     println!();
     println!("{} rollback parcial revertido — sistema voltou ao estado pré-restore", style("✓").green().bold());
-}
-
-/// Imprime onde cada regret anterior ficou preservado (estado ambíguo) e o
-/// comando de reativação por config. O usuário está em recuperação manual:
-/// só deve renomear de volta após confirmar que o slot canônico está livre.
-pub(crate) fn print_preserved_asides(asides: &[rollback::AsidedRegret], mount_path: &Path) {
-    if asides.is_empty() {
-        return;
-    }
-    eprintln!();
-    eprintln!("regret anterior preservado (não restaurado: estado ambíguo):");
-    for a in asides {
-        eprintln!(
-            "  {}: {}",
-            a.config,
-            mount_path.join(&a.aside_subvol).display()
-        );
-    }
-    eprintln!("  reative só após confirmar que {{subvol}}_snapg_regret está livre:");
-    for a in asides {
-        eprintln!(
-            "  sudo mv {} {}",
-            mount_path.join(&a.aside_subvol).display(),
-            mount_path.join(&a.regret_subvol).display()
-        );
-    }
 }
 
 pub(crate) fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {

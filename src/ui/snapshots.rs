@@ -366,6 +366,15 @@ fn member_badges(mountpoints: &mut [String]) -> String {
         .join(" ")
 }
 
+pub(crate) fn print_pending_restore_status() {
+    app_header();
+    section_header("⏳", "Restauração pendente de reboot");
+    line(format_args!(
+        "Rode 'snapg restore' para concluir (reiniciar) ou cancelar a restauração."
+    ));
+    println!();
+}
+
 pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
     app_header();
     section_header("↺", "Regret ativo");

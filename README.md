@@ -31,7 +31,7 @@ makepkg -si
 |---|---|
 | `snapg save [descrição]` | Cria snapshot em todas as configs Snapper, agrupado num ID |
 | `snapg list` | Lista grupos existentes (mais recente primeiro) e o Regret ativo, se houver |
-| `snapg restore` | Restauração interativa via TUI: escolhe um checkpoint **ou** o Regret. Exige reboot |
+| `snapg restore` | Restauração interativa via TUI: escolhe um checkpoint **ou** o Regret; Regret pendente desfaz sem comando separado |
 | `snapg delete [-y]` | Apaga checkpoints (TUI multi-seleção; `-y` apaga o mais recente sem perguntar) |
 
 Todos os comandos pedem `sudo` automaticamente (re-exec via `sudo` se não for root). Apenas uma instância mutante (`save`/`restore`/`delete`) roda por vez — um lock global (`flock` em `/run/snapgroup.lock`) bloqueia execuções concorrentes.
@@ -48,13 +48,13 @@ Todos os comandos pedem `sudo` automaticamente (re-exec via `sudo` se não for r
 3. Renomeia a cópia writable → nome ativo original
 4. Move `.snapshots` aninhado de volta pro novo subvol ativo
 
-Se a fase 2 falhar no meio de um grupo, o rollback dos membros já feitos é revertido (automaticamente ou com confirmação). Antes do commit começar, o Regret anterior é movido pra um aside e só é descartado quando a restauração conclui — uma falha nunca te deixa sem ponto de retorno.
+Se a fase 2 falhar no meio de um grupo, o rollback dos membros já feitos é revertido (automaticamente ou com confirmação). Depois de um restore aplicado, um novo checkpoint só pode ser restaurado após reboot ou revertendo a restauração pendente (selecionando a opção do Regret no próprio menu de restore); isso evita empilhar restaurações sobre um estado pendente.
 
 ## O `Regret` (botão de arrependimento)
 
 Cada `restore` arquiva o sistema que você está deixando como `<subvol>_snapg_regret`. Ele aparece na TUI do próximo `restore` como **⟲ Estado Anterior à Restauração** e pode ser restaurado pra desfazer a última restauração. Semântica Highlander: existe **um** Regret por vez — um novo `save` descarta o atual.
 
-Ao restaurar o Regret, os subvols vivos pré-restauração viram `<subvol>_snapg_discard_<label>` (não dá pra deletar enquanto montados). O cleanup é automático via "serviço fantasma":
+Se o Regret representa uma restauração pendente de reboot, selecioná-lo no `snapg restore` desfaz essa restauração por baixo dos panos e apaga o subvol recém-restaurado imediatamente. Se o Regret já foi efetivado por reboot, restaurá-lo troca de volta para o estado anterior e os subvols vivos pré-restauração viram `<subvol>_snapg_discard_<label>` (não dá pra deletar enquanto montados). O cleanup é automático via "serviço fantasma":
 
 1. Após restaurar o Regret, snapg roda `systemctl enable snapg-cleanup.service` no rootfs restaurado.
 2. No próximo boot, o systemd executa o serviço, que chama `snapg boot-clean`: apaga todos os `<subvol>_snapg_discard_*` e em seguida roda `systemctl disable snapg-cleanup.service`.

@@ -15,7 +15,7 @@ pub struct Lock {
 
 /// Adquire o lock global, não-bloqueante. Falha imediata se outra instância já
 /// o detém: duas operações mutantes simultâneas colidiriam nos nomes fixos de
-/// subvolume (`*_snapg_regret`, `*.snapgroup_prep`, aside) e no mount em
+/// subvolume (`*_snapg_regret`, `*.snapgroup_prep`, `_snapg_discard_*`) e no mount em
 /// `/run/snapgroup/{uuid}`.
 pub fn acquire() -> Result<Lock> {
     try_acquire()?.ok_or_else(|| {
