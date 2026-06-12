@@ -56,14 +56,14 @@ pub fn save(description: Option<String>) -> Result<()> {
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
     kill_regrets(&configs)?;
 
-    let mut created = Vec::new();
+    let mut mountpoints = Vec::new();
     for cfg in &configs {
-        let n = snapper::create(cfg, &desc, id)
+        snapper::create(cfg, &desc, id)
             .with_context(|| format!("criar snapshot em '{cfg}'"))?;
-        created.push((cfg.clone(), n));
+        mountpoints.push(snapper::config_subvolume(cfg)?);
     }
 
-    snapshots::print_save_created(id, &desc, &created);
+    snapshots::print_save_created(id, &desc, &mut mountpoints);
     Ok(())
 }
 
