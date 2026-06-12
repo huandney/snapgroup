@@ -53,10 +53,59 @@ pub fn sync_fat32(restored_root: &Path) -> Result<()> {
     sync_fat32_paths(restored_root, Path::new("/boot"))
 }
 
+const LIMINE_MUTEX_LIB: &str = "/usr/lib/limine/limine-mutex";
+const LIMINE_LOCK_PATH: &str = "/tmp/limine-global.lock";
+
+/// Adquire o mutex global do ecossistema limine antes de escrever em /boot.
+///
+/// Os pacman hooks, o limine-entry-tool e os scripts de mkinitcpio serializam
+/// escritas no /boot com `flock` em /tmp/limine-global.lock (timeout de 30s).
+/// O lock próprio do snapg só serializa instâncias do snapg; sem este, snapg e
+/// um hook de pacman podiam escrever no /boot ao mesmo tempo. `Ok(None)`
+/// quando o limine não está instalado — não cria lixo em /tmp.
+fn lock_limine_mutex() -> Result<Option<fs::File>> {
+    if !Path::new(LIMINE_MUTEX_LIB).exists() {
+        return Ok(None);
+    }
+    // Sem truncate: o arquivo é compartilhado com o tooling do limine e o
+    // lock é no inode, não no conteúdo.
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(LIMINE_LOCK_PATH)
+        .with_context(|| format!("abrir {LIMINE_LOCK_PATH}"))?;
+
+    use std::os::fd::AsRawFd;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            return Ok(Some(file));
+        }
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return Err(err).with_context(|| format!("flock {LIMINE_LOCK_PATH}"));
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "outro processo segura o lock do limine ({LIMINE_LOCK_PATH}) há mais de 30s \
+                 (pacman/mkinitcpio em andamento?). Aguarde ele terminar e tente de novo."
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     if !is_fat32_path(boot) {
         return Ok(());
     }
+
+    // Segura o mutex do limine durante backup, sync e verify. Liberado no drop
+    // (fim da função), inclusive em erro.
+    let _limine_mutex = lock_limine_mutex()?;
 
     let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
     let groups = discover_kernel_groups(boot)?;
