@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Commands
+- **Feature**: Group-aware automatic cleanup. With `KEEP_GROUPS=N` in `/etc/snapgroup.conf`, `snapg save` moves groups beyond the N newest to the trash; the default `0` keeps the previous unlimited behavior. Cleanup is group-aware on purpose — Snapper's own per-config retention would prune one subvolume's snapshot and leave its group half-broken.
+- **Feature**: Recoverable trash pipeline. `snapg delete` now moves checkpoints to a trash (one review screen, no redundant "delete all" confirmation) instead of deleting outright; `snapg delete --purge` still deletes permanently. Trashed groups are hidden from `list`, `restore` and `rename`.
+- **Feature**: New `snapg trash` to manage the trash — list trashed groups with a "purge in ~Nd" countdown, restore them to the live pool, or delete them permanently (the only confirmed action on that screen).
+- **Feature**: Expired groups are purged automatically after `TRASH_PRUNE_DAYS` (default 15), piggybacking on `save`/`delete` without a new timer or daemon. The Regret is never touched — it is a renamed subvolume, not a Snapper snapshot.
+
+### Config / Packaging
+- **Feature**: New `/etc/snapgroup.conf` (`KEEP_GROUPS`, `TRASH_PRUNE_DAYS`), a shell-like file installed as a pacman backup so edits survive upgrades. Invalid or negative values fall back to the default; values above ten years are clamped, keeping the purge cutoff free of integer overflow.
+
 ## [0.6.0-beta] - 2026-06-12
 > Commits: `fd686fa`, `9c2fbe2`, `14df553`, `960ab73`, `355ab4d`, `b0bfe17`, `32055ae`, `7b75ed2`, `e93d5ac`, `47b0dad`, `f59641c`, `e8160cc`, `16017c4`, `f0e6eb1`, `412dee8`, `084eb9b`, `6aafcda`
 

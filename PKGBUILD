@@ -2,7 +2,7 @@
 pkgname=snapgroup
 pkgver=0.6.0
 pkgrel=1
-pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/undo/redo/list/delete/gc)"
+pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/restore/list/rename/delete/trash/doctor)"
 arch=('x86_64')
 url="https://github.com/huandney/snapgroup"
 license=('MIT')
