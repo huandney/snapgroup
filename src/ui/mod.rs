@@ -6,3 +6,4 @@ pub(crate) mod restore;
 pub(crate) mod rollback;
 pub(crate) mod snapshots;
 pub(crate) mod term;
+pub(crate) mod trash;

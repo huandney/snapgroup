@@ -105,6 +105,49 @@ pub fn delete(config: &str, number: u32) -> Result<()> {
     Ok(())
 }
 
+/// Marca um snapshot como lixeira. Re-afirmar `snapgroup-id` é idempotente e
+/// blinda contra a dúvida merge-vs-replace do `snapper modify --userdata`: se
+/// ele substituir, o id sobrevive; se mesclar, fica igual.
+pub fn trash(
+    config: &str,
+    number: u32,
+    group_id: i64,
+    trash_epoch: i64,
+    reason: &str,
+) -> Result<()> {
+    modify_userdata(
+        config,
+        number,
+        &format!("snapgroup-id={group_id},snapgroup-trash={trash_epoch},snapgroup-trash-reason={reason}"),
+    )
+}
+
+/// Tira um snapshot da lixeira: regrava o id e zera as marcas de trash. Valor
+/// vazio remove a chave no snapper; e mesmo que persista vazio, `extract_trash`
+/// não parseia "" — o grupo deixa de contar como lixeira de qualquer forma.
+pub fn untrash(config: &str, number: u32, group_id: i64) -> Result<()> {
+    modify_userdata(
+        config,
+        number,
+        &format!("snapgroup-id={group_id},snapgroup-trash=,snapgroup-trash-reason="),
+    )
+}
+
+fn modify_userdata(config: &str, number: u32, userdata: &str) -> Result<()> {
+    let n = number.to_string();
+    let out = Command::new("snapper")
+        .args(["-c", config, "modify", "--userdata", userdata, &n])
+        .output()
+        .context("snapper modify falhou")?;
+    if !out.status.success() {
+        bail!(
+            "snapper modify -c {config} {n}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 pub fn modify_description(config: &str, number: u32, description: &str) -> Result<()> {
     let n = number.to_string();
     let out = Command::new("snapper")

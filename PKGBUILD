@@ -1,14 +1,15 @@
 # Maintainer: Huandney <huandney@gmail.com>
 pkgname=snapgroup
-pkgver=0.6.0
+pkgver=0.7.0
 pkgrel=1
-pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/undo/redo/list/delete/gc)"
+pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/restore/list/rename/delete/trash/doctor)"
 arch=('x86_64')
 url="https://github.com/huandney/snapgroup"
 license=('MIT')
 depends=('snapper' 'btrfs-progs' 'util-linux' 'coreutils' 'fzf')
 makedepends=('cargo')
 install=snapgroup.install
+backup=('etc/snapgroup.conf')
 # Build local: rode `makepkg -si` na raiz do repo. Sem source remoto por enquanto.
 options=(!debug)
 
@@ -21,4 +22,5 @@ package() {
   install -Dm755 "$startdir/target/release/snapg" "$pkgdir/usr/bin/snapg"
   install -Dm644 "$startdir/systemd/snapg-cleanup.service" \
     "$pkgdir/usr/lib/systemd/system/snapg-cleanup.service"
+  install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }
