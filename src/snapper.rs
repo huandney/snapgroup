@@ -105,6 +105,34 @@ pub fn delete(config: &str, number: u32) -> Result<()> {
     Ok(())
 }
 
+/// Marca um snapshot como lixeira reescrevendo o userdata completo numa só
+/// chamada. Re-afirmar `snapgroup-id` é idempotente e blinda contra a dúvida
+/// merge-vs-replace do `snapper modify --userdata`: se ele substituir, o id
+/// sobrevive; se mesclar, fica igual.
+pub fn trash(
+    config: &str,
+    number: u32,
+    group_id: i64,
+    trash_epoch: i64,
+    reason: &str,
+) -> Result<()> {
+    let userdata = format!(
+        "snapgroup-id={group_id},snapgroup-trash={trash_epoch},snapgroup-trash-reason={reason}"
+    );
+    let n = number.to_string();
+    let out = Command::new("snapper")
+        .args(["-c", config, "modify", "--userdata", &userdata, &n])
+        .output()
+        .context("snapper modify falhou")?;
+    if !out.status.success() {
+        bail!(
+            "snapper modify -c {config} {n}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 pub fn modify_description(config: &str, number: u32, description: &str) -> Result<()> {
     let n = number.to_string();
     let out = Command::new("snapper")

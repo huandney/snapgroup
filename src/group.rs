@@ -7,6 +7,7 @@ use std::path::Path;
 pub type GroupId = i64;
 
 const USERDATA_KEY: &str = "snapgroup-id";
+const TRASH_KEY: &str = "snapgroup-trash";
 
 #[derive(Clone)]
 pub struct Member {
@@ -40,16 +41,52 @@ pub fn description(group: &Group) -> &str {
 }
 
 pub fn extract_id(s: &Snapshot) -> Option<GroupId> {
-    s.userdata
-        .as_ref()?
-        .as_object()?
-        .get(USERDATA_KEY)?
-        .as_str()?
-        .parse()
-        .ok()
+    userdata_i64(s, USERDATA_KEY)
 }
 
+/// Epoch em que o snapshot foi marcado pra lixeira, se foi.
+pub fn extract_trash(s: &Snapshot) -> Option<i64> {
+    userdata_i64(s, TRASH_KEY)
+}
+
+fn userdata_i64(s: &Snapshot, key: &str) -> Option<i64> {
+    s.userdata.as_ref()?.as_object()?.get(key)?.as_str()?.parse().ok()
+}
+
+/// Grupo está na lixeira se QUALQUER membro carrega a marca. Um grupo
+/// meio-marcado (falha best-effort no meio) ainda some do restore — não faz
+/// sentido restaurar um grupo a caminho da saída — e o próximo purge termina.
+pub fn is_trashed(group: &Group) -> bool {
+    group.members.iter().any(|m| extract_trash(&m.snapshot).is_some())
+}
+
+/// Instante em que o grupo entrou na lixeira: o mais antigo entre os membros
+/// marcados. O purge compara isto contra a janela de carência.
+pub fn trash_epoch(group: &Group) -> Option<i64> {
+    group.members.iter().filter_map(|m| extract_trash(&m.snapshot)).min()
+}
+
+/// Grupos a mover pra lixeira: a cauda além dos `keep` mais novos. `keep == 0`
+/// (ilimitado) ou grupos a menos que `keep` → nada. `groups` deve vir
+/// newest-first, como `list_groups` entrega.
+pub fn groups_to_prune(groups: &[Group], keep: usize) -> &[Group] {
+    if keep == 0 || groups.len() <= keep {
+        return &[];
+    }
+    &groups[keep..]
+}
+
+/// Grupos vivos (visíveis): exclui os que estão na lixeira.
 pub fn list_groups() -> Result<Vec<Group>> {
+    Ok(scan_all_groups()?.into_iter().filter(|g| !is_trashed(g)).collect())
+}
+
+/// Grupos na lixeira: o purge consome esta lista.
+pub fn list_trashed_groups() -> Result<Vec<Group>> {
+    Ok(scan_all_groups()?.into_iter().filter(is_trashed).collect())
+}
+
+fn scan_all_groups() -> Result<Vec<Group>> {
     let configs = snapper::list_configs()?;
     let mut by_id: HashMap<GroupId, Vec<Member>> = HashMap::new();
     for cfg in &configs {
@@ -100,4 +137,39 @@ pub fn root_member(group: &Group) -> Result<Option<&Member>> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Group, GroupId, groups_to_prune};
+
+    fn groups(ids: &[GroupId]) -> Vec<Group> {
+        ids.iter()
+            .map(|&id| Group { id, members: Vec::new() })
+            .collect()
+    }
+
+    fn pruned_ids(groups: &[Group], keep: usize) -> Vec<GroupId> {
+        groups_to_prune(groups, keep).iter().map(|g| g.id).collect()
+    }
+
+    #[test]
+    fn keep_zero_prunes_nothing() {
+        let g = groups(&[5, 4, 3, 2, 1]);
+        assert!(pruned_ids(&g, 0).is_empty());
+    }
+
+    #[test]
+    fn fewer_or_equal_than_keep_prunes_nothing() {
+        let g = groups(&[3, 2, 1]);
+        assert!(pruned_ids(&g, 3).is_empty());
+        assert!(pruned_ids(&g, 5).is_empty());
+    }
+
+    #[test]
+    fn prunes_tail_beyond_keep() {
+        // newest-first: mantém os 2 mais novos (5, 4), poda o resto.
+        let g = groups(&[5, 4, 3, 2, 1]);
+        assert_eq!(pruned_ids(&g, 2), vec![3, 2, 1]);
+    }
 }
