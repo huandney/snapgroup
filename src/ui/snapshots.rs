@@ -2,7 +2,7 @@ use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_MULTI, PAGE_INDENT, THEME, app_header, clear_screen,
-    confirm, content_width, ellipsize, header, input_line, line, prompt_hint,
+    content_width, ellipsize, header, input_line, line, prompt_hint,
     section_header, short_datetime, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
@@ -55,17 +55,15 @@ pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]
 /// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
 pub(crate) fn select_delete_plan(groups: &[Group], purge: bool) -> Result<Option<Vec<usize>>> {
     let _alt = AltScreen::enter();
-    // Lixeira é reversível (carência de TRASH_PRUNE_DAYS) → sem tela de
-    // confirmação. Purge é permanente → mantém a confirmação.
-    if !purge {
-        return select_delete_targets(groups, false);
-    }
+    // Uma tela de revisão para qualquer caminho (seleção ou "todos"): mostra o
+    // que será afetado e confirma. Trash ou purge só muda o texto. Esc na
+    // revisão volta pra seleção (um passo).
     loop {
-        let Some(indices) = select_delete_targets(groups, true)? else {
+        let Some(indices) = select_delete_targets(groups)? else {
             return Ok(None);
         };
         let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-        match confirm_delete_targets(&targets)? {
+        match confirm_delete_targets(&targets, purge)? {
             DeleteFlow::Proceed => return Ok(Some(indices)),
             DeleteFlow::Back => continue,
             DeleteFlow::Cancel => return Ok(None),
@@ -73,7 +71,7 @@ pub(crate) fn select_delete_plan(groups: &[Group], purge: bool) -> Result<Option
     }
 }
 
-fn select_delete_targets(groups: &[Group], purge: bool) -> Result<Option<Vec<usize>>> {
+fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     loop {
         clear_screen();
         header("Apagar checkpoints");
@@ -90,10 +88,9 @@ fn select_delete_targets(groups: &[Group], purge: bool) -> Result<Option<Vec<usi
                 Some(targets) => return Ok(Some(targets)),
                 None => continue,
             },
-            Some(1) => match select_all_delete_targets(groups, purge)? {
-                Some(targets) => return Ok(Some(targets)),
-                None => continue,
-            },
+            // "Apagar todos" só seleciona; a revisão única em select_delete_plan
+            // já cobre a confirmação — sem segunda pergunta redundante.
+            Some(1) => return Ok(Some((0..groups.len()).collect())),
             _ => return Ok(None),
         }
     }
@@ -147,26 +144,6 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     Ok(Some(selections))
 }
 
-fn select_all_delete_targets(groups: &[Group], purge: bool) -> Result<Option<Vec<usize>>> {
-    // Trash de todos é reversível → sem confirmação.
-    if !purge {
-        return Ok(Some((0..groups.len()).collect()));
-    }
-    let targets: Vec<&Group> = groups.iter().collect();
-    match confirm_delete_targets_with_prompt(&targets, "Apagar permanentemente?", Some("ignora a lixeira"))? {
-        DeleteFlow::Proceed => {
-            clear_screen();
-            header("Apagar checkpoints");
-            if confirm("Tem certeza que deseja apagar TODOS permanentemente?")? {
-                Ok(Some((0..groups.len()).collect()))
-            } else {
-                Ok(None)
-            }
-        }
-        DeleteFlow::Back | DeleteFlow::Cancel => Ok(None),
-    }
-}
-
 /// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
 /// um passo); `Cancel` = "Cancelar" explícito (encerra).
 enum DeleteFlow {
@@ -175,8 +152,13 @@ enum DeleteFlow {
     Cancel,
 }
 
-fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
-    confirm_delete_targets_with_prompt(targets, "Apagar permanentemente?", Some("ignora a lixeira"))
+fn confirm_delete_targets(targets: &[&Group], purge: bool) -> Result<DeleteFlow> {
+    let (prompt, hint) = if purge {
+        ("Apagar permanentemente?", "ignora a lixeira")
+    } else {
+        ("Mover para a lixeira?", "recuperável em snapg trash")
+    };
+    confirm_delete_targets_with_prompt(targets, prompt, Some(hint))
 }
 
 fn confirm_delete_targets_with_prompt(
