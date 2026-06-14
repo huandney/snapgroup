@@ -1,5 +1,6 @@
 use crate::boot;
 use crate::btrfs;
+use crate::config;
 use crate::doctor;
 use crate::group::{self, Group, Member};
 use crate::rollback::{self, RollbackError};
@@ -29,6 +30,7 @@ impl RestoreRegretPolicy {
 }
 
 pub fn save(description: Option<String>) -> Result<()> {
+    let cfg = config::load();
     let id = epoch_now()?;
 
     let configs = snapper::list_configs()?;
@@ -47,6 +49,9 @@ pub fn save(description: Option<String>) -> Result<()> {
     if gate_pending_restore_if_any(&configs)? {
         return Ok(());
     }
+
+    // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
+    purge_expired_trash(&cfg);
 
     let mut mountpoints = Vec::new();
     for cfg in &configs {
@@ -85,6 +90,103 @@ pub fn save(description: Option<String>) -> Result<()> {
     }
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
+
+    // Cleanup group-aware: o grupo recém-criado é o mais novo, logo protegido
+    // pelo "manter os N mais novos". Best-effort — o snapshot já está no disco.
+    run_cleanup(&cfg);
+    Ok(())
+}
+
+/// Razão da ida pra lixeira, gravada no userdata pra futura tela `snapg trash`
+/// distinguir poda automática de exclusão manual (janelas de carência podem
+/// divergir depois).
+#[derive(Clone, Copy)]
+enum TrashReason {
+    Cleanup,
+    Manual,
+}
+
+impl TrashReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            TrashReason::Cleanup => "cleanup",
+            TrashReason::Manual => "manual",
+        }
+    }
+}
+
+/// Marca todos os membros do grupo como lixeira. Best-effort por membro: um
+/// membro que falha não impede os outros — o grupo fica meio-marcado, mas
+/// `is_trashed` (qualquer membro) já o esconde e o próximo purge completa.
+fn trash_group(g: &Group, trash_epoch: i64, reason: TrashReason) -> usize {
+    let mut ok = 0;
+    for m in &g.members {
+        match snapper::trash(&m.config, m.snapshot.number, g.id, trash_epoch, reason.as_str()) {
+            Ok(()) => ok += 1,
+            Err(e) => snapshots::print_trash_member_failed(&m.config, m.snapshot.number, &e),
+        }
+    }
+    ok
+}
+
+fn run_cleanup(cfg: &config::Config) {
+    if cfg.keep_groups == 0 {
+        return; // ilimitado
+    }
+    if let Err(e) = try_cleanup(cfg.keep_groups) {
+        snapshots::print_cleanup_failed(&e);
+    }
+}
+
+fn try_cleanup(keep: usize) -> Result<()> {
+    let groups = group::list_groups()?; // visíveis, newest-first
+    let prune = group::groups_to_prune(&groups, keep);
+    if prune.is_empty() {
+        return Ok(());
+    }
+    let trash_epoch = epoch_now()?;
+    let mut moved = 0;
+    for g in prune {
+        if trash_group(g, trash_epoch, TrashReason::Cleanup) > 0 {
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        snapshots::print_cleanup_done(moved);
+    }
+    Ok(())
+}
+
+fn purge_expired_trash(cfg: &config::Config) {
+    if let Err(e) = try_purge_expired_trash(cfg) {
+        snapshots::print_purge_failed(&e);
+    }
+}
+
+fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
+    let trashed = group::list_trashed_groups()?;
+    if trashed.is_empty() {
+        return Ok(());
+    }
+    // O parser limita trash_prune_days a MAX_PRUNE_DAYS, então o cast e a
+    // multiplicação não estouram i64.
+    let cutoff = epoch_now()? - cfg.trash_prune_days as i64 * 86_400;
+    let mut purged = 0;
+    for g in &trashed {
+        let Some(marked_at) = group::trash_epoch(g) else {
+            continue;
+        };
+        if marked_at > cutoff {
+            continue; // ainda na carência
+        }
+        match delete_group_members(g) {
+            Ok(()) => purged += 1,
+            Err(e) => snapshots::print_purge_member_failed(g.id, &e),
+        }
+    }
+    if purged > 0 {
+        snapshots::print_purge_done(purged);
+    }
     Ok(())
 }
 
@@ -919,13 +1021,17 @@ fn handle_partial(g: &Group, rerr: RollbackError, mount_path: &Path) -> Result<(
     Ok(())
 }
 
-pub fn delete(yes: bool) -> Result<()> {
+pub fn delete(yes: bool, purge: bool) -> Result<()> {
     // Gate: não apagar checkpoints com uma restauração pendente de reboot —
     // resolve antes (concluir ou cancelar).
+    let cfg = config::load();
     let configs = snapper::list_configs()?;
     if gate_pending_restore_if_any(&configs)? {
         return Ok(());
     }
+
+    // Purga de carona, como no save.
+    purge_expired_trash(&cfg);
 
     let groups = group::list_groups()?;
     if groups.is_empty() {
@@ -933,32 +1039,104 @@ pub fn delete(yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // -y: deleta o mais recente sem TUI (backward compat / scripting).
+    // -y: opera no mais recente sem TUI (scripting / emergência com --purge).
     if yes {
-        let g = &groups[0];
-        delete_group(g)?;
-        return Ok(());
+        return apply_delete(&[&groups[0]], purge);
     }
 
-    // Wizard interativo no alternate screen; a exclusão roda fora, no normal.
-    let Some(target_indices) = snapshots::select_delete_plan(&groups)? else {
+    // Wizard interativo no alternate screen; a ação roda fora, no normal.
+    let Some(target_indices) = snapshots::select_delete_plan(&groups, purge)? else {
         snapshots::print_delete_cancelled();
         return Ok(());
     };
+    let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
+    apply_delete(&targets, purge)
+}
 
-    for i in target_indices {
-        delete_group(&groups[i])?;
+/// Purge = deleção permanente imediata (irreversível). Senão move pra lixeira,
+/// reversível até o purge automático após `TRASH_PRUNE_DAYS`.
+fn apply_delete(targets: &[&Group], purge: bool) -> Result<()> {
+    if purge {
+        for g in targets {
+            delete_group(g)?;
+        }
+        return Ok(());
+    }
+    let trash_epoch = epoch_now()?;
+    let mut moved = 0;
+    for g in targets {
+        if trash_group(g, trash_epoch, TrashReason::Manual) > 0 {
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        snapshots::print_trash_done(moved);
     }
     Ok(())
 }
 
 fn delete_group(g: &Group) -> Result<()> {
+    delete_group_members(g)?;
+    snapshots::print_delete_done(g);
+    Ok(())
+}
+
+fn delete_group_members(g: &Group) -> Result<()> {
     for m in &g.members {
         snapper::delete(&m.config, m.snapshot.number)
             .with_context(|| format!("apagar {} #{}", m.config, m.snapshot.number))?;
     }
-    snapshots::print_delete_done(g);
     Ok(())
+}
+
+/// Gestão da lixeira: lista grupos marcados e oferece restaurar (volta ao pool)
+/// ou apagar de vez. Não gateia pending — flip de userdata e delete de
+/// snapshots na lixeira não tocam a máquina de restauração pendente.
+pub fn trash() -> Result<()> {
+    let cfg = config::load();
+    let groups = group::list_trashed_groups()?;
+    if groups.is_empty() {
+        snapshots::print_trash_empty();
+        return Ok(());
+    }
+
+    use crate::ui::trash::TrashAction;
+    match crate::ui::trash::select_trash_action(&groups, cfg.trash_prune_days)? {
+        None => {
+            snapshots::print_trash_cancelled();
+            Ok(())
+        }
+        Some(TrashAction::Restore(indices)) => {
+            let mut restored = 0;
+            for i in indices {
+                if untrash_group(&groups[i]) > 0 {
+                    restored += 1;
+                }
+            }
+            if restored > 0 {
+                snapshots::print_untrash_done(restored);
+            }
+            Ok(())
+        }
+        Some(TrashAction::Purge(indices)) => {
+            for i in indices {
+                delete_group(&groups[i])?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Tira o grupo da lixeira. Best-effort por membro, como `trash_group`.
+fn untrash_group(g: &Group) -> usize {
+    let mut ok = 0;
+    for m in &g.members {
+        match snapper::untrash(&m.config, m.snapshot.number, g.id) {
+            Ok(()) => ok += 1,
+            Err(e) => snapshots::print_untrash_member_failed(&m.config, m.snapshot.number, &e),
+        }
+    }
+    ok
 }
 
 pub fn list() -> Result<()> {

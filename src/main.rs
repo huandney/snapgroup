@@ -2,6 +2,7 @@ mod boot;
 mod btrfs;
 mod cli;
 mod commands;
+mod config;
 mod doctor;
 mod group;
 mod lock;
@@ -29,9 +30,13 @@ fn main() -> Result<()> {
             let _lock = lock::acquire()?;
             commands::restore()
         }
-        cli::Command::Delete { yes } => {
+        cli::Command::Delete { yes, purge } => {
             let _lock = lock::acquire()?;
-            commands::delete(yes)
+            commands::delete(yes, purge)
+        }
+        cli::Command::Trash => {
+            let _lock = lock::acquire()?;
+            commands::trash()
         }
         cli::Command::Rename { id, description } => {
             let _lock = lock::acquire()?;

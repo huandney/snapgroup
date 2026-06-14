@@ -2,7 +2,7 @@ use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_MULTI, PAGE_INDENT, THEME, app_header, clear_screen,
-    confirm, content_width, ellipsize, header, input_line, line, prompt_hint,
+    content_width, ellipsize, header, input_line, line, prompt_hint,
     section_header, short_datetime, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
@@ -53,14 +53,17 @@ pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]
 /// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
 /// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
 /// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
-pub(crate) fn select_delete_plan(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+pub(crate) fn select_delete_plan(groups: &[Group], purge: bool) -> Result<Option<Vec<usize>>> {
     let _alt = AltScreen::enter();
+    // Uma tela de revisão para qualquer caminho (seleção ou "todos"): mostra o
+    // que será afetado e confirma. Trash ou purge só muda o texto. Esc na
+    // revisão volta pra seleção (um passo).
     loop {
         let Some(indices) = select_delete_targets(groups)? else {
             return Ok(None);
         };
         let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-        match confirm_delete_targets(&targets)? {
+        match confirm_delete_targets(&targets, purge)? {
             DeleteFlow::Proceed => return Ok(Some(indices)),
             DeleteFlow::Back => continue,
             DeleteFlow::Cancel => return Ok(None),
@@ -85,10 +88,9 @@ fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
                 Some(targets) => return Ok(Some(targets)),
                 None => continue,
             },
-            Some(1) => match select_all_delete_targets(groups)? {
-                Some(targets) => return Ok(Some(targets)),
-                None => continue,
-            },
+            // "Apagar todos" só seleciona; a revisão única em select_delete_plan
+            // já cobre a confirmação — sem segunda pergunta redundante.
+            Some(1) => return Ok(Some((0..groups.len()).collect())),
             _ => return Ok(None),
         }
     }
@@ -142,22 +144,6 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     Ok(Some(selections))
 }
 
-fn select_all_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    let targets: Vec<&Group> = groups.iter().collect();
-    match confirm_delete_targets_with_prompt(&targets, "Confirmar?", Some("todos selecionados"))? {
-        DeleteFlow::Proceed => {
-            clear_screen();
-            header("Apagar checkpoints");
-            if confirm("Tem certeza que deseja apagar todos os checkpoints?")? {
-                Ok(Some((0..groups.len()).collect()))
-            } else {
-                Ok(None)
-            }
-        }
-        DeleteFlow::Back | DeleteFlow::Cancel => Ok(None),
-    }
-}
-
 /// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
 /// um passo); `Cancel` = "Cancelar" explícito (encerra).
 enum DeleteFlow {
@@ -166,8 +152,13 @@ enum DeleteFlow {
     Cancel,
 }
 
-fn confirm_delete_targets(targets: &[&Group]) -> Result<DeleteFlow> {
-    confirm_delete_targets_with_prompt(targets, "Confirmar?", None)
+fn confirm_delete_targets(targets: &[&Group], purge: bool) -> Result<DeleteFlow> {
+    let (prompt, hint) = if purge {
+        ("Apagar permanentemente?", "ignora a lixeira")
+    } else {
+        ("Mover para a lixeira?", "recuperável em snapg trash")
+    };
+    confirm_delete_targets_with_prompt(targets, prompt, Some(hint))
 }
 
 fn confirm_delete_targets_with_prompt(
@@ -283,6 +274,68 @@ pub(crate) fn print_delete_done(g: &Group) {
         style("✓").green().bold(),
         g.id,
         g.members.len()
+    );
+}
+
+pub(crate) fn print_trash_done(n: usize) {
+    println!(
+        "{} {n} checkpoint(s) movido(s) para a lixeira",
+        style("✓").green().bold(),
+    );
+}
+
+pub(crate) fn print_trash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
+    eprintln!(
+        "{} falha ao marcar {config} #{number} como lixeira: {e:#}",
+        style("!").yellow().bold()
+    );
+}
+
+pub(crate) fn print_cleanup_done(n: usize) {
+    println!(
+        "{} cleanup: {n} grupo(s) antigo(s) movido(s) para a lixeira",
+        style("✓").green().bold(),
+    );
+}
+
+pub(crate) fn print_cleanup_failed(e: &anyhow::Error) {
+    eprintln!("{} cleanup falhou: {e:#}", style("!").yellow().bold());
+}
+
+pub(crate) fn print_purge_done(n: usize) {
+    println!(
+        "{} lixeira: {n} grupo(s) expirado(s) apagado(s)",
+        style("✓").green().bold(),
+    );
+}
+
+pub(crate) fn print_purge_failed(e: &anyhow::Error) {
+    eprintln!("{} purge da lixeira falhou: {e:#}", style("!").yellow().bold());
+}
+
+pub(crate) fn print_purge_member_failed(id: GroupId, e: &anyhow::Error) {
+    eprintln!("{} falha ao purgar grupo {id}: {e:#}", style("!").yellow().bold());
+}
+
+pub(crate) fn print_trash_empty() {
+    println!("lixeira vazia");
+}
+
+pub(crate) fn print_trash_cancelled() {
+    println!("cancelado");
+}
+
+pub(crate) fn print_untrash_done(n: usize) {
+    println!(
+        "{} {n} grupo(s) restaurado(s) da lixeira",
+        style("✓").green().bold(),
+    );
+}
+
+pub(crate) fn print_untrash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
+    eprintln!(
+        "{} falha ao restaurar {config} #{number} da lixeira: {e:#}",
+        style("!").yellow().bold()
     );
 }
 

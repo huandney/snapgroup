@@ -31,12 +31,17 @@ pub enum Command {
         #[arg(num_args = 0.., trailing_var_arg = true)]
         description: Vec<String>,
     },
-    /// Apaga o grupo mais recente criado por save
+    /// Move checkpoints para a lixeira (purga após TRASH_PRUNE_DAYS)
     Delete {
-        /// Pula confirmação interativa
+        /// Sem TUI: opera no grupo mais recente
         #[arg(short = 'y', long)]
         yes: bool,
+        /// Apaga permanentemente, ignorando a lixeira (irreversível)
+        #[arg(long)]
+        purge: bool,
     },
+    /// Gerencia a lixeira: restaura grupos ou apaga de vez
+    Trash,
     /// Diagnostica o boot e oferece correção assistida quando necessário
     Doctor {
         /// Root do sistema alvo (ex: /mnt em recuperação por Live-USB)
