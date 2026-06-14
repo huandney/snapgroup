@@ -5,7 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0-beta] - 2026-06-14
+> Commits: `84138b2`, `c787fea`, `a0cc337`, `65d37e8`, `85bea69`
 
 ### Commands
 - **Feature**: Group-aware automatic cleanup. With `KEEP_GROUPS=N` in `/etc/snapgroup.conf`, `snapg save` moves groups beyond the N newest to the trash; the default `0` keeps the previous unlimited behavior. Cleanup is group-aware on purpose — Snapper's own per-config retention would prune one subvolume's snapshot and leave its group half-broken.
