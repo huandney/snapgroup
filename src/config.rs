@@ -2,6 +2,11 @@ use std::fs;
 
 const PATH: &str = "/etc/snapgroup.conf";
 
+/// Teto da carência: 10 anos. Acima disso, `dias * 86_400` no cálculo do cutoff
+/// estouraria `i64` e, no release (wrap silencioso), viraria negativo —
+/// purgando a lixeira inteira. Também pega typo (um valor absurdo).
+const MAX_PRUNE_DAYS: u64 = 3650;
+
 /// Config persistente do snapgroup. Arquivo ausente ou chave inválida cai no
 /// default — o snapgroup nasceu zero-config e instalar a feature não pode
 /// mudar comportamento de ninguém sem opt-in.
@@ -51,8 +56,10 @@ fn parse(content: &str) -> Config {
                 }
             }
             "TRASH_PRUNE_DAYS" => {
-                if let Ok(n) = val.parse() {
-                    cfg.trash_prune_days = n;
+                // Valor grande sinaliza "reter muito" → clampa no teto seguro,
+                // em vez de cair no default e encolher a janela em silêncio.
+                if let Ok(n) = val.parse::<u64>() {
+                    cfg.trash_prune_days = n.min(MAX_PRUNE_DAYS);
                 }
             }
             _ => {}
@@ -91,6 +98,13 @@ mod tests {
         // Negativo poria o cutoff no futuro e purgaria tudo na hora; u64 rejeita.
         let cfg = parse("TRASH_PRUNE_DAYS=-1\n");
         assert_eq!(cfg.trash_prune_days, 15);
+    }
+
+    #[test]
+    fn huge_prune_days_clamps_to_max() {
+        // Sem teto, dias*86400 estoura i64 e o cutoff vira negativo no release.
+        let cfg = parse("TRASH_PRUNE_DAYS=999999999999\n");
+        assert_eq!(cfg.trash_prune_days, super::MAX_PRUNE_DAYS);
     }
 
     #[test]

@@ -168,6 +168,8 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
     if trashed.is_empty() {
         return Ok(());
     }
+    // O parser limita trash_prune_days a MAX_PRUNE_DAYS, então o cast e a
+    // multiplicação não estouram i64.
     let cutoff = epoch_now()? - cfg.trash_prune_days as i64 * 86_400;
     let mut purged = 0;
     for g in &trashed {
