@@ -168,7 +168,7 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
     if trashed.is_empty() {
         return Ok(());
     }
-    let cutoff = epoch_now()? - cfg.trash_prune_days * 86_400;
+    let cutoff = epoch_now()? - cfg.trash_prune_days as i64 * 86_400;
     let mut purged = 0;
     for g in &trashed {
         let Some(marked_at) = group::trash_epoch(g) else {
@@ -1085,6 +1085,56 @@ fn delete_group_members(g: &Group) -> Result<()> {
             .with_context(|| format!("apagar {} #{}", m.config, m.snapshot.number))?;
     }
     Ok(())
+}
+
+/// Gestão da lixeira: lista grupos marcados e oferece restaurar (volta ao pool)
+/// ou apagar de vez. Não gateia pending — flip de userdata e delete de
+/// snapshots na lixeira não tocam a máquina de restauração pendente.
+pub fn trash() -> Result<()> {
+    let cfg = config::load();
+    let groups = group::list_trashed_groups()?;
+    if groups.is_empty() {
+        snapshots::print_trash_empty();
+        return Ok(());
+    }
+
+    use crate::ui::trash::TrashAction;
+    match crate::ui::trash::select_trash_action(&groups, cfg.trash_prune_days)? {
+        None => {
+            snapshots::print_trash_cancelled();
+            Ok(())
+        }
+        Some(TrashAction::Restore(indices)) => {
+            let mut restored = 0;
+            for i in indices {
+                if untrash_group(&groups[i]) > 0 {
+                    restored += 1;
+                }
+            }
+            if restored > 0 {
+                snapshots::print_untrash_done(restored);
+            }
+            Ok(())
+        }
+        Some(TrashAction::Purge(indices)) => {
+            for i in indices {
+                delete_group(&groups[i])?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Tira o grupo da lixeira. Best-effort por membro, como `trash_group`.
+fn untrash_group(g: &Group) -> usize {
+    let mut ok = 0;
+    for m in &g.members {
+        match snapper::untrash(&m.config, m.snapshot.number, g.id) {
+            Ok(()) => ok += 1,
+            Err(e) => snapshots::print_untrash_member_failed(&m.config, m.snapshot.number, &e),
+        }
+    }
+    ok
 }
 
 pub fn list() -> Result<()> {

@@ -335,6 +335,28 @@ pub(crate) fn print_purge_member_failed(id: GroupId, e: &anyhow::Error) {
     eprintln!("{} falha ao purgar grupo {id}: {e:#}", style("!").yellow().bold());
 }
 
+pub(crate) fn print_trash_empty() {
+    println!("lixeira vazia");
+}
+
+pub(crate) fn print_trash_cancelled() {
+    println!("cancelado");
+}
+
+pub(crate) fn print_untrash_done(n: usize) {
+    println!(
+        "{} {n} grupo(s) restaurado(s) da lixeira",
+        style("✓").green().bold(),
+    );
+}
+
+pub(crate) fn print_untrash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
+    eprintln!(
+        "{} falha ao restaurar {config} #{number} da lixeira: {e:#}",
+        style("!").yellow().bold()
+    );
+}
+
 pub(crate) fn print_no_groups() {
     println!("nenhum grupo snapg save encontrado");
 }

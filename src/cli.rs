@@ -40,6 +40,8 @@ pub enum Command {
         #[arg(long)]
         purge: bool,
     },
+    /// Gerencia a lixeira: restaura grupos ou apaga de vez
+    Trash,
     /// Diagnostica o boot e oferece correção assistida quando necessário
     Doctor {
         /// Root do sistema alvo (ex: /mnt em recuperação por Live-USB)

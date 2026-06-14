@@ -9,7 +9,9 @@ pub struct Config {
     /// Quantos grupos snapg manter vivos. `0` = ilimitado (comportamento legado).
     pub keep_groups: usize,
     /// Dias que um grupo fica na lixeira antes do purge apagar de vez.
-    pub trash_prune_days: i64,
+    /// `u64`: dias negativos não existem, e um valor negativo poria o cutoff
+    /// no futuro e purgaria a lixeira inteira na hora.
+    pub trash_prune_days: u64,
 }
 
 impl Default for Config {
@@ -82,6 +84,13 @@ mod tests {
         let cfg = parse("KEEP_GROUPS=abc\nTRASH_PRUNE_DAYS=7\n");
         assert_eq!(cfg.keep_groups, 0);
         assert_eq!(cfg.trash_prune_days, 7);
+    }
+
+    #[test]
+    fn negative_prune_days_keeps_default() {
+        // Negativo poria o cutoff no futuro e purgaria tudo na hora; u64 rejeita.
+        let cfg = parse("TRASH_PRUNE_DAYS=-1\n");
+        assert_eq!(cfg.trash_prune_days, 15);
     }
 
     #[test]

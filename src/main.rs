@@ -34,6 +34,10 @@ fn main() -> Result<()> {
             let _lock = lock::acquire()?;
             commands::delete(yes, purge)
         }
+        cli::Command::Trash => {
+            let _lock = lock::acquire()?;
+            commands::trash()
+        }
         cli::Command::Rename { id, description } => {
             let _lock = lock::acquire()?;
             rename::run(id, description)
