@@ -5,7 +5,7 @@ use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold,
+    THEME, branch, clear_screen, confirm, content_width, header, input_line, line, prompt_bold,
     prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
     truncate_for_terminal,
     wrap_text,
@@ -27,9 +27,12 @@ pub(crate) struct RegretEntry {
 /// Regret ativo: estado anterior à última restauração já efetivada por reboot,
 /// com a data do restore que o estabeleceu. O pending (restauração não
 /// reiniciada) não passa por aqui — é resolvido por `select_pending_action`.
+#[derive(Clone)]
 pub(crate) struct RegretInfo {
     pub(crate) entries: Vec<RegretEntry>,
     pub(crate) creation_time: String,
+    pub(crate) origin_date: Option<String>,
+    pub(crate) saved: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -88,11 +91,21 @@ pub(crate) enum RestoreAction {
     Abort,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RegretAction {
+    Restore,
+    Keep,
+}
+
 /// Plano de restauração escolhido pelo wizard, pronto pra executar no terminal
 /// normal (já fora do alternate screen).
 pub(crate) enum RestorePlan {
     Checkpoint(Group),
     Regret(RegretInfo),
+    KeepRegret {
+        regret: RegretInfo,
+        description: String,
+    },
 }
 
 /// Roda o wizard interativo inteiro (pontos → membros → revisão) dentro do
@@ -124,6 +137,23 @@ pub(crate) fn select_restore_plan(
             }
             RestoreAction::Regret => {
                 let info = regret.unwrap();
+                if !info.saved {
+                    let Some(action) = select_regret_action(info)? else {
+                        continue;
+                    };
+                    if matches!(action, RegretAction::Keep) {
+                        let placeholder = default_regret_checkpoint_name(info);
+                        let Some(description) =
+                            prompt_keep_regret_name(info, regret_kernel.unwrap_or("?"), &placeholder)?
+                        else {
+                            continue;
+                        };
+                        return Ok(Some(RestorePlan::KeepRegret {
+                            regret: info.clone(),
+                            description,
+                        }));
+                    }
+                }
                 loop {
                     let Some(selected) = select_regret_members(info)? else {
                         break;
@@ -160,9 +190,10 @@ pub(crate) fn select_restore_action(
 
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
+        let title = if r.saved { "↺ Regret guardado" } else { "↺ Regret" };
         let text = format!(
             "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
-            "↺ Regret",
+            title,
             kernel,
             short_datetime(&r.creation_time),
             r.entries.len()
@@ -206,10 +237,66 @@ pub(crate) fn select_restore_action(
     Ok(actions.remove(selection))
 }
 
+pub(crate) fn select_regret_action(regret: &RegretInfo) -> Result<Option<RegretAction>> {
+    clear_screen();
+    header("Regret");
+    line(format_args!(
+        "{}  {}  estado anterior à última restauração  {}  criado {}",
+        regret_title("↺ Regret"),
+        style("·").dim(),
+        style("·").dim(),
+        short_datetime(&regret.creation_time)
+    ));
+    line(format_args!("membros {}", regret.entries.len()));
+    println!();
+
+    let actions = [RegretAction::Restore, RegretAction::Keep];
+    let Some(selection) = dialoguer::Select::with_theme(&THEME)
+        .items(&["Restaurar Regret", "Guardar como checkpoint"])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(actions[selection]))
+}
+
+pub(crate) fn default_regret_checkpoint_name(regret: &RegretInfo) -> String {
+    let date = regret
+        .origin_date
+        .as_deref()
+        .unwrap_or(&regret.creation_time);
+    format!("Regret {}", short_datetime(date))
+}
+
+pub(crate) fn prompt_keep_regret_name(
+    regret: &RegretInfo,
+    kernel: &str,
+    placeholder: &str,
+) -> Result<Option<String>> {
+    let members = regret.entries.len();
+    let kernel = kernel.to_string();
+    input_line("Nome", "", placeholder, "enter confirma · esc volta", move || {
+        clear_screen();
+        header("Guardar Regret");
+        line(format_args!("{:<9} {}", "membros", members));
+        line(format_args!("{:<9} {}", "kernel", kernel));
+        line(format_args!(
+            "{:<9} {}",
+            "origem",
+            short_datetime(&regret.creation_time)
+        ));
+        println!();
+    })
+}
+
 const RESTORE_NAME_COL_MAX: usize = 28;
 
 fn restore_name_col(groups: &[Group], has_regret: bool) -> usize {
-    let regret_len = if has_regret { "↺ Regret".chars().count() } else { 0 };
+    let regret_len = if has_regret { "↺ Regret guardado".chars().count() } else { 0 };
     groups
         .iter()
         .map(|g| group::description(g).chars().count())
@@ -633,7 +720,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
             m.config,
             mountpoint,
             m.snapshot.number,
-            short_datetime(&m.snapshot.date)
+            short_datetime(group::snapshot_date(&m.snapshot))
         );
         items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
@@ -703,9 +790,10 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
 
     clear_screen();
     header("Restaurar Regret");
+    let title = if regret.saved { "↺ Regret guardado" } else { "↺ Regret" };
     line(format_args!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
-        regret_title("↺ Regret"),
+        regret_title(title),
         style("·").dim(),
         style("·").dim(),
         short_datetime(&regret.creation_time)
@@ -737,6 +825,8 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     Ok(Some(RegretInfo {
         entries,
         creation_time: regret.creation_time.clone(),
+        origin_date: regret.origin_date.clone(),
+        saved: regret.saved,
     }))
 }
 

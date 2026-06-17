@@ -1,7 +1,7 @@
 use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::term::{
-    AltScreen, CONTENT_INDENT, HINT_MULTI, PAGE_INDENT, THEME, app_header, clear_screen,
+    AltScreen, CONTENT_INDENT, HINT_MULTI, THEME, app_header, clear_screen,
     content_width, ellipsize, header, input_line, line, prompt_hint,
     section_header, short_datetime, truncate_for_terminal,
 };
@@ -36,11 +36,10 @@ pub(crate) fn print_save_cancelled() {
 
 /// Confirmação do save no vocabulário do `list`: nome primeiro, badges de
 /// mountpoint (root primeiro) e ID em dim. Os números por-config do snapper
-/// são detalhe interno — nenhum outro comando os pede. PAGE_INDENT alinha a
-/// linha com os section headers.
+/// são detalhe interno — nenhum outro comando os pede.
 pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]) {
     println!(
-        "{PAGE_INDENT}{} {} salvo  {}  {}  {}  {}",
+        "{} {} salvo  {}  {}  {}  {}",
         style("✓").green().bold(),
         ellipsize(desc, NAME_COL_MAX),
         style("·").dim(),
@@ -279,8 +278,9 @@ pub(crate) fn print_delete_done(g: &Group) {
 
 pub(crate) fn print_trash_done(n: usize) {
     println!(
-        "{} {n} checkpoint(s) movido(s) para a lixeira",
+        "{} {}",
         style("✓").green().bold(),
+        count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira"),
     );
 }
 
@@ -293,8 +293,9 @@ pub(crate) fn print_trash_member_failed(config: &str, number: u32, e: &anyhow::E
 
 pub(crate) fn print_cleanup_done(n: usize) {
     println!(
-        "{} cleanup: {n} grupo(s) antigo(s) movido(s) para a lixeira",
+        "{} cleanup: {}",
         style("✓").green().bold(),
+        count_text(n, "grupo antigo movido para a lixeira", "grupos antigos movidos para a lixeira"),
     );
 }
 
@@ -304,8 +305,9 @@ pub(crate) fn print_cleanup_failed(e: &anyhow::Error) {
 
 pub(crate) fn print_purge_done(n: usize) {
     println!(
-        "{} lixeira: {n} grupo(s) expirado(s) apagado(s)",
+        "{} lixeira: {}",
         style("✓").green().bold(),
+        count_text(n, "grupo expirado apagado", "grupos expirados apagados"),
     );
 }
 
@@ -327,9 +329,15 @@ pub(crate) fn print_trash_cancelled() {
 
 pub(crate) fn print_untrash_done(n: usize) {
     println!(
-        "{} {n} grupo(s) restaurado(s) da lixeira",
+        "{} {}",
         style("✓").green().bold(),
+        count_text(n, "grupo restaurado da lixeira", "grupos restaurados da lixeira"),
     );
+}
+
+fn count_text(n: usize, singular: &str, plural: &str) -> String {
+    let word = if n == 1 { singular } else { plural };
+    format!("{n} {word}")
 }
 
 pub(crate) fn print_untrash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
@@ -456,9 +464,10 @@ pub(crate) fn print_pending_restore_status() {
     println!();
 }
 
-pub(crate) fn print_regret_status(creation_time: &str, kernel: &str) {
+pub(crate) fn print_regret_status(creation_time: &str, kernel: &str, saved: bool) {
     app_header();
-    section_header("↺", "Regret ativo");
+    let title = if saved { "Regret ativo guardado" } else { "Regret ativo" };
+    section_header("↺", title);
     let kernel_col = kernel.chars().count().max(KERNEL_HEADER.len());
     line(format_args!(
         "{}   {}   {}",

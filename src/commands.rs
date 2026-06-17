@@ -62,7 +62,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // nome com o auto-nome como placeholder — Enter direto o aceita). Sem TTY
     // (script/cron), usa o mesmo auto-nome sem prompt — interatividade
     // quebraria automações que nunca a pediram.
-    let auto_name = format!("snapg save {id}");
+    let auto_name = default_checkpoint_name(id);
     let desc = match description {
         Some(d) => d,
         None if crate::ui::term::stdout_is_tty() => {
@@ -168,6 +168,9 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
     if trashed.is_empty() {
         return Ok(());
     }
+    purge_duplicate_regrets_in_groups(&trashed);
+
+    let trashed = group::list_trashed_groups()?;
     // O parser limita trash_prune_days a MAX_PRUNE_DAYS, então o cast e a
     // multiplicação não estouram i64.
     let cutoff = epoch_now()? - cfg.trash_prune_days as i64 * 86_400;
@@ -562,8 +565,16 @@ fn discover_regrets(toplevel: &Path, configs: &[String]) -> Result<Option<Regret
     if entries.is_empty() {
         return Ok(None);
     }
+    let creation_time = regret_creation_time(toplevel, &entries);
+    // Best-effort: a data normalizada só alimenta nome padrão e dedup visual
+    // ("Regret guardado"). Se `date -d` não entender o formato bruto do Btrfs,
+    // o Regret continua restaurável; apenas o checkpoint guardado pode aparecer
+    // como linha separada em vez de ser agrupado visualmente ao Regret ativo.
+    let origin_date = origin_date_from_creation_time(&creation_time).ok();
     Ok(Some(RegretInfo {
-        creation_time: regret_creation_time(toplevel, &entries),
+        creation_time,
+        origin_date,
+        saved: false,
         entries,
     }))
 }
@@ -586,7 +597,8 @@ fn restore_inner(
     mount_path: &Path,
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
-    let regret = discover_regrets(mount_path, configs)?;
+    let mut regret = discover_regrets(mount_path, configs)?;
+    let groups = hide_checkpoint_for_active_regret(groups, regret.as_mut());
 
     if groups.is_empty() && regret.is_none() {
         crate::ui::restore::print_no_restore_points();
@@ -594,12 +606,12 @@ fn restore_inner(
     }
 
     // Wizard interativo no alternate screen; ao sair, executa no terminal normal.
-    let kernel_labels = group::kernel_labels(groups, mount_path);
+    let kernel_labels = group::kernel_labels(&groups, mount_path);
     let regret_kernel = regret.as_ref().map(|r| regret_kernel_label(r, mount_path));
 
     loop {
         match select_restore_plan(
-            groups,
+            &groups,
             regret.as_ref(),
             &kernel_labels,
             regret_kernel.as_deref(),
@@ -624,8 +636,50 @@ fn restore_inner(
             Some(RestorePlan::Regret(selected)) => {
                 return execute_restore_regret(selected, mount_path);
             }
+            Some(RestorePlan::KeepRegret {
+                regret,
+                description,
+            }) => {
+                return execute_keep_regret_checkpoint(regret, &description, mount_path);
+            }
         }
     }
+}
+
+fn hide_checkpoint_for_active_regret(
+    groups: &[Group],
+    regret: Option<&mut RegretInfo>,
+) -> Vec<Group> {
+    let Some(regret) = regret else {
+        return groups.to_vec();
+    };
+    let Some(active_date) = regret.origin_date.as_deref() else {
+        return groups.to_vec();
+    };
+
+    let mut hidden = false;
+    let visible: Vec<Group> = groups
+        .iter()
+        .filter(|g| {
+            let matches_active_regret = regret_identity(g) == Some(active_date);
+            hidden |= matches_active_regret;
+            !matches_active_regret
+        })
+        .cloned()
+        .collect();
+    regret.saved = hidden;
+    visible
+}
+
+/// Identidade de um checkpoint guardado de Regret: a data de origem — chave
+/// natural, única (dois restores não ocorrem no mesmo segundo) e imutável (o
+/// otime do subvolume preservado). `None` para grupos que não são Regret
+/// guardado, ou cujo `date -d` falhou ao normalizar; esses não são agrupados
+/// nem deduplicados, apenas aparecem como linha própria.
+fn regret_identity(group: &Group) -> Option<&str> {
+    group::is_regret_origin(group)
+        .then(|| group::origin_date(group))
+        .flatten()
 }
 
 fn regret_kernel_label(regret: &RegretInfo, toplevel: &Path) -> String {
@@ -762,6 +816,12 @@ fn snapshot_from_info_xml(
         "snapgroup-id".to_string(),
         serde_json::Value::String(group_id),
     );
+    if let Some(origin_date) = snapgroup_userdata_value_from_info_xml(&content, "snapgroup-origin-date") {
+        userdata.insert(
+            "snapgroup-origin-date".to_string(),
+            serde_json::Value::String(origin_date),
+        );
+    }
     Ok(Some(snapper::Snapshot {
         number,
         kind: xml_text(&content, "type").unwrap_or_default(),
@@ -785,14 +845,7 @@ fn snapgroup_backup_name(info_xml: &Path) -> Option<String> {
 }
 
 fn snapgroup_id_from_info_xml(content: &str) -> Option<String> {
-    for block in xml_blocks(content, "userdata") {
-        let Some(key) = xml_text(block, "key") else {
-            continue;
-        };
-        if key != "snapgroup-id" {
-            continue;
-        }
-        let value = xml_text(block, "value")?;
+    if let Some(value) = snapgroup_userdata_value_from_info_xml(content, "snapgroup-id") {
         if is_digits(&value) {
             return Some(value);
         }
@@ -800,6 +853,19 @@ fn snapgroup_id_from_info_xml(content: &str) -> Option<String> {
     }
 
     snapgroup_id_from_inline_userdata(content)
+}
+
+fn snapgroup_userdata_value_from_info_xml(content: &str, wanted_key: &str) -> Option<String> {
+    for block in xml_blocks(content, "userdata") {
+        let Some(key) = xml_text(block, "key") else {
+            continue;
+        };
+        if key != wanted_key {
+            continue;
+        }
+        return xml_text(block, "value");
+    }
+    None
 }
 
 fn snapgroup_id_from_inline_userdata(content: &str) -> Option<String> {
@@ -953,6 +1019,205 @@ fn execute_restore_checkpoint(
     }
 }
 
+struct CreatedRegretSnapshot {
+    config: String,
+    number: u32,
+    path: PathBuf,
+}
+
+fn execute_keep_regret_checkpoint(
+    regret: RegretInfo,
+    description: &str,
+    mount_path: &Path,
+) -> Result<()> {
+    if let Some(origin_date) = regret.origin_date.as_deref()
+        && let Some(group) = trashed_regret_checkpoint(origin_date)?
+    {
+        let restored = untrash_group(&group);
+        if restored > 0 && restored == group.members.len() {
+            snapshots::print_untrash_done(1);
+            purge_duplicate_regrets_in_trash(group.id, origin_date);
+        }
+        return Ok(());
+    }
+
+    let id = epoch_now()?;
+    let userdata = regret_checkpoint_userdata(id, regret.origin_date.as_deref());
+    let pb = crate::ui::term::spinner(format!(
+        "guardando Regret como checkpoint {} ({} membros)…",
+        id,
+        regret.entries.len()
+    ));
+
+    let mut created = Vec::new();
+    for entry in &regret.entries {
+        let number = match snapper::create_with_userdata(&entry.config, description, &userdata)
+            .with_context(|| format!("criar checkpoint Regret em '{}'", entry.config))
+        {
+            Ok(number) => number,
+            Err(e) => {
+                cleanup_created_regret_snapshots(&created);
+                pb.finish_and_clear();
+                return Err(e);
+            }
+        };
+
+        let path = created_snapshot_path(mount_path, entry, number);
+        let current = CreatedRegretSnapshot {
+            config: entry.config.clone(),
+            number,
+            path,
+        };
+
+        if let Err(e) = replace_created_snapshot_with_regret(mount_path, entry, &current.path)
+            .with_context(|| format!("preencher checkpoint Regret em '{}'", entry.config))
+        {
+            cleanup_created_regret_snapshots(&created);
+            cleanup_created_regret_snapshot(&current);
+            pb.finish_and_clear();
+            return Err(e);
+        }
+
+        created.push(current);
+    }
+
+    pb.finish_and_clear();
+    let mut mountpoints: Vec<String> = regret.entries.into_iter().map(|e| e.mountpoint).collect();
+    snapshots::print_save_created(id, description, &mut mountpoints);
+    Ok(())
+}
+
+fn regret_checkpoint_userdata(id: i64, origin_date: Option<&str>) -> String {
+    let mut fields = vec![
+        format!("snapgroup-id={id}"),
+        "snapgroup-origin=regret".to_string(),
+    ];
+    if let Some(date) = origin_date {
+        fields.push(format!("snapgroup-origin-date={date}"));
+    }
+    fields.join(",")
+}
+
+fn trashed_regret_checkpoint(origin_date: &str) -> Result<Option<Group>> {
+    Ok(group::list_trashed_groups()?
+        .into_iter()
+        .find(|g| regret_identity(g) == Some(origin_date)))
+}
+
+fn purge_duplicate_regrets_in_trash(keep_id: i64, origin_date: &str) {
+    let Ok(groups) = group::list_trashed_groups() else {
+        return;
+    };
+    for group in duplicate_regrets_matching(&groups, keep_id, origin_date) {
+        let _ = delete_group_members(group);
+    }
+}
+
+fn purge_duplicate_regrets_in_groups(groups: &[Group]) {
+    for group in duplicate_regret_groups(groups) {
+        let _ = delete_group_members(group);
+    }
+}
+
+fn duplicate_regrets_matching<'a>(
+    groups: &'a [Group],
+    keep_id: i64,
+    origin_date: &str,
+) -> Vec<&'a Group> {
+    groups
+        .iter()
+        .filter(|g| g.id != keep_id)
+        .filter(|g| regret_identity(g) == Some(origin_date))
+        .collect()
+}
+
+fn duplicate_regret_groups(groups: &[Group]) -> Vec<&Group> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut duplicates = Vec::new();
+
+    for group in groups {
+        let Some(date) = regret_identity(group) else {
+            continue;
+        };
+        if seen.contains(&date) {
+            duplicates.push(group);
+        } else {
+            seen.push(date);
+        }
+    }
+
+    duplicates
+}
+
+fn created_snapshot_path(
+    mount_path: &Path,
+    entry: &RegretEntry,
+    number: u32,
+) -> PathBuf {
+    let live_path = format!(
+        "{}/.snapshots/{}/snapshot",
+        entry.mountpoint.trim_end_matches('/'),
+        number
+    );
+    if let Ok(relative) = btrfs::subvol_relative_path(Path::new(&live_path)) {
+        return mount_path.join(relative);
+    }
+    mount_path
+        .join(&entry.current_subvol)
+        .join(".snapshots")
+        .join(number.to_string())
+        .join("snapshot")
+}
+
+fn replace_created_snapshot_with_regret(
+    mount_path: &Path,
+    entry: &RegretEntry,
+    snapshot_path: &Path,
+) -> Result<()> {
+    let regret_path = mount_path.join(&entry.regret_subvol);
+    if !regret_path.exists() {
+        bail!("Regret ausente: {}", regret_path.display());
+    }
+    if !snapshot_path.exists() {
+        bail!("snapshot recém-criado ausente: {}", snapshot_path.display());
+    }
+
+    // Snapper não expõe "crie este snapshot a partir daquele subvol". Então
+    // criamos a entrada via Snapper para ganhar `info.xml`/userdata/cleanup e
+    // substituímos o subvol `snapshot` pelo conteúdo do Regret. A janela entre
+    // o delete e o snapshot -r não é atômica: SIGKILL/queda de energia aqui
+    // deixa uma entrada Snapper apontando para um subvol ausente. O caller
+    // limpa em erro normal; o caso fatal é recuperável apagando a entrada
+    // Snapper órfã.
+    btrfs::delete_subvolume(snapshot_path)
+        .with_context(|| format!("remover snapshot temporário {}", snapshot_path.display()))?;
+    btrfs::create_readonly_snapshot(&regret_path, snapshot_path).with_context(|| {
+        format!(
+            "criar snapshot read-only {} -> {}",
+            regret_path.display(),
+            snapshot_path.display()
+        )
+    })
+}
+
+fn cleanup_created_regret_snapshots(created: &[CreatedRegretSnapshot]) {
+    for item in created {
+        cleanup_created_regret_snapshot(item);
+    }
+}
+
+fn cleanup_created_regret_snapshot(item: &CreatedRegretSnapshot) {
+    if snapper::delete(&item.config, item.number).is_ok() {
+        return;
+    }
+    if item.path.exists() && btrfs::is_subvolume(&item.path) {
+        let _ = btrfs::delete_subvolume(&item.path);
+    }
+    if let Some(dir) = item.path.parent() {
+        let _ = fs::remove_dir_all(dir);
+    }
+}
+
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     let done: Vec<rollback::Done> = regret
         .entries
@@ -1099,6 +1364,7 @@ pub fn trash() -> Result<()> {
         snapshots::print_trash_empty();
         return Ok(());
     }
+    let groups = dedup_trashed_regret_groups(&groups);
 
     use crate::ui::trash::TrashAction;
     match crate::ui::trash::select_trash_action(&groups, cfg.trash_prune_days)? {
@@ -1109,8 +1375,13 @@ pub fn trash() -> Result<()> {
         Some(TrashAction::Restore(indices)) => {
             let mut restored = 0;
             for i in indices {
-                if untrash_group(&groups[i]) > 0 {
+                let g = &groups[i];
+                let restored_members = untrash_group(g);
+                if restored_members > 0 && restored_members == g.members.len() {
                     restored += 1;
+                    if let Some(date) = regret_identity(g) {
+                        purge_duplicate_regrets_in_trash(g.id, date);
+                    }
                 }
             }
             if restored > 0 {
@@ -1120,11 +1391,34 @@ pub fn trash() -> Result<()> {
         }
         Some(TrashAction::Purge(indices)) => {
             for i in indices {
-                delete_group(&groups[i])?;
+                let g = &groups[i];
+                let date = regret_identity(g).map(str::to_string);
+                delete_group(g)?;
+                if let Some(date) = date {
+                    purge_duplicate_regrets_in_trash(g.id, &date);
+                }
             }
             Ok(())
         }
     }
+}
+
+fn dedup_trashed_regret_groups(groups: &[Group]) -> Vec<Group> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut visible = Vec::new();
+
+    for group in groups {
+        if let Some(date) = regret_identity(group) {
+            if seen.contains(&date) {
+                continue;
+            }
+            seen.push(date);
+        }
+
+        visible.push(group.clone());
+    }
+
+    visible
 }
 
 /// Tira o grupo da lixeira. Best-effort por membro, como `trash_group`.
@@ -1157,11 +1451,12 @@ pub fn list() -> Result<()> {
         if pending_restore_from_live(&configs)?.is_some() {
             snapshots::print_pending_restore_status();
         }
-        let regret = discover_regrets(&mount_path, &configs)?;
+        let mut regret = discover_regrets(&mount_path, &configs)?;
+        let groups = hide_checkpoint_for_active_regret(&groups, regret.as_mut());
         let mut printed_regret = false;
         if let Some(r) = regret {
             let kernel = regret_kernel_label(&r, &mount_path);
-            snapshots::print_regret_status(&r.creation_time, &kernel);
+            snapshots::print_regret_status(&r.creation_time, &kernel, r.saved);
             printed_regret = true;
         }
 
@@ -1290,6 +1585,32 @@ fn epoch_now() -> Result<i64> {
         .as_secs() as i64)
 }
 
+fn default_checkpoint_name(epoch: i64) -> String {
+    match local_datetime_from_epoch(epoch) {
+        Ok(date) => format!("Checkpoint {date}"),
+        Err(_) => format!("Checkpoint {epoch}"),
+    }
+}
+
+fn local_datetime_from_epoch(epoch: i64) -> Result<String> {
+    date_format(&format!("@{epoch}"), "+%Y-%m-%d %H:%M")
+}
+
+fn origin_date_from_creation_time(creation_time: &str) -> Result<String> {
+    date_format(creation_time, "+%Y-%m-%dT%H:%M:%S%z")
+}
+
+fn date_format(input: &str, fmt: &str) -> Result<String> {
+    let out = std::process::Command::new("date")
+        .args(["-d", input, fmt])
+        .output()
+        .context("date falhou")?;
+    if !out.status.success() {
+        bail!("date -d {input}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// /boot (FAT32) ficou dessincronizado do root restaurado. Bootar agora cai
 /// em emergency mode (kernel não acha seus módulos). Bloqueia o reboot e
 /// instrui a recuperação específica do caminho que falhou.
@@ -1409,7 +1730,15 @@ fn reboot_now() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pending_current_subvol, snapgroup_id_from_info_xml, xml_text};
+    use super::{
+        dedup_trashed_regret_groups, duplicate_regret_groups, duplicate_regrets_matching,
+        hide_checkpoint_for_active_regret, pending_current_subvol, snapgroup_id_from_info_xml,
+        snapgroup_userdata_value_from_info_xml, xml_text,
+    };
+    use crate::group::{Group, Member};
+    use crate::snapper::Snapshot;
+    use crate::ui::restore::RegretInfo;
+    use serde_json::json;
 
     #[test]
     fn detects_pending_current_from_live_subvol_names() {
@@ -1513,6 +1842,87 @@ mod tests {
     }
 
     #[test]
+    fn extracts_regret_origin_date_from_userdata_block() {
+        let xml = r#"
+            <snapshot>
+              <userdata>
+                <key>snapgroup-origin-date</key>
+                <value>2026-06-17T14:34:12-0400</value>
+              </userdata>
+            </snapshot>
+        "#;
+
+        assert_eq!(
+            snapgroup_userdata_value_from_info_xml(xml, "snapgroup-origin-date").as_deref(),
+            Some("2026-06-17T14:34:12-0400")
+        );
+    }
+
+    #[test]
+    fn hides_checkpoint_that_matches_active_regret_origin() {
+        let saved_regret = regret_group(2, "2026-06-17T14:34:12-0400");
+        let other = normal_group(1);
+        let groups = vec![saved_regret, other];
+        let mut regret = RegretInfo {
+            entries: Vec::new(),
+            creation_time: "2026-06-17 14:34:12 -0400".to_string(),
+            origin_date: Some("2026-06-17T14:34:12-0400".to_string()),
+            saved: false,
+        };
+
+        let visible = hide_checkpoint_for_active_regret(&groups, Some(&mut regret));
+
+        assert!(regret.saved);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, 1);
+    }
+
+    #[test]
+    fn dedups_trashed_regrets_by_origin_date() {
+        let groups = vec![
+            regret_group(3, "2026-06-17T14:34:12-0400"),
+            regret_group(2, "2026-06-17T14:34:12-0400"),
+            regret_group(1, "2026-06-16T21:15:00-0400"),
+            normal_group(9),
+        ];
+
+        let visible = dedup_trashed_regret_groups(&groups);
+        let ids: Vec<_> = visible.iter().map(|g| g.id).collect();
+
+        assert_eq!(ids, vec![3, 1, 9]);
+    }
+
+    #[test]
+    fn finds_duplicate_regrets_for_physical_purge() {
+        let groups = vec![
+            regret_group(3, "2026-06-17T14:34:12-0400"),
+            regret_group(2, "2026-06-17T14:34:12-0400"),
+            regret_group(1, "2026-06-16T21:15:00-0400"),
+            normal_group(9),
+        ];
+
+        let duplicates = duplicate_regret_groups(&groups);
+        let ids: Vec<_> = duplicates.iter().map(|g| g.id).collect();
+
+        assert_eq!(ids, vec![2]);
+    }
+
+    #[test]
+    fn duplicate_regret_match_excludes_keep_group() {
+        let groups = vec![
+            regret_group(3, "2026-06-17T14:34:12-0400"),
+            regret_group(2, "2026-06-17T14:34:12-0400"),
+            regret_group(1, "2026-06-16T21:15:00-0400"),
+        ];
+
+        let duplicates =
+            duplicate_regrets_matching(&groups, groups[0].id, "2026-06-17T14:34:12-0400");
+        let ids: Vec<_> = duplicates.iter().map(|g| g.id).collect();
+
+        assert_eq!(ids, vec![2]);
+    }
+
+    #[test]
     fn reads_and_unescapes_xml_text() {
         let xml = r#"<description>root &amp; boot &lt;ok&gt;</description>"#;
 
@@ -1520,5 +1930,55 @@ mod tests {
             xml_text(xml, "description").as_deref(),
             Some("root & boot <ok>")
         );
+    }
+
+    fn regret_group(id: i64, origin_date: &str) -> Group {
+        let mut userdata = serde_json::Map::new();
+        userdata.insert(
+            "snapgroup-id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
+        userdata.insert(
+            "snapgroup-origin".to_string(),
+            serde_json::Value::String("regret".to_string()),
+        );
+        userdata.insert(
+            "snapgroup-origin-date".to_string(),
+            serde_json::Value::String(origin_date.to_string()),
+        );
+
+        Group {
+            id,
+            members: vec![Member {
+                config: "root".to_string(),
+                snapshot: Snapshot {
+                    number: id as u32,
+                    kind: "single".to_string(),
+                    date: "2026-06-17 15:10:00".to_string(),
+                    user: "root".to_string(),
+                    description: "Regret 2026-06-17 14:34".to_string(),
+                    cleanup: String::new(),
+                    userdata: Some(serde_json::Value::Object(userdata)),
+                },
+            }],
+        }
+    }
+
+    fn normal_group(id: i64) -> Group {
+        Group {
+            id,
+            members: vec![Member {
+                config: "root".to_string(),
+                snapshot: Snapshot {
+                    number: id as u32,
+                    kind: "single".to_string(),
+                    date: "2026-06-16 10:00:00".to_string(),
+                    user: "root".to_string(),
+                    description: "Checkpoint 2026-06-16 10:00".to_string(),
+                    cleanup: String::new(),
+                    userdata: Some(json!({ "snapgroup-id": id.to_string() })),
+                },
+            }],
+        }
     }
 }

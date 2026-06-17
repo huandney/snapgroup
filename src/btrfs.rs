@@ -57,6 +57,24 @@ pub fn create_snapshot(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn create_readonly_snapshot(source: &Path, dest: &Path) -> Result<()> {
+    let out = Command::new("btrfs")
+        .args(["subvolume", "snapshot", "-r"])
+        .arg(source)
+        .arg(dest)
+        .output()
+        .context("btrfs subvolume snapshot -r falhou")?;
+    if !out.status.success() {
+        bail!(
+            "snapshot -r {} -> {}: {}",
+            source.display(),
+            dest.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(())
+}
+
 pub fn delete_subvolume(path: &Path) -> Result<()> {
     let out = Command::new("btrfs")
         .args(["subvolume", "delete"])
