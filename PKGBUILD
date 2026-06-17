@@ -1,6 +1,6 @@
 # Maintainer: Huandney <huandney@gmail.com>
 pkgname=snapgroup
-pkgver=0.7.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/restore/list/rename/delete/trash/doctor)"
 arch=('x86_64')

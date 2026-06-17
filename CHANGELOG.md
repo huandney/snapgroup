@@ -5,7 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0-beta] - 2026-06-17
+> Commits: `b29a1ab`
 
 ### Restore / TUI
 - **Feature**: Selecting the Regret in `snapg restore` now asks whether to restore it or keep it as a normal checkpoint. Keeping it creates grouped Snapper snapshots from the `_snapg_regret` subvolumes, preserves the Regret, and records the Regret origin date in userdata so the UI shows the point being saved instead of the time the copy was made. While that Regret remains active, `list` and `restore` show `Regret guardado` and hide the duplicate checkpoint entry.
