@@ -1309,8 +1309,15 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
         return apply_delete(&[&groups[0]], purge);
     }
 
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let kernel_labels = group::kernel_labels(&groups, &mount_path);
+
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
-    let Some(target_indices) = snapshots::select_delete_plan(&groups, purge)? else {
+    let plan = snapshots::select_delete_plan(&groups, &kernel_labels, purge);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    let Some(target_indices) = plan? else {
         snapshots::print_delete_cancelled();
         return Ok(());
     };
@@ -1366,8 +1373,16 @@ pub fn trash() -> Result<()> {
     }
     let groups = dedup_trashed_regret_groups(&groups);
 
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let kernel_labels = group::kernel_labels(&groups, &mount_path);
+
     use crate::ui::trash::TrashAction;
-    match crate::ui::trash::select_trash_action(&groups, cfg.trash_prune_days)? {
+    let selection =
+        crate::ui::trash::select_trash_action(&groups, &kernel_labels, cfg.trash_prune_days);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    match selection? {
         None => {
             snapshots::print_trash_cancelled();
             Ok(())

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### TUI
+- **Feature**: Checkpoint pickers now share kernel-aware rows across restore, rename, delete and trash. Delete and permanent trash purge also share the same paginated review, keeping irreversible actions consistent and showing the kernel before confirmation.
+
 ## [0.8.0-beta] - 2026-06-17
 > Commits: `b29a1ab`
 
