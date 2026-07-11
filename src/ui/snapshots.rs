@@ -115,6 +115,11 @@ fn select_delete_targets_manually(
         NAME_HEADER.len(),
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
+    )
+    .fit_to_terminal(
+        crate::ui::term::MULTI_MARKER,
+        None,
+        PickerTail::MembersAndId,
     );
 
     let mut items: Vec<String> = Vec::new();

@@ -75,7 +75,8 @@ fn group_picker_items(
         NAME_HEADER.len(),
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
-    );
+    )
+    .fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
 
     let items = groups
         .iter()

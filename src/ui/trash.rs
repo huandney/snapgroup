@@ -79,13 +79,6 @@ fn select_groups(
     prune_days: u64,
     prompt: &str,
 ) -> Result<Option<Vec<usize>>> {
-    let columns = CheckpointColumns::new(
-        groups,
-        kernel_labels,
-        NAME_HEADER.len(),
-        NAME_COL_MAX,
-        KERNEL_HEADER.len(),
-    );
     let purge_labels: Vec<String> = groups
         .iter()
         .map(|group| purge_due_label(group, prune_days))
@@ -96,6 +89,14 @@ fn select_groups(
         .max()
         .unwrap_or(PURGE_HEADER.len())
         .max(PURGE_HEADER.len());
+    let columns = CheckpointColumns::new(
+        groups,
+        kernel_labels,
+        NAME_HEADER.len(),
+        NAME_COL_MAX,
+        KERNEL_HEADER.len(),
+    )
+    .fit_to_terminal(MULTI_MARKER, Some(purge_width), PickerTail::None);
     let items: Vec<String> = groups
         .iter()
         .zip(&purge_labels)

@@ -17,6 +17,7 @@ const MEMBERS_WIDTH: usize = 7;
 pub(crate) struct CheckpointColumns {
     pub(crate) name: usize,
     pub(crate) kernel: usize,
+    id: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -47,7 +48,46 @@ impl CheckpointColumns {
             .max()
             .unwrap_or(minimum_kernel)
             .max(minimum_kernel);
-        Self { name, kernel }
+        let id = groups
+            .iter()
+            .map(|group| format!("#{}", group.id).chars().count())
+            .max()
+            .unwrap_or(ID_HEADER.len())
+            .max(ID_HEADER.len());
+        Self { name, kernel, id }
+    }
+
+    pub(crate) fn fit_to_terminal(
+        mut self,
+        marker_width: usize,
+        status_width: Option<usize>,
+        tail: PickerTail,
+    ) -> Self {
+        let terminal_width = console::Term::stdout().size().1 as usize;
+        self.fit_name_to_width(terminal_width, marker_width, status_width, tail);
+        self
+    }
+
+    fn fit_name_to_width(
+        &mut self,
+        terminal_width: usize,
+        marker_width: usize,
+        status_width: Option<usize>,
+        tail: PickerTail,
+    ) {
+        let mut fixed = self.kernel + DATE_WIDTH + 6;
+        if let Some(status_width) = status_width {
+            fixed += 3 + status_width;
+        }
+        if matches!(tail, PickerTail::MembersAndId) {
+            fixed += 3 + MEMBERS_WIDTH + 3 + self.id;
+        }
+        let available = terminal_width
+            .saturating_sub(CONTENT_INDENT.chars().count())
+            .saturating_sub(marker_width)
+            .saturating_sub(fixed)
+            .max(NAME_HEADER.len());
+        self.name = self.name.min(available);
     }
 }
 
@@ -81,9 +121,10 @@ pub(crate) fn picker_row(
         .unwrap_or_default();
     let tail = match tail {
         PickerTail::MembersAndId => format!(
-            "   {:<MEMBERS_WIDTH$}   #{}",
+            "   {:<MEMBERS_WIDTH$}   {:<id_col$}",
             group.members.len(),
-            group.id
+            format!("#{}", group.id),
+            id_col = columns.id,
         ),
         PickerTail::None => String::new(),
     };
@@ -104,7 +145,7 @@ pub(crate) fn picker_header(
         .unwrap_or_default();
     let tail = match tail {
         PickerTail::MembersAndId => {
-            format!("   {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER}")
+            format!("   {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER:<id_col$}", id_col = columns.id)
         }
         PickerTail::None => String::new(),
     };
@@ -333,5 +374,32 @@ mod tests {
         assert!(!compact_header.contains("Membros"));
         assert!(!compact_header.contains("ID"));
         assert!(!compact_row.contains("#7"));
+    }
+
+    #[test]
+    fn name_column_uses_only_the_terminal_space_left_by_fixed_fields() {
+        let groups = vec![group(7, "um nome de checkpoint deliberadamente muito comprido")];
+        let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
+
+        let mut narrow = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        narrow.fit_name_to_width(80, 6, None, PickerTail::MembersAndId);
+        assert_eq!(narrow.name, 18);
+        assert_eq!(picker_header(&narrow, None, PickerTail::MembersAndId).len() + 9, 80);
+
+        let mut medium = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        medium.fit_name_to_width(100, 6, None, PickerTail::MembersAndId);
+        assert_eq!(medium.name, 36);
+
+        let mut wide = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        wide.fit_name_to_width(120, 6, None, PickerTail::MembersAndId);
+        assert_eq!(wide.name, 36);
+
+        let mut compact = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        compact.fit_name_to_width(80, 6, Some(7), PickerTail::None);
+        assert_eq!(compact.name, 23);
+        assert_eq!(
+            picker_header(&compact, Some(("Purga", 7)), PickerTail::None).len() + 9,
+            80
+        );
     }
 }

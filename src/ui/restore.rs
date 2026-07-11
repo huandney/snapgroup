@@ -199,6 +199,7 @@ pub(crate) fn select_restore_action(
     columns.kernel = columns
         .kernel
         .max(regret_kernel.map(|kernel| kernel.chars().count()).unwrap_or(1));
+    columns = columns.fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
 
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
