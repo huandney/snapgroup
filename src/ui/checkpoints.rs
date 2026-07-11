@@ -8,10 +8,21 @@ use std::collections::HashMap;
 
 pub(crate) const KERNEL_HEADER: &str = "Kernel";
 pub(crate) const NAME_HEADER: &str = "Nome";
+const DATE_HEADER: &str = "Data";
+const MEMBERS_HEADER: &str = "Membros";
+const ID_HEADER: &str = "ID";
+const DATE_WIDTH: usize = 16;
+const MEMBERS_WIDTH: usize = 7;
 
 pub(crate) struct CheckpointColumns {
     pub(crate) name: usize,
     pub(crate) kernel: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum PickerTail {
+    MembersAndId,
+    None,
 }
 
 impl CheckpointColumns {
@@ -60,18 +71,53 @@ pub(crate) fn picker_row(
     group: &Group,
     kernel_labels: &HashMap<GroupId, String>,
     columns: &CheckpointColumns,
-    status: Option<&str>,
+    status: Option<(&str, usize)>,
+    tail: PickerTail,
 ) -> String {
     let name = name_cell(group, columns.name);
     let kernel = kernel_label(kernel_labels, group.id);
-    let status = status.map(|value| format!("   {value}")).unwrap_or_default();
+    let status = status
+        .map(|(value, width)| format!("   {value:<width$}"))
+        .unwrap_or_default();
+    let tail = match tail {
+        PickerTail::MembersAndId => format!(
+            "   {:<MEMBERS_WIDTH$}   #{}",
+            group.members.len(),
+            group.id
+        ),
+        PickerTail::None => String::new(),
+    };
     format!(
-        "{name}   {kernel:<kernel_col$}   {}{status}   {} membros   #{}",
+        "{name}   {kernel:<kernel_col$}   {:<DATE_WIDTH$}{status}{tail}",
         short_datetime(group::date(group)),
-        group.members.len(),
-        group.id,
         kernel_col = columns.kernel,
     )
+}
+
+pub(crate) fn picker_header(
+    columns: &CheckpointColumns,
+    status: Option<(&str, usize)>,
+    tail: PickerTail,
+) -> String {
+    let status = status
+        .map(|(label, width)| format!("   {label:<width$}"))
+        .unwrap_or_default();
+    let tail = match tail {
+        PickerTail::MembersAndId => {
+            format!("   {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER}")
+        }
+        PickerTail::None => String::new(),
+    };
+    format!(
+        "{NAME_HEADER:<name_col$}   {KERNEL_HEADER:<kernel_col$}   {DATE_HEADER:<DATE_WIDTH$}{status}{tail}",
+        name_col = columns.name,
+        kernel_col = columns.kernel,
+    )
+}
+
+pub(crate) fn picker_prompt(prompt: &str, header: &str, marker_width: usize) -> String {
+    let indent = " ".repeat(CONTENT_INDENT.chars().count() + marker_width);
+    format!("{prompt}\n{indent}{}", style(header).bold())
 }
 
 pub(crate) enum ReviewDecision {
@@ -194,7 +240,10 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CheckpointColumns, kernel_label, name_cell, picker_row};
+    use super::{
+        CheckpointColumns, PickerTail, kernel_label, name_cell, picker_header, picker_prompt,
+        picker_row,
+    };
     use crate::group::{Group, Member};
     use crate::snapper::Snapshot;
     use std::collections::HashMap;
@@ -241,8 +290,48 @@ mod tests {
             CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
 
         assert_eq!(
-            picker_row(&group, &labels, &columns, Some("purga em ~2d")),
-            "Teste   7.0.12-1-cachyos   2026-07-10 20:50   purga em ~2d   1 membros   #7"
+            picker_row(
+                &group,
+                &labels,
+                &columns,
+                Some(("em ~2d", 6)),
+                PickerTail::MembersAndId,
+            ),
+            "Teste   7.0.12-1-cachyos   2026-07-10 20:50   em ~2d   1         #7"
         );
+    }
+
+    #[test]
+    fn picker_header_aligns_with_row_and_marker() {
+        let group = group(7, "Teste");
+        let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
+        let columns =
+            CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
+        let header = picker_header(&columns, None, PickerTail::MembersAndId);
+        let row = picker_row(
+            &group,
+            &labels,
+            &columns,
+            None,
+            PickerTail::MembersAndId,
+        );
+
+        assert_eq!(header.find("Kernel"), row.find("7.0.12-1-cachyos"));
+        assert_eq!(header.find("Data"), row.find("2026-07-10 20:50"));
+        assert_eq!(header.find("Membros"), row.find("1         #7"));
+        assert_eq!(header.find("ID"), row.find("#7"));
+        assert!(picker_prompt("Escolha", &header, 6).contains("\n         Nome"));
+
+        let compact_header = picker_header(&columns, Some(("Purga", 7)), PickerTail::None);
+        let compact_row = picker_row(
+            &group,
+            &labels,
+            &columns,
+            Some(("em ~2d", 7)),
+            PickerTail::None,
+        );
+        assert!(!compact_header.contains("Membros"));
+        assert!(!compact_header.contains("ID"));
+        assert!(!compact_row.contains("#7"));
     }
 }

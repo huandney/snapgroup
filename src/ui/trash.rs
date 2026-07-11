@@ -1,7 +1,7 @@
 use crate::group::{self, Group, GroupId};
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, ReviewDecision, picker_row,
-    review_irreversible,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, picker_row,
+    picker_header, picker_prompt, review_irreversible,
 };
 use crate::ui::term::{
     AltScreen, HINT_MULTI, MULTI_MARKER, THEME, clear_screen, header, prompt_hint,
@@ -86,14 +86,35 @@ fn select_groups(
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
     );
+    let purge_labels: Vec<String> = groups
+        .iter()
+        .map(|group| purge_due_label(group, prune_days))
+        .collect();
+    let purge_width = purge_labels
+        .iter()
+        .map(|label| label.chars().count())
+        .max()
+        .unwrap_or(PURGE_HEADER.len())
+        .max(PURGE_HEADER.len());
     let items: Vec<String> = groups
         .iter()
-        .map(|group| trash_row(group, kernel_labels, prune_days, &columns))
+        .zip(&purge_labels)
+        .map(|(group, purge)| trash_row(group, kernel_labels, purge, purge_width, &columns))
         .collect();
+    let columns_header = picker_header(
+        &columns,
+        Some((PURGE_HEADER, purge_width)),
+        PickerTail::None,
+    );
+    let prompt = picker_prompt(
+        &prompt_hint(prompt, HINT_MULTI),
+        &columns_header,
+        MULTI_MARKER,
+    );
     clear_screen();
     header("Lixeira");
     let Some(sel) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(prompt_hint(prompt, HINT_MULTI))
+        .with_prompt(prompt)
         .items(&items)
         .clear(true)
         .report(false)
@@ -111,21 +132,28 @@ fn select_groups(
 fn trash_row(
     g: &Group,
     kernel_labels: &HashMap<GroupId, String>,
-    prune_days: u64,
+    purge: &str,
+    purge_width: usize,
     columns: &CheckpointColumns,
 ) -> String {
-    let purge = purge_due_label(g, prune_days);
-    let text = picker_row(g, kernel_labels, columns, Some(&purge));
+    let text = picker_row(
+        g,
+        kernel_labels,
+        columns,
+        Some((purge, purge_width)),
+        PickerTail::None,
+    );
     truncate_for_terminal(&text, MULTI_MARKER)
 }
 
 const NAME_COL_MAX: usize = 36;
+const PURGE_HEADER: &str = "Purga";
 
 /// Quanto falta pro purge automático: `prune_days` menos os dias já passados
 /// desde a marca de trash. <= 0 → vencido (sai no próximo save/delete).
 fn purge_due_label(g: &Group, prune_days: u64) -> String {
     let Some(marked) = group::trash_epoch(g) else {
-        return "purga: ?".to_string();
+        return "?".to_string();
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -133,7 +161,7 @@ fn purge_due_label(g: &Group, prune_days: u64) -> String {
         .unwrap_or(marked);
     let left = prune_days as i64 - (now - marked) / 86_400;
     if left <= 0 {
-        return "purga: vencida".to_string();
+        return "vencida".to_string();
     }
-    format!("purga em ~{left}d")
+    format!("em ~{left}d")
 }

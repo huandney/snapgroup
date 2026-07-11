@@ -1,8 +1,8 @@
 use crate::group::{self, Group, GroupId};
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, ReviewDecision, kernel_label, name_cell,
-    picker_row, review_irreversible,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, kernel_label,
+    name_cell, picker_header, picker_prompt, picker_row, review_irreversible,
 };
 use crate::ui::term::{
     AltScreen, HINT_MULTI, THEME, app_header, clear_screen, ellipsize, header, input_line, line,
@@ -119,14 +119,20 @@ fn select_delete_targets_manually(
 
     let mut items: Vec<String> = Vec::new();
     for g in groups {
-        let text = picker_row(g, kernel_labels, &columns, None);
+        let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
         items.push(truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER));
     }
+    let columns_header = picker_header(&columns, None, PickerTail::MembersAndId);
+    let prompt = picker_prompt(
+        &prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI),
+        &columns_header,
+        crate::ui::term::MULTI_MARKER,
+    );
 
     clear_screen();
     header("Apagar checkpoints");
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI))
+        .with_prompt(prompt)
         .items(&items)
         .clear(true)
         .report(false)

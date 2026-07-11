@@ -1,6 +1,7 @@
 use crate::group::{self, Group, GroupId};
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, picker_row,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, picker_header, picker_prompt,
+    picker_row,
 };
 use crate::ui::term::{
     AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line,
@@ -51,10 +52,11 @@ fn select_target(
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Renomear checkpoint");
-    let items = group_picker_items(groups, kernel_labels);
+    let (items, columns_header) = group_picker_items(groups, kernel_labels);
+    let prompt = picker_prompt("Escolha o checkpoint", &columns_header, SELECT_MARKER);
     // Primeira página do fluxo: Esc sai (padrão), sem hint de "volta".
     dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Escolha o checkpoint")
+        .with_prompt(prompt)
         .items(&items)
         .default(0)
         .clear(true)
@@ -66,7 +68,7 @@ fn select_target(
 fn group_picker_items(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
-) -> Vec<String> {
+) -> (Vec<String>, String) {
     let columns = CheckpointColumns::new(
         groups,
         kernel_labels,
@@ -75,13 +77,17 @@ fn group_picker_items(
         KERNEL_HEADER.len(),
     );
 
-    groups
+    let items = groups
         .iter()
         .map(|g| {
-            let text = picker_row(g, kernel_labels, &columns, None);
+            let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
             truncate_for_terminal(&text, SELECT_MARKER)
         })
-        .collect()
+        .collect();
+    (
+        items,
+        picker_header(&columns, None, PickerTail::MembersAndId),
+    )
 }
 
 pub(crate) fn print_cancelled() {

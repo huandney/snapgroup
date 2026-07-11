@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### TUI
 - **Feature**: Checkpoint pickers now share kernel-aware rows across restore, rename, delete and trash. Delete and permanent trash purge also share the same paginated review, keeping irreversible actions consistent and showing the kernel before confirmation.
+- **Refine**: Tabular checkpoint pickers now render aligned column headers instead of repeating field labels in every row. The trash picker keeps only the decision-relevant name, kernel, date and purge deadline; member count and ID remain available in the irreversible review.
 
 ## [0.8.0-beta] - 2026-06-17
 > Commits: `b29a1ab`
