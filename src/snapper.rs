@@ -65,6 +65,10 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
 
 pub fn create(config: &str, description: &str, group_id: i64) -> Result<u32> {
     let userdata = format!("snapgroup-id={group_id}");
+    create_with_userdata(config, description, &userdata)
+}
+
+pub fn create_with_userdata(config: &str, description: &str, userdata: &str) -> Result<u32> {
     let out = Command::new("snapper")
         .args([
             "-c",
@@ -73,7 +77,7 @@ pub fn create(config: &str, description: &str, group_id: i64) -> Result<u32> {
             "--description",
             description,
             "--userdata",
-            &userdata,
+            userdata,
             "--print-number",
         ])
         .output()

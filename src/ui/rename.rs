@@ -1,6 +1,10 @@
 use crate::group::{self, Group, GroupId};
+use crate::ui::checkpoints::{
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, picker_header, picker_prompt,
+    picker_row,
+};
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line, short_datetime,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line,
     truncate_for_terminal,
 };
 use anyhow::{Context, Result};
@@ -48,10 +52,11 @@ fn select_target(
 ) -> Result<Option<usize>> {
     clear_screen();
     header("Renomear checkpoint");
-    let items = group_picker_items(groups, kernel_labels);
+    let (items, columns_header) = group_picker_items(groups, kernel_labels);
+    let prompt = picker_prompt("Escolha o checkpoint", &columns_header, SELECT_MARKER);
     // Primeira página do fluxo: Esc sai (padrão), sem hint de "volta".
     dialoguer::Select::with_theme(&THEME)
-        .with_prompt("Escolha o checkpoint")
+        .with_prompt(prompt)
         .items(&items)
         .default(0)
         .clear(true)
@@ -63,44 +68,27 @@ fn select_target(
 fn group_picker_items(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
-) -> Vec<String> {
-    let name_col = groups
-        .iter()
-        .map(|g| group::description(g).chars().count())
-        .max()
-        .unwrap_or(NAME_HEADER.len())
-        .max(NAME_HEADER.len())
-        .min(NAME_COL_MAX);
-    let kernel_col = groups
-        .iter()
-        .filter_map(|g| kernel_labels.get(&g.id))
-        .map(|k| k.chars().count())
-        .max()
-        .unwrap_or(KERNEL_HEADER.len())
-        .max(KERNEL_HEADER.len());
+) -> (Vec<String>, String) {
+    let columns = CheckpointColumns::new(
+        groups,
+        kernel_labels,
+        NAME_HEADER.len(),
+        NAME_COL_MAX,
+        KERNEL_HEADER.len(),
+    )
+    .fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
 
-    groups
+    let items = groups
         .iter()
         .map(|g| {
-            let desc = group::description(g);
-            let name = if desc.chars().count() > name_col {
-                let cut: String = desc.chars().take(name_col - 1).collect();
-                format!("{cut}…")
-            } else {
-                format!("{desc:<name_col$}")
-            };
-            let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
-            let text = format!(
-                "{}   {:<kernel_col$}   {}   {} membros   #{}",
-                name,
-                kernel,
-                short_datetime(group::date(g)),
-                g.members.len(),
-                g.id
-            );
+            let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
             truncate_for_terminal(&text, SELECT_MARKER)
         })
-        .collect()
+        .collect();
+    (
+        items,
+        picker_header(&columns, None, PickerTail::MembersAndId),
+    )
 }
 
 pub(crate) fn print_cancelled() {
@@ -132,6 +120,4 @@ pub(crate) fn print_no_groups() {
     println!("nenhum grupo snapg save encontrado");
 }
 
-const NAME_HEADER: &str = "Nome";
-const KERNEL_HEADER: &str = "Kernel";
 const NAME_COL_MAX: usize = 36;

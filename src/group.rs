@@ -8,6 +8,8 @@ pub type GroupId = i64;
 
 const USERDATA_KEY: &str = "snapgroup-id";
 const TRASH_KEY: &str = "snapgroup-trash";
+const ORIGIN_KIND_KEY: &str = "snapgroup-origin";
+const ORIGIN_DATE_KEY: &str = "snapgroup-origin-date";
 
 #[derive(Clone)]
 pub struct Member {
@@ -27,7 +29,7 @@ pub fn date(group: &Group) -> &str {
     group
         .members
         .first()
-        .map(|m| m.snapshot.date.as_str())
+        .map(|m| snapshot_date(&m.snapshot))
         .unwrap_or("data desconhecida")
 }
 
@@ -49,8 +51,31 @@ pub fn extract_trash(s: &Snapshot) -> Option<i64> {
     userdata_i64(s, TRASH_KEY)
 }
 
+pub fn snapshot_date(s: &Snapshot) -> &str {
+    userdata_str(s, ORIGIN_DATE_KEY).unwrap_or(&s.date)
+}
+
+pub fn origin_date(group: &Group) -> Option<&str> {
+    group
+        .members
+        .first()
+        .and_then(|m| userdata_str(&m.snapshot, ORIGIN_DATE_KEY))
+}
+
+pub fn is_regret_origin(group: &Group) -> bool {
+    group
+        .members
+        .first()
+        .and_then(|m| userdata_str(&m.snapshot, ORIGIN_KIND_KEY))
+        == Some("regret")
+}
+
 fn userdata_i64(s: &Snapshot, key: &str) -> Option<i64> {
-    s.userdata.as_ref()?.as_object()?.get(key)?.as_str()?.parse().ok()
+    userdata_str(s, key)?.parse().ok()
+}
+
+fn userdata_str<'a>(s: &'a Snapshot, key: &str) -> Option<&'a str> {
+    s.userdata.as_ref()?.as_object()?.get(key)?.as_str()
 }
 
 /// Grupo está na lixeira se QUALQUER membro carrega a marca. Um grupo
@@ -141,7 +166,11 @@ pub fn root_member(group: &Group) -> Result<Option<&Member>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Group, GroupId, groups_to_prune};
+    use super::{
+        Group, GroupId, Member, date, groups_to_prune, is_regret_origin, origin_date,
+    };
+    use crate::snapper::Snapshot;
+    use serde_json::json;
 
     fn groups(ids: &[GroupId]) -> Vec<Group> {
         ids.iter()
@@ -171,5 +200,32 @@ mod tests {
         // newest-first: mantém os 2 mais novos (5, 4), poda o resto.
         let g = groups(&[5, 4, 3, 2, 1]);
         assert_eq!(pruned_ids(&g, 2), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn group_date_prefers_regret_origin_date() {
+        let group = Group {
+            id: 1,
+            members: vec![Member {
+                config: "root".to_string(),
+                snapshot: Snapshot {
+                    number: 10,
+                    kind: "single".to_string(),
+                    date: "2026-06-17 15:10:00".to_string(),
+                    user: "root".to_string(),
+                    description: "Regret 2026-06-17 14:34".to_string(),
+                    cleanup: String::new(),
+                    userdata: Some(json!({
+                        "snapgroup-id": "1",
+                        "snapgroup-origin": "regret",
+                        "snapgroup-origin-date": "2026-06-17T14:34:12-0400"
+                    })),
+                },
+            }],
+        };
+
+        assert_eq!(date(&group), "2026-06-17T14:34:12-0400");
+        assert_eq!(origin_date(&group), Some("2026-06-17T14:34:12-0400"));
+        assert!(is_regret_origin(&group));
     }
 }

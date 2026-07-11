@@ -306,12 +306,13 @@ pub fn branch(last: bool) -> &'static str {
 /// Robusto a formatos diferentes (snapper, `btrfs subvolume show`) e a fallbacks
 /// não-data: se os dois primeiros tokens não parecerem data+hora, devolve igual.
 pub fn short_datetime(s: &str) -> String {
-    let mut it = s.split_whitespace();
+    let normalized = s.replace('T', " ");
+    let mut it = normalized.split_whitespace();
     let (Some(date), Some(time)) = (it.next(), it.next()) else {
-        return s.to_string();
+        return normalized;
     };
     if !date.contains('-') || !time.contains(':') {
-        return s.to_string();
+        return normalized;
     }
     let hm: String = time.chars().take(5).collect();
     format!("{date} {hm}")
@@ -373,5 +374,13 @@ mod tests {
         // placeholder inválido viraria panic no `unwrap` só durante um restore.
         let template = format!("   {{spinner:.{HEADER_COLOR}}} {{wide_msg}}");
         assert!(ProgressStyle::with_template(&template).is_ok());
+    }
+
+    #[test]
+    fn short_datetime_accepts_t_separator() {
+        assert_eq!(
+            short_datetime("2026-06-17T14:34:12-0400"),
+            "2026-06-17 14:34"
+        );
     }
 }

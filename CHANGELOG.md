@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0-beta] - 2026-07-10
+> Commits: `0ecc053`, `f85eff0`, `c4b42ad`
+
+### TUI
+- **Feature**: Checkpoint pickers now share kernel-aware rows across restore, rename, delete and trash. Delete and permanent trash purge also share the same paginated review, keeping irreversible actions consistent and showing the kernel before confirmation.
+- **Refine**: Tabular checkpoint pickers now render aligned column headers instead of repeating field labels in every row. The trash picker keeps only the decision-relevant name, kernel, date and purge deadline; member count and ID remain available in the irreversible review. On narrow terminals, the name column yields space first so kernel, date and action metadata remain visible.
+
+## [0.8.0-beta] - 2026-06-17
+> Commits: `b29a1ab`
+
+### Restore / TUI
+- **Feature**: Selecting the Regret in `snapg restore` now asks whether to restore it or keep it as a normal checkpoint. Keeping it creates grouped Snapper snapshots from the `_snapg_regret` subvolumes, preserves the Regret, and records the Regret origin date in userdata so the UI shows the point being saved instead of the time the copy was made. While that Regret remains active, `list` and `restore` show `Regret guardado` and hide the duplicate checkpoint entry.
+- **Refine**: Keeping a Regret reuses an equivalent checkpoint from the trash instead of creating another copy, and the trash groups/purges equivalent saved-Regret entries by origin date to avoid repeated identical rows and redundant disk usage.
+- **Refine**: Automatic checkpoint names are now human-readable (`Checkpoint YYYY-MM-DD HH:MM` and `Regret YYYY-MM-DD HH:MM`) instead of epoch-based command echoes.
+- **Refine**: The post-save confirmation line is no longer indented, matching the flush-left alignment of the other command results.
+
 ## [0.7.0-beta] - 2026-06-14
 > Commits: `84138b2`, `c787fea`, `a0cc337`, `65d37e8`, `85bea69`
 

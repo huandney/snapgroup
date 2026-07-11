@@ -3,9 +3,12 @@ use crate::group::{self, Group, GroupId};
 use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
+use crate::ui::checkpoints::{
+    CheckpointColumns, PickerTail, picker_header, picker_prompt, picker_row,
+};
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, line, prompt_bold,
+    THEME, branch, clear_screen, confirm, content_width, header, input_line, line, prompt_bold,
     prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
     truncate_for_terminal,
     wrap_text,
@@ -27,9 +30,12 @@ pub(crate) struct RegretEntry {
 /// Regret ativo: estado anterior à última restauração já efetivada por reboot,
 /// com a data do restore que o estabeleceu. O pending (restauração não
 /// reiniciada) não passa por aqui — é resolvido por `select_pending_action`.
+#[derive(Clone)]
 pub(crate) struct RegretInfo {
     pub(crate) entries: Vec<RegretEntry>,
     pub(crate) creation_time: String,
+    pub(crate) origin_date: Option<String>,
+    pub(crate) saved: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -88,11 +94,21 @@ pub(crate) enum RestoreAction {
     Abort,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RegretAction {
+    Restore,
+    Keep,
+}
+
 /// Plano de restauração escolhido pelo wizard, pronto pra executar no terminal
 /// normal (já fora do alternate screen).
 pub(crate) enum RestorePlan {
     Checkpoint(Group),
     Regret(RegretInfo),
+    KeepRegret {
+        regret: RegretInfo,
+        description: String,
+    },
 }
 
 /// Roda o wizard interativo inteiro (pontos → membros → revisão) dentro do
@@ -124,6 +140,23 @@ pub(crate) fn select_restore_plan(
             }
             RestoreAction::Regret => {
                 let info = regret.unwrap();
+                if !info.saved {
+                    let Some(action) = select_regret_action(info)? else {
+                        continue;
+                    };
+                    if matches!(action, RegretAction::Keep) {
+                        let placeholder = default_regret_checkpoint_name(info);
+                        let Some(description) =
+                            prompt_keep_regret_name(info, regret_kernel.unwrap_or("?"), &placeholder)?
+                        else {
+                            continue;
+                        };
+                        return Ok(Some(RestorePlan::KeepRegret {
+                            regret: info.clone(),
+                            description,
+                        }));
+                    }
+                }
                 loop {
                     let Some(selected) = select_regret_members(info)? else {
                         break;
@@ -155,44 +188,46 @@ pub(crate) fn select_restore_action(
 
     clear_screen();
     header("Pontos de restauração");
-    let name_col = restore_name_col(groups, regret.is_some());
-    let kernel_col = restore_kernel_col(groups, kernel_labels, regret_kernel);
+    let minimum_name = restore_name_min(regret.is_some());
+    let mut columns = CheckpointColumns::new(
+        groups,
+        kernel_labels,
+        minimum_name,
+        RESTORE_NAME_COL_MAX,
+        1,
+    );
+    columns.kernel = columns
+        .kernel
+        .max(regret_kernel.map(|kernel| kernel.chars().count()).unwrap_or(1));
+    columns = columns.fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
 
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
+        let title = if r.saved { "↺ Regret guardado" } else { "↺ Regret" };
         let text = format!(
-            "{:<name_col$}   {:<kernel_col$}   {}   {} membros",
-            "↺ Regret",
+            "{:<name_col$}   {:<kernel_col$}   {}   {:<members_col$}",
+            title,
             kernel,
             short_datetime(&r.creation_time),
-            r.entries.len()
+            r.entries.len(),
+            name_col = columns.name,
+            kernel_col = columns.kernel,
+            members_col = "Membros".len(),
         );
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Regret);
     }
 
     for g in groups {
-        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
-        let desc = group::description(g);
-        let name = if desc.chars().count() > name_col {
-            let cut: String = desc.chars().take(name_col - 1).collect();
-            format!("{cut}…")
-        } else {
-            format!("{desc:<name_col$}")
-        };
-        let text = format!(
-            "{}   {:<kernel_col$}   {}   {} membros   #{}",
-            name,
-            kernel,
-            short_datetime(group::date(g)),
-            g.members.len(),
-            g.id
-        );
+        let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
     }
+    let columns_header = picker_header(&columns, None, PickerTail::MembersAndId);
+    let prompt = picker_prompt("Escolha o ponto de restauração", &columns_header, SELECT_MARKER);
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
+        .with_prompt(prompt)
         .items(&items)
         .default(0)
         .clear(true)
@@ -206,34 +241,69 @@ pub(crate) fn select_restore_action(
     Ok(actions.remove(selection))
 }
 
-const RESTORE_NAME_COL_MAX: usize = 28;
+pub(crate) fn select_regret_action(regret: &RegretInfo) -> Result<Option<RegretAction>> {
+    clear_screen();
+    header("Regret");
+    line(format_args!(
+        "{}  {}  estado anterior à última restauração  {}  criado {}",
+        regret_title("↺ Regret"),
+        style("·").dim(),
+        style("·").dim(),
+        short_datetime(&regret.creation_time)
+    ));
+    line(format_args!("membros {}", regret.entries.len()));
+    println!();
 
-fn restore_name_col(groups: &[Group], has_regret: bool) -> usize {
-    let regret_len = if has_regret { "↺ Regret".chars().count() } else { 0 };
-    groups
-        .iter()
-        .map(|g| group::description(g).chars().count())
-        .max()
-        .unwrap_or(regret_len)
-        .max(regret_len)
-        .min(RESTORE_NAME_COL_MAX)
+    let actions = [RegretAction::Restore, RegretAction::Keep];
+    let Some(selection) = dialoguer::Select::with_theme(&THEME)
+        .items(&["Restaurar Regret", "Guardar como checkpoint"])
+        .default(0)
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(actions[selection]))
 }
 
-fn restore_kernel_col(
-    groups: &[Group],
-    kernel_labels: &HashMap<GroupId, String>,
-    regret_kernel: Option<&str>,
-) -> usize {
-    let group_max = groups
-        .iter()
-        .filter_map(|g| kernel_labels.get(&g.id))
-        .map(|k| k.chars().count())
-        .max()
-        .unwrap_or(1);
-    regret_kernel
-        .map(|k| k.chars().count())
-        .unwrap_or(1)
-        .max(group_max)
+pub(crate) fn default_regret_checkpoint_name(regret: &RegretInfo) -> String {
+    let date = regret
+        .origin_date
+        .as_deref()
+        .unwrap_or(&regret.creation_time);
+    format!("Regret {}", short_datetime(date))
+}
+
+pub(crate) fn prompt_keep_regret_name(
+    regret: &RegretInfo,
+    kernel: &str,
+    placeholder: &str,
+) -> Result<Option<String>> {
+    let members = regret.entries.len();
+    let kernel = kernel.to_string();
+    input_line("Nome", "", placeholder, "enter confirma · esc volta", move || {
+        clear_screen();
+        header("Guardar Regret");
+        line(format_args!("{:<9} {}", "membros", members));
+        line(format_args!("{:<9} {}", "kernel", kernel));
+        line(format_args!(
+            "{:<9} {}",
+            "origem",
+            short_datetime(&regret.creation_time)
+        ));
+        println!();
+    })
+}
+
+const RESTORE_NAME_COL_MAX: usize = 28;
+
+fn restore_name_min(has_regret: bool) -> usize {
+    if has_regret {
+        return "↺ Regret guardado".chars().count();
+    }
+    0
 }
 
 /// Linha do picker de restore escopado ao `root`: o kernel daquele snapshot é
@@ -633,7 +703,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
             m.config,
             mountpoint,
             m.snapshot.number,
-            short_datetime(&m.snapshot.date)
+            short_datetime(group::snapshot_date(&m.snapshot))
         );
         items.push(truncate_for_terminal(&text, MULTI_MARKER));
     }
@@ -703,9 +773,10 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
 
     clear_screen();
     header("Restaurar Regret");
+    let title = if regret.saved { "↺ Regret guardado" } else { "↺ Regret" };
     line(format_args!(
         "{}  {}  estado anterior à última restauração  {}  criado {}",
-        regret_title("↺ Regret"),
+        regret_title(title),
         style("·").dim(),
         style("·").dim(),
         short_datetime(&regret.creation_time)
@@ -737,6 +808,8 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     Ok(Some(RegretInfo {
         entries,
         creation_time: regret.creation_time.clone(),
+        origin_date: regret.origin_date.clone(),
+        saved: regret.saved,
     }))
 }
 
