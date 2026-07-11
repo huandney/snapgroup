@@ -1,5 +1,6 @@
 pub(crate) mod boot_clean;
 pub(crate) mod boot_sync;
+pub(crate) mod checkpoints;
 pub(crate) mod doctor;
 pub(crate) mod rename;
 pub(crate) mod restore;

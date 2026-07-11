@@ -1,9 +1,12 @@
 use crate::group::{self, Group, GroupId};
 use crate::snapper;
+use crate::ui::checkpoints::{
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, kernel_label,
+    name_cell, picker_header, picker_prompt, picker_row, review_irreversible,
+};
 use crate::ui::term::{
-    AltScreen, CONTENT_INDENT, HINT_MULTI, THEME, app_header, clear_screen,
-    content_width, ellipsize, header, input_line, line, prompt_hint,
-    section_header, short_datetime, truncate_for_terminal,
+    AltScreen, HINT_MULTI, THEME, app_header, clear_screen, ellipsize, header, input_line, line,
+    prompt_hint, section_header, short_datetime, truncate_for_terminal,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -52,25 +55,32 @@ pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]
 /// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
 /// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
 /// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
-pub(crate) fn select_delete_plan(groups: &[Group], purge: bool) -> Result<Option<Vec<usize>>> {
+pub(crate) fn select_delete_plan(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    purge: bool,
+) -> Result<Option<Vec<usize>>> {
     let _alt = AltScreen::enter();
     // Uma tela de revisão para qualquer caminho (seleção ou "todos"): mostra o
     // que será afetado e confirma. Trash ou purge só muda o texto. Esc na
     // revisão volta pra seleção (um passo).
     loop {
-        let Some(indices) = select_delete_targets(groups)? else {
+        let Some(indices) = select_delete_targets(groups, kernel_labels)? else {
             return Ok(None);
         };
         let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-        match confirm_delete_targets(&targets, purge)? {
-            DeleteFlow::Proceed => return Ok(Some(indices)),
-            DeleteFlow::Back => continue,
-            DeleteFlow::Cancel => return Ok(None),
+        match confirm_delete_targets(&targets, kernel_labels, purge)? {
+            ReviewDecision::Proceed => return Ok(Some(indices)),
+            ReviewDecision::Back => continue,
+            ReviewDecision::Cancel => return Ok(None),
         }
     }
 }
 
-fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
+fn select_delete_targets(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+) -> Result<Option<Vec<usize>>> {
     loop {
         clear_screen();
         header("Apagar checkpoints");
@@ -83,7 +93,7 @@ fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
             .context("seleção cancelada")?;
 
         match action {
-            Some(0) => match select_delete_targets_manually(groups)? {
+            Some(0) => match select_delete_targets_manually(groups, kernel_labels)? {
                 Some(targets) => return Ok(Some(targets)),
                 None => continue,
             },
@@ -95,37 +105,39 @@ fn select_delete_targets(groups: &[Group]) -> Result<Option<Vec<usize>>> {
     }
 }
 
-fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>> {
-    let name_col = groups
-        .iter()
-        .map(|g| group::description(g).chars().count())
-        .max()
-        .unwrap_or(NAME_HEADER.len())
-        .max(NAME_HEADER.len())
-        .min(NAME_COL_MAX);
+fn select_delete_targets_manually(
+    groups: &[Group],
+    kernel_labels: &HashMap<GroupId, String>,
+) -> Result<Option<Vec<usize>>> {
+    let columns = CheckpointColumns::new(
+        groups,
+        kernel_labels,
+        NAME_HEADER.len(),
+        NAME_COL_MAX,
+        KERNEL_HEADER.len(),
+    )
+    .fit_to_terminal(
+        crate::ui::term::MULTI_MARKER,
+        None,
+        PickerTail::MembersAndId,
+    );
 
     let mut items: Vec<String> = Vec::new();
     for g in groups {
-        let desc = group::description(g);
-        let desc_cell = if desc.chars().count() > name_col {
-            let cut: String = desc.chars().take(name_col - 1).collect();
-            format!("{cut}…")
-        } else {
-            format!("{desc:<name_col$}")
-        };
-        let text = format!(
-            "{desc_cell}   {:<DATE_COL$}   {} membros   #{}",
-            short_datetime(group::date(g)),
-            g.members.len(),
-            g.id
-        );
+        let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
         items.push(truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER));
     }
+    let columns_header = picker_header(&columns, None, PickerTail::MembersAndId);
+    let prompt = picker_prompt(
+        &prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI),
+        &columns_header,
+        crate::ui::term::MULTI_MARKER,
+    );
 
     clear_screen();
     header("Apagar checkpoints");
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI))
+        .with_prompt(prompt)
         .items(&items)
         .clear(true)
         .report(false)
@@ -143,124 +155,17 @@ fn select_delete_targets_manually(groups: &[Group]) -> Result<Option<Vec<usize>>
     Ok(Some(selections))
 }
 
-/// Decisão na tela de confirmação de exclusão. `Back` = Esc (volta pra seleção,
-/// um passo); `Cancel` = "Cancelar" explícito (encerra).
-enum DeleteFlow {
-    Proceed,
-    Back,
-    Cancel,
-}
-
-fn confirm_delete_targets(targets: &[&Group], purge: bool) -> Result<DeleteFlow> {
+fn confirm_delete_targets(
+    targets: &[&Group],
+    kernel_labels: &HashMap<GroupId, String>,
+    purge: bool,
+) -> Result<ReviewDecision> {
     let (prompt, hint) = if purge {
         ("Apagar permanentemente?", "ignora a lixeira")
     } else {
         ("Mover para a lixeira?", "recuperável em snapg trash")
     };
-    confirm_delete_targets_with_prompt(targets, prompt, Some(hint))
-}
-
-fn confirm_delete_targets_with_prompt(
-    targets: &[&Group],
-    prompt: &str,
-    dim_hint: Option<&str>,
-) -> Result<DeleteFlow> {
-    let mut yes = false;
-    let mut page = 0usize;
-    loop {
-        let page_size = delete_confirm_page_size();
-        let pages = targets.len().div_ceil(page_size).max(1);
-        page = page.min(pages - 1);
-
-        render_delete_confirmation(targets, prompt, dim_hint, yes, page, page_size, pages);
-        match console::Term::stdout()
-            .read_key()
-            .context("aguardar confirmação")?
-        {
-            console::Key::ArrowUp | console::Key::ArrowDown => yes = !yes,
-            console::Key::ArrowLeft => page = page.saturating_sub(1),
-            console::Key::ArrowRight => page = (page + 1).min(pages - 1),
-            console::Key::Enter => {
-                return Ok(if yes {
-                    DeleteFlow::Proceed
-                } else {
-                    DeleteFlow::Cancel
-                });
-            }
-            console::Key::Escape => return Ok(DeleteFlow::Back),
-            _ => {}
-        }
-    }
-}
-
-fn render_delete_confirmation(
-    targets: &[&Group],
-    prompt: &str,
-    dim_hint: Option<&str>,
-    yes: bool,
-    page: usize,
-    page_size: usize,
-    pages: usize,
-) {
-    clear_screen();
-    header("Apagar checkpoints");
-    println!();
-    match dim_hint {
-        Some(hint) => line(format_args!("{} {}", style(prompt).bold(), style(format!("({hint})")).dim())),
-        None => line(format_args!("{}", style(prompt).bold())),
-    }
-    line(format_args!("{} Sim", if yes { ">" } else { " " }));
-    line(format_args!("{} Não", if yes { " " } else { ">" }));
-    println!();
-
-    let start = page * page_size;
-    let end = (start + page_size).min(targets.len());
-    for g in &targets[start..end] {
-        print_delete_target_card(g);
-    }
-    if pages > 1 {
-        line(format_args!(
-            "{}",
-            style(format!("página {}/{} · ←/→ navega", page + 1, pages)).dim()
-        ));
-    }
-}
-
-fn delete_confirm_page_size() -> usize {
-    let rows = console::Term::stdout().size().0 as usize;
-    // Header + prompt/options + paginação ocupam ~8 linhas. Cada item usa
-    // 3 linhas (nome, metadados, respiro).
-    rows.saturating_sub(8).max(3) / 3
-}
-
-fn print_delete_target_card(g: &Group) {
-    let desc_width = content_width().min(80);
-    let desc = group::description(g).trim();
-    let desc = if desc.is_empty() {
-        format!("#{}", g.id)
-    } else {
-        desc.to_string()
-    };
-    let desc = truncate_chars(&desc, desc_width);
-    println!("{CONTENT_INDENT}{desc}");
-    println!(
-        "{}{} {}",
-        CONTENT_INDENT,
-        style(format!(
-            "└─ {} · {} membros ·",
-            short_datetime(group::date(g)),
-            g.members.len()
-        ))
-        .dim(),
-        style(g.id).dim()
-    );
-}
-
-fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+    review_irreversible(targets, kernel_labels, "Apagar checkpoints", prompt, hint)
 }
 
 pub(crate) fn print_delete_cancelled() {
@@ -352,8 +257,6 @@ pub(crate) fn print_no_groups() {
 }
 
 const ID_COL: usize = 10;
-const NAME_HEADER: &str = "Nome";
-const KERNEL_HEADER: &str = "Kernel";
 const DATE_HEADER: &str = "Data";
 const MEMBERS_HEADER: &str = "Membros";
 const DATE_COL: usize = 16;
@@ -380,27 +283,21 @@ pub(crate) fn print_groups(
         rows.push((g, member_badges(&mut mountpoints)));
     }
 
-    let kernel_col = groups
-        .iter()
-        .filter_map(|g| kernel_labels.get(&g.id))
-        .map(|k| k.chars().count())
-        .max()
-        .unwrap_or(KERNEL_HEADER.len())
-        .max(KERNEL_HEADER.len());
+    let columns = CheckpointColumns::new(
+        groups,
+        kernel_labels,
+        NAME_HEADER.len(),
+        NAME_COL_MAX,
+        KERNEL_HEADER.len(),
+    );
+    let kernel_col = columns.kernel;
     let members_col = rows
         .iter()
         .map(|(_, members)| members.chars().count())
         .max()
         .unwrap_or(MEMBERS_HEADER.len())
         .max(MEMBERS_HEADER.len());
-    let natural_name_col = groups
-        .iter()
-        .map(|g| group::description(g).chars().count())
-        .max()
-        .unwrap_or(NAME_HEADER.len())
-        .max(NAME_HEADER.len())
-        .min(NAME_COL_MAX);
-    let name_col = natural_name_col.min(list_name_col_for_terminal(kernel_col, members_col));
+    let name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col));
 
     line(format_args!(
         "{}   {}   {}   {}   {}",
@@ -412,14 +309,8 @@ pub(crate) fn print_groups(
     ));
 
     for (g, members) in rows {
-        let desc = group::description(g);
-        let desc_cell = if desc.chars().count() > name_col {
-            let cut: String = desc.chars().take(name_col - 1).collect();
-            format!("{cut}…")
-        } else {
-            format!("{desc:<name_col$}")
-        };
-        let kernel = kernel_labels.get(&g.id).map(String::as_str).unwrap_or("?");
+        let desc_cell = name_cell(g, name_col);
+        let kernel = kernel_label(kernel_labels, g.id);
         line(format_args!(
             "{}   {}   {:<kernel_col$}   {:<DATE_COL$}   {}",
             style(format!("{:>ID_COL$}", g.id)).dim(),
