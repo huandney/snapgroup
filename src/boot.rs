@@ -491,11 +491,18 @@ pub fn boot_kernel_label(boot: &Path) -> String {
 fn boot_kernel_version(boot: &Path) -> Option<String> {
     let kver = running_kernel()?;
     let running_vmlinuz = Path::new("/usr/lib/modules").join(&kver).join("vmlinuz");
-    let groups = discover_kernel_groups(boot).ok()?;
-    let boot_vmlinuz = groups.first()?.vmlinuz_paths.first()?;
-    let boot_bytes = fs::read(boot_vmlinuz).ok()?;
     let running_bytes = fs::read(&running_vmlinuz).ok()?;
-    (boot_bytes == running_bytes).then_some(kver)
+    let groups = discover_kernel_groups(boot).ok()?;
+    for group in groups {
+        for vmlinuz_path in group.vmlinuz_paths {
+            if let Ok(boot_bytes) = fs::read(&vmlinuz_path)
+                && boot_bytes == running_bytes
+            {
+                return Some(kver);
+            }
+        }
+    }
+    None
 }
 
 /// Kernels presentes em `<root>/usr/lib/modules`, ordenados e juntos por
@@ -737,14 +744,20 @@ struct KernelGroup {
     initramfs_paths: Vec<PathBuf>,
 }
 
-/// Varre /boot recursivamente e agrupa vmlinuz-*/initramfs-* por kernel_name
-/// extraído do nome do arquivo (padrão Arch: vmlinuz-linux-cachyos,
-/// initramfs-linux-cachyos[.img]). Layouts BLS e flat saem agrupados juntos
-/// sob o mesmo kernel_name.
+/// Varre /boot recursivamente e agrupa vmlinuz-*/initramfs-* por kernel_name.
+/// Suporta layouts BLS (/boot/<machine-id>/<kernel>/), Flat (/boot/vmlinuz-*),
+/// entradas ativas do /boot/limine.conf e UKIs (.efi).
 fn discover_kernel_groups(boot: &Path) -> Result<Vec<KernelGroup>> {
     let mut by_name: HashMap<String, KernelGroup> = HashMap::new();
     scan_boot_dir(boot, &mut by_name)?;
+    let _ = scan_limine_conf(boot, &mut by_name);
     let mut groups: Vec<KernelGroup> = by_name.into_values().collect();
+    for group in &mut groups {
+        group.vmlinuz_paths.sort_unstable();
+        group.vmlinuz_paths.dedup();
+        group.initramfs_paths.sort_unstable();
+        group.initramfs_paths.dedup();
+    }
     groups.sort_by(|a, b| a.kernel_name.cmp(&b.kernel_name));
     Ok(groups)
 }
@@ -769,19 +782,21 @@ fn scan_boot_dir(dir: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<(
         if !file_type.is_file() {
             continue;
         }
-        let Some((kernel_name, is_vmlinuz)) = classify_boot_file(&name) else {
+        let Some((kernel_name, is_vmlinuz)) = classify_boot_path(&path) else {
             continue;
         };
         let group = out
-            .entry(kernel_name.to_string())
+            .entry(kernel_name.clone())
             .or_insert_with(|| KernelGroup {
-                kernel_name: kernel_name.to_string(),
+                kernel_name,
                 vmlinuz_paths: Vec::new(),
                 initramfs_paths: Vec::new(),
             });
         if is_vmlinuz {
-            group.vmlinuz_paths.push(path);
-        } else {
+            if !group.vmlinuz_paths.contains(&path) {
+                group.vmlinuz_paths.push(path);
+            }
+        } else if !group.initramfs_paths.contains(&path) {
             group.initramfs_paths.push(path);
         }
     }
@@ -792,13 +807,51 @@ fn is_ignored_boot_dir(name: &str) -> bool {
     matches!(name, "limine_history" | ".snapg_boot_backup")
 }
 
-/// Classifica um arquivo em /boot como `(kernel_name, is_vmlinuz)`.
+fn is_generic_boot_dir(name: &str) -> bool {
+    matches!(
+        name,
+        "boot" | "efi" | "EFI" | "grub" | "loader" | "syslinux" | "limine" | "entries"
+    ) || (name.len() == 32 && name.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// Classifica um caminho de arquivo em /boot como `(kernel_name, is_vmlinuz)`.
+fn classify_boot_path(path: &Path) -> Option<(String, bool)> {
+    let name = path.file_name()?.to_str()?;
+    if let Some((kernel_name, is_vmlinuz)) = classify_boot_file(name) {
+        return Some((kernel_name.to_string(), is_vmlinuz));
+    }
+    if (name == "vmlinuz" || name == "vmlinuz.efi")
+        && let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+        && !is_generic_boot_dir(parent)
+    {
+        return Some((parent.to_string(), true));
+    }
+    if (name == "initramfs" || name == "initramfs.img")
+        && let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
+        && !is_generic_boot_dir(parent)
+    {
+        return Some((parent.to_string(), false));
+    }
+    // Suporte a UKIs (.efi): ex. <machine-id>_linux-cachyos.efi ou linux-cachyos.efi
+    if name.ends_with(".efi") && !name.contains("fallback") {
+        let base = name.strip_suffix(".efi")?;
+        let kernel = if let Some((_, k)) = base.split_once('_') {
+            k
+        } else {
+            base
+        };
+        if kernel.starts_with("linux") || kernel.starts_with("vmlinuz") {
+            return Some((kernel.to_string(), true));
+        }
+    }
+    None
+}
+
+/// Classifica um arquivo em /boot pelo nome como `(kernel_name, is_vmlinuz)`.
 /// - `vmlinuz-linux-cachyos`       → `("linux-cachyos", true)`
 /// - `initramfs-linux-cachyos.img` → `("linux-cachyos", false)`
 ///
-/// Fallback initramfs (`initramfs-*-fallback*`) é ignorado: sem preset não
-/// dá pra reconstruir um fallback corretamente, e o do backup vai cobrir a
-/// recuperação se algo falhar.
+/// Fallback initramfs (`initramfs-*-fallback*`) é ignorado.
 fn classify_boot_file(name: &str) -> Option<(&str, bool)> {
     if let Some(rest) = name.strip_prefix("vmlinuz-") {
         return Some((strip_img_ext(rest), true));
@@ -815,6 +868,86 @@ fn classify_boot_file(name: &str) -> Option<(&str, bool)> {
 
 fn strip_img_ext(s: &str) -> &str {
     s.strip_suffix(".img").unwrap_or(s)
+}
+
+/// Extrai entradas de kernel ativas diretamente do limine.conf (se existir),
+/// ignorando subentradas de histórico/snapshots.
+fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
+    let conf_path = boot.join("limine.conf");
+    if !conf_path.exists() {
+        return Ok(());
+    }
+    let content =
+        fs::read_to_string(&conf_path).with_context(|| format!("ler {}", conf_path.display()))?;
+    let mut in_snapshots = false;
+    let mut current_kernel_name: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//Snapshots") || trimmed.starts_with("///Snapshots") {
+            in_snapshots = true;
+            continue;
+        }
+        if in_snapshots {
+            if trimmed.starts_with("/+")
+                || (trimmed.starts_with('/')
+                    && !trimmed.starts_with("///")
+                    && !trimmed.starts_with("////"))
+            {
+                in_snapshots = false;
+            } else {
+                continue;
+            }
+        }
+        if !in_snapshots {
+            if let Some(entry_name) = trimmed.strip_prefix("//") {
+                let name = entry_name.trim();
+                if !name.is_empty() && !name.starts_with('/') {
+                    current_kernel_name = Some(name.to_string());
+                }
+            }
+            if let Some(k_id) = trimmed.strip_prefix("comment: kernel-id=") {
+                let id = k_id.trim();
+                if !id.is_empty() {
+                    current_kernel_name = Some(id.to_string());
+                }
+            }
+        }
+
+        if let Some((key, value)) = trimmed.split_once(':') {
+            let key = key.trim();
+            let val = value.trim();
+            let uri_without_hash = val.split_once('#').map(|(u, _)| u).unwrap_or(val).trim();
+            if let Some(rel) = uri_without_hash.strip_prefix("boot():/") {
+                let full_path = boot.join(rel);
+                if full_path.exists() {
+                    let is_vmlinuz = matches!(key, "path" | "kernel_path");
+                    let is_initramfs = matches!(key, "module_path" | "image_path");
+                    if is_vmlinuz || is_initramfs {
+                        let k_name = current_kernel_name.clone().unwrap_or_else(|| {
+                            full_path
+                                .parent()
+                                .and_then(|p| p.file_name())
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "default".to_string())
+                        });
+                        let group = out.entry(k_name.clone()).or_insert_with(|| KernelGroup {
+                            kernel_name: k_name,
+                            vmlinuz_paths: Vec::new(),
+                            initramfs_paths: Vec::new(),
+                        });
+                        if is_vmlinuz && !group.vmlinuz_paths.contains(&full_path) {
+                            group.vmlinuz_paths.push(full_path);
+                        } else if is_initramfs && !group.initramfs_paths.contains(&full_path) {
+                            group.initramfs_paths.push(full_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Conjunto de arquivos críticos para backup: vmlinuz/initramfs ativos de
@@ -1207,5 +1340,64 @@ mod tests {
         assert_eq!(classify_boot_file("intel-ucode.img"), None);
         assert_eq!(classify_boot_file("limine.conf"), None);
         assert_eq!(classify_boot_file("limine-splash.png"), None);
+    }
+
+    #[test]
+    fn classifies_bls_and_uki_paths() {
+        use super::classify_boot_path;
+        // BLS / CachyOS layout (/boot/<machine-id>/<kernel_name>/vmlinuz)
+        assert_eq!(
+            classify_boot_path(Path::new("/boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz")),
+            Some(("linux-cachyos".to_string(), true))
+        );
+        assert_eq!(
+            classify_boot_path(Path::new("/boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs")),
+            Some(("linux-cachyos".to_string(), false))
+        );
+        // UKI layout
+        assert_eq!(
+            classify_boot_path(Path::new("/boot/EFI/Linux/0262533c4ca04359a5f379b8e3f83042_linux-cachyos.efi")),
+            Some(("linux-cachyos".to_string(), true))
+        );
+        assert_eq!(
+            classify_boot_path(Path::new("/boot/EFI/Linux/linux-cachyos-fallback.efi")),
+            None
+        );
+    }
+
+    #[test]
+    fn scan_limine_conf_extracts_active_entries_and_skips_snapshots() {
+        use super::scan_limine_conf;
+        let base = std::env::temp_dir().join(format!("snapg_test_limine_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos")).unwrap();
+        std::fs::write(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos"), "vmlinuz").unwrap();
+        std::fs::write(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos"), "initramfs").unwrap();
+
+        let limine_conf_content = "\
+/+CachyOS
+  //linux-cachyos
+  comment: Kernel version: 7.0.1-1-cachyos
+  comment: kernel-id=linux-cachyos 
+  protocol: linux
+  module_path: boot():/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos#cabfa235
+  path: boot():/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos#daada949
+  cmdline: quiet rootflags=subvol=/@
+
+     //Snapshots
+     ///287 │ 2026-04-30 20:49:34
+     path: boot():/0262533c4ca04359a5f379b8e3f83042/limine_history/vmlinuz_snap#1234
+";
+        std::fs::write(base.join("limine.conf"), limine_conf_content).unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_limine_conf(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let cachy_group = groups.get("linux-cachyos").expect("grupo linux-cachyos deve existir");
+        assert_eq!(cachy_group.vmlinuz_paths.len(), 1);
+        assert_eq!(cachy_group.initramfs_paths.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
