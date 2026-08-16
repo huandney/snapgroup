@@ -744,13 +744,16 @@ struct KernelGroup {
     initramfs_paths: Vec<PathBuf>,
 }
 
-/// Varre /boot recursivamente e agrupa vmlinuz-*/initramfs-* por kernel_name.
-/// Suporta layouts BLS (/boot/<machine-id>/<kernel>/), Flat (/boot/vmlinuz-*),
-/// entradas ativas do /boot/limine.conf e UKIs (.efi).
+/// Descobre os artefatos de kernel em /boot de forma afirmativa.
+/// Prioriza o bootloader ativo (Limine, BLS/machine-id, UKI, Flat) e NUNCA
+/// faz varredura recursiva cega em diretórios de outros sistemas operacionais (ex: Windows/EFI).
 fn discover_kernel_groups(boot: &Path) -> Result<Vec<KernelGroup>> {
     let mut by_name: HashMap<String, KernelGroup> = HashMap::new();
-    scan_boot_dir(boot, &mut by_name)?;
-    let _ = scan_limine_conf(boot, &mut by_name);
+    scan_limine_conf(boot, &mut by_name)?;
+    scan_bls_dirs(boot, &mut by_name)?;
+    scan_uki_dir(boot, &mut by_name)?;
+    scan_flat_boot_dir(boot, &mut by_name)?;
+
     let mut groups: Vec<KernelGroup> = by_name.into_values().collect();
     for group in &mut groups {
         group.vmlinuz_paths.sort_unstable();
@@ -762,89 +765,110 @@ fn discover_kernel_groups(boot: &Path) -> Result<Vec<KernelGroup>> {
     Ok(groups)
 }
 
-fn scan_boot_dir(dir: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
-    let walk = fs::read_dir(dir).with_context(|| format!("ler {}", dir.display()))?;
-    for entry in walk {
-        let entry = entry?;
+/// Varre entradas BLS Type #1 diretamente em /boot/<machine-id>/<kernel_name>/
+fn scan_bls_dirs(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
+    let Ok(entries) = fs::read_dir(boot) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_symlink() {
-            continue;
-        }
-        if file_type.is_dir() {
-            if is_ignored_boot_dir(&name) {
-                continue;
+        if name.len() == 32 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+            let machine_dir = entry.path();
+            if let Ok(kernel_dirs) = fs::read_dir(&machine_dir) {
+                for k_entry in kernel_dirs.flatten() {
+                    let k_name = k_entry.file_name().to_string_lossy().into_owned();
+                    if k_name == "limine_history"
+                        || !k_entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    let k_dir = k_entry.path();
+                    let vmlinuz = k_dir.join("vmlinuz");
+                    let initramfs = k_dir.join("initramfs");
+                    if vmlinuz.exists() || initramfs.exists() {
+                        let group = out.entry(k_name.clone()).or_insert_with(|| KernelGroup {
+                            kernel_name: k_name,
+                            vmlinuz_paths: Vec::new(),
+                            initramfs_paths: Vec::new(),
+                        });
+                        if vmlinuz.exists() && !group.vmlinuz_paths.contains(&vmlinuz) {
+                            group.vmlinuz_paths.push(vmlinuz);
+                        }
+                        if initramfs.exists() && !group.initramfs_paths.contains(&initramfs) {
+                            group.initramfs_paths.push(initramfs);
+                        }
+                    }
+                }
             }
-            scan_boot_dir(&path, out)?;
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-        let Some((kernel_name, is_vmlinuz)) = classify_boot_path(&path) else {
-            continue;
-        };
-        let group = out
-            .entry(kernel_name.clone())
-            .or_insert_with(|| KernelGroup {
-                kernel_name,
-                vmlinuz_paths: Vec::new(),
-                initramfs_paths: Vec::new(),
-            });
-        if is_vmlinuz {
-            if !group.vmlinuz_paths.contains(&path) {
-                group.vmlinuz_paths.push(path);
-            }
-        } else if !group.initramfs_paths.contains(&path) {
-            group.initramfs_paths.push(path);
         }
     }
     Ok(())
 }
 
-fn is_ignored_boot_dir(name: &str) -> bool {
-    matches!(name, "limine_history" | ".snapg_boot_backup")
-}
-
-fn is_generic_boot_dir(name: &str) -> bool {
-    matches!(
-        name,
-        "boot" | "efi" | "EFI" | "grub" | "loader" | "syslinux" | "limine" | "entries"
-    ) || (name.len() == 32 && name.chars().all(|c| c.is_ascii_hexdigit()))
-}
-
-/// Classifica um caminho de arquivo em /boot como `(kernel_name, is_vmlinuz)`.
-fn classify_boot_path(path: &Path) -> Option<(String, bool)> {
-    let name = path.file_name()?.to_str()?;
-    if let Some((kernel_name, is_vmlinuz)) = classify_boot_file(name) {
-        return Some((kernel_name.to_string(), is_vmlinuz));
-    }
-    if (name == "vmlinuz" || name == "vmlinuz.efi")
-        && let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
-        && !is_generic_boot_dir(parent)
-    {
-        return Some((parent.to_string(), true));
-    }
-    if (name == "initramfs" || name == "initramfs.img")
-        && let Some(parent) = path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str())
-        && !is_generic_boot_dir(parent)
-    {
-        return Some((parent.to_string(), false));
-    }
-    // Suporte a UKIs (.efi): ex. <machine-id>_linux-cachyos.efi ou linux-cachyos.efi
-    if name.ends_with(".efi") && !name.contains("fallback") {
-        let base = name.strip_suffix(".efi")?;
-        let kernel = if let Some((_, k)) = base.split_once('_') {
-            k
-        } else {
-            base
-        };
-        if kernel.starts_with("linux") || kernel.starts_with("vmlinuz") {
-            return Some((kernel.to_string(), true));
+/// Varre o layout Flat tradicional do Arch apenas no topo de /boot (sem recursão).
+fn scan_flat_boot_dir(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
+    let Ok(entries) = fs::read_dir(boot) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if let Some((kernel_name, is_vmlinuz)) = classify_boot_file(&name) {
+            let group = out.entry(kernel_name.to_string()).or_insert_with(|| KernelGroup {
+                kernel_name: kernel_name.to_string(),
+                vmlinuz_paths: Vec::new(),
+                initramfs_paths: Vec::new(),
+            });
+            if is_vmlinuz && !group.vmlinuz_paths.contains(&path) {
+                group.vmlinuz_paths.push(path);
+            } else if !is_vmlinuz && !group.initramfs_paths.contains(&path) {
+                group.initramfs_paths.push(path);
+            }
         }
     }
-    None
+    Ok(())
+}
+
+/// Varre UKIs especificamente dentro do diretório padrão /boot/EFI/Linux/*.efi
+fn scan_uki_dir(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
+    let uki_dir = boot.join("EFI/Linux");
+    if !uki_dir.exists() {
+        return Ok(());
+    }
+    let Ok(entries) = fs::read_dir(&uki_dir) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if name.ends_with(".efi")
+            && !name.contains("fallback")
+            && let Some(base) = name.strip_suffix(".efi")
+        {
+            let kernel = if let Some((_, k)) = base.split_once('_') {
+                k
+            } else {
+                base
+            };
+            if kernel.starts_with("linux") || kernel.starts_with("vmlinuz") {
+                let group = out.entry(kernel.to_string()).or_insert_with(|| KernelGroup {
+                    kernel_name: kernel.to_string(),
+                    vmlinuz_paths: Vec::new(),
+                    initramfs_paths: Vec::new(),
+                });
+                if !group.vmlinuz_paths.contains(&path) {
+                    group.vmlinuz_paths.push(path);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Classifica um arquivo em /boot pelo nome como `(kernel_name, is_vmlinuz)`.
@@ -871,7 +895,7 @@ fn strip_img_ext(s: &str) -> &str {
 }
 
 /// Extrai entradas de kernel ativas diretamente do limine.conf (se existir),
-/// ignorando subentradas de histórico/snapshots.
+/// ignorando subentradas de histórico/snapshots e entradas de outros SOs (protocol: efi).
 fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
     let conf_path = boot.join("limine.conf");
     if !conf_path.exists() {
@@ -881,6 +905,7 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
         fs::read_to_string(&conf_path).with_context(|| format!("ler {}", conf_path.display()))?;
     let mut in_snapshots = false;
     let mut current_kernel_name: Option<String> = None;
+    let mut current_protocol: Option<String> = None;
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -900,6 +925,16 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
             }
         }
         if !in_snapshots {
+            if trimmed.starts_with('/')
+                && !trimmed.starts_with("///")
+                && !trimmed.starts_with("////")
+            {
+                current_protocol = None;
+                current_kernel_name = None;
+            }
+            if let Some(proto) = trimmed.strip_prefix("protocol:") {
+                current_protocol = Some(proto.trim().to_lowercase());
+            }
             if let Some(entry_name) = trimmed.strip_prefix("//") {
                 let name = entry_name.trim();
                 if !name.is_empty() && !name.starts_with('/') {
@@ -912,6 +947,11 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
                     current_kernel_name = Some(id.to_string());
                 }
             }
+        }
+
+        // Ignora entradas de outros sistemas operacionais / chainloaders (ex: protocol: efi do Windows)
+        if current_protocol.as_deref() == Some("efi") {
+            continue;
         }
 
         if let Some((key, value)) = trimmed.split_once(':') {
@@ -1044,8 +1084,23 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     let had_trailing_newline = content.ends_with('\n');
     let mut changed = false;
     let mut lines = Vec::new();
+    let mut current_protocol = String::new();
+
     for line in content.lines() {
-        let refreshed = refresh_limine_hash_for_line(boot, line)?;
+        let trimmed = line.trim();
+        if let Some(proto) = trimmed.strip_prefix("protocol:") {
+            current_protocol = proto.trim().to_lowercase();
+        } else if trimmed.starts_with('/') {
+            current_protocol.clear();
+        }
+
+        // Não injeta hash em entradas EFI limpas (ex: Windows / chainloader)
+        let refreshed = if current_protocol == "efi" && !line.contains('#') {
+            line.to_string()
+        } else {
+            refresh_limine_hash_for_line(boot, line)?
+        };
+
         if refreshed != line {
             changed = true;
         }
@@ -1075,7 +1130,21 @@ fn limine_hashes_match(boot: &Path) -> Result<bool> {
         return Ok(true);
     }
     let content = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
+    let mut current_protocol = String::new();
+
     for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(proto) = trimmed.strip_prefix("protocol:") {
+            current_protocol = proto.trim().to_lowercase();
+        } else if trimmed.starts_with('/') {
+            current_protocol.clear();
+        }
+
+        // Ignora entradas EFI da verificação de hash do kernel
+        if current_protocol == "efi" {
+            continue;
+        }
+
         let Some(recorded) = limine_recorded_hash(line) else {
             continue;
         };
@@ -1343,36 +1412,86 @@ mod tests {
     }
 
     #[test]
-    fn classifies_bls_and_uki_paths() {
-        use super::classify_boot_path;
-        // BLS / CachyOS layout (/boot/<machine-id>/<kernel_name>/vmlinuz)
-        assert_eq!(
-            classify_boot_path(Path::new("/boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz")),
-            Some(("linux-cachyos".to_string(), true))
-        );
-        assert_eq!(
-            classify_boot_path(Path::new("/boot/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs")),
-            Some(("linux-cachyos".to_string(), false))
-        );
-        // UKI layout
-        assert_eq!(
-            classify_boot_path(Path::new("/boot/EFI/Linux/0262533c4ca04359a5f379b8e3f83042_linux-cachyos.efi")),
-            Some(("linux-cachyos".to_string(), true))
-        );
-        assert_eq!(
-            classify_boot_path(Path::new("/boot/EFI/Linux/linux-cachyos-fallback.efi")),
-            None
-        );
+    fn scan_bls_dirs_discovers_machine_id_kernels() {
+        use super::scan_bls_dirs;
+        let base = std::env::temp_dir().join(format!("snapg_test_bls_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let kdir = base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos");
+        std::fs::create_dir_all(&kdir).unwrap();
+        std::fs::write(kdir.join("vmlinuz"), "vmlinuz").unwrap();
+        std::fs::write(kdir.join("initramfs"), "initramfs").unwrap();
+
+        // Cria pasta de histórico que deve ser ignorada
+        let hdir = base.join("0262533c4ca04359a5f379b8e3f83042/limine_history");
+        std::fs::create_dir_all(&hdir).unwrap();
+        std::fs::write(hdir.join("vmlinuz"), "vmlinuz").unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_bls_dirs(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let g = groups.get("linux-cachyos").expect("linux-cachyos");
+        assert_eq!(g.vmlinuz_paths, vec![kdir.join("vmlinuz")]);
+        assert_eq!(g.initramfs_paths, vec![kdir.join("initramfs")]);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn scan_limine_conf_extracts_active_entries_and_skips_snapshots() {
+    fn scan_flat_boot_dir_only_scans_root_level() {
+        use super::scan_flat_boot_dir;
+        let base = std::env::temp_dir().join(format!("snapg_test_flat_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("vmlinuz-linux"), "vmlinuz").unwrap();
+        std::fs::write(base.join("initramfs-linux.img"), "initramfs").unwrap();
+
+        // Cria pasta Windows com arquivos que não devem ser tocados
+        let win_dir = base.join("EFI/Microsoft/Boot");
+        std::fs::create_dir_all(&win_dir).unwrap();
+        std::fs::write(win_dir.join("bootmgfw.efi"), "win").unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_flat_boot_dir(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let g = groups.get("linux").expect("linux");
+        assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
+        assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_uki_dir_discovers_only_linux_ukis() {
+        use super::scan_uki_dir;
+        let base = std::env::temp_dir().join(format!("snapg_test_uki_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let uki_dir = base.join("EFI/Linux");
+        std::fs::create_dir_all(&uki_dir).unwrap();
+        std::fs::write(uki_dir.join("0262533c4ca04359a5f379b8e3f83042_linux-cachyos.efi"), "uki").unwrap();
+        std::fs::write(uki_dir.join("linux-cachyos-fallback.efi"), "fallback").unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_uki_dir(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let g = groups.get("linux-cachyos").expect("linux-cachyos");
+        assert_eq!(g.vmlinuz_paths.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_limine_conf_extracts_active_entries_and_skips_windows_and_snapshots() {
         use super::scan_limine_conf;
         let base = std::env::temp_dir().join(format!("snapg_test_limine_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos")).unwrap();
         std::fs::write(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz-linux-cachyos"), "vmlinuz").unwrap();
         std::fs::write(base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs-linux-cachyos"), "initramfs").unwrap();
+        std::fs::create_dir_all(base.join("EFI/Microsoft/Boot")).unwrap();
+        std::fs::write(base.join("EFI/Microsoft/Boot/bootmgfw.efi"), "win").unwrap();
 
         let limine_conf_content = "\
 /+CachyOS
@@ -1387,6 +1506,10 @@ mod tests {
      //Snapshots
      ///287 │ 2026-04-30 20:49:34
      path: boot():/0262533c4ca04359a5f379b8e3f83042/limine_history/vmlinuz_snap#1234
+
+/Windows
+  protocol: efi
+  path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
 ";
         std::fs::write(base.join("limine.conf"), limine_conf_content).unwrap();
 
@@ -1397,6 +1520,38 @@ mod tests {
         let cachy_group = groups.get("linux-cachyos").expect("grupo linux-cachyos deve existir");
         assert_eq!(cachy_group.vmlinuz_paths.len(), 1);
         assert_eq!(cachy_group.initramfs_paths.len(), 1);
+        assert!(!groups.contains_key("Windows"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn refresh_limine_boot_hashes_preserves_clean_windows_entry() {
+        use super::refresh_limine_boot_hashes;
+        let base = std::env::temp_dir().join(format!("snapg_test_limine_hash_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("kernel")).unwrap();
+        std::fs::write(base.join("kernel/vmlinuz"), "kernel_bytes").unwrap();
+        std::fs::create_dir_all(base.join("EFI/Microsoft/Boot")).unwrap();
+        std::fs::write(base.join("EFI/Microsoft/Boot/bootmgfw.efi"), "win_bytes").unwrap();
+
+        let limine_conf_content = "\
+/+CachyOS
+  protocol: linux
+  path: boot():/kernel/vmlinuz
+
+/Windows
+  protocol: efi
+  path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+";
+        std::fs::write(base.join("limine.conf"), limine_conf_content).unwrap();
+        refresh_limine_boot_hashes(&base).unwrap();
+
+        let updated = std::fs::read_to_string(base.join("limine.conf")).unwrap();
+        // O Linux deve receber hash, mas o Windows NÃO pode receber hash
+        assert!(updated.contains("path: boot():/kernel/vmlinuz#"));
+        assert!(updated.contains("path: boot():/EFI/Microsoft/Boot/bootmgfw.efi\n") || updated.ends_with("path: boot():/EFI/Microsoft/Boot/bootmgfw.efi"));
+        assert!(!updated.contains("bootmgfw.efi#"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
