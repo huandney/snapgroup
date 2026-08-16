@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1-beta] - 2026-08-16
+> Commits: `33a4f8f`
+
+### Boot / Recovery
+- **Refactor**: Replace recursive boot directory traversal with deterministic, configuration-driven discovery across Limine, BLS/machine-id (`/boot/<machine-id>/<kernel_name>/`), UKI and Flat Arch layouts, eliminating recursive I/O in the EFI partition.
+- **Fix**: Isolate foreign OS boot entries (such as Windows `protocol: efi`) from kernel discovery and prevent hash injection into chainloader entries in `limine.conf`.
+
 ## [0.10.0-beta] - 2026-08-14
 > Commits: `247912c`
 
