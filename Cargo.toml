@@ -1,6 +1,6 @@
 [package]
 name = "snapgroup"
-version = "0.9.0"
+version = "0.10.1"
 edition = "2024"
 description = "Wrapper Snapper com snapshots agrupados por subvolume"
 license = "MIT"
