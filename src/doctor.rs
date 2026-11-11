@@ -135,9 +135,9 @@ impl Drop for RescueMount {
 
 fn mount_default_subvol_ro(ctx: &boot::RescueContext) -> Result<RescueMount> {
     let path = PathBuf::from(format!("/run/snapgroup/doctor-at-{}", std::process::id()));
-    std::fs::create_dir_all(&path).context("criar mountpoint do root padrão")?;
+    crate::btrfs::create_private_mount_dir(&path).context("criar mountpoint do root padrão")?;
     let out = Command::new("mount")
-        .args(["-o", &format!("ro,subvol=/{}", ctx.default_subvol)])
+        .args(["-o", &format!("ro,nosuid,nodev,subvol=/{}", ctx.default_subvol)])
         .arg(&ctx.device)
         .arg(&path)
         .output()
