@@ -131,6 +131,44 @@ pub fn subvol_relative_path(any_path: &Path) -> Result<String> {
         .context("output vazio de btrfs subvolume show")
 }
 
+/// Subvolumes aninhados diretamente dentro de `subvol` (nome relativo ao
+/// top-level montado em `toplevel`), como paths relativos à raiz dele.
+/// Ex: para "@" → [".snapshots", "var/lib/machines"]. Só os filhos diretos: o
+/// que vive dentro de um aninhado acompanha o pai num rename.
+pub fn nested_subvolumes(toplevel: &Path, subvol: &str) -> Result<Vec<std::path::PathBuf>> {
+    let path = toplevel.join(subvol);
+    let out = Command::new("btrfs")
+        .args(["subvolume", "list", "-o"])
+        .arg(&path)
+        .output()
+        .context("btrfs subvolume list falhou")?;
+    if !out.status.success() {
+        bail!(
+            "list -o {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    parse_nested_subvolumes(&String::from_utf8_lossy(&out.stdout), subvol)
+}
+
+/// Cada linha é `ID 257 gen 9 top level 256 path @/var/lib/machines`, com o
+/// path relativo ao top-level do filesystem.
+fn parse_nested_subvolumes(listing: &str, subvol: &str) -> Result<Vec<std::path::PathBuf>> {
+    let prefix = format!("{subvol}/");
+    let mut nested = Vec::new();
+    for line in listing.lines() {
+        let Some((_, full)) = line.split_once(" path ") else {
+            continue;
+        };
+        let rel = full
+            .strip_prefix(&prefix)
+            .with_context(|| format!("subvolume '{full}' fora de '{subvol}' na listagem"))?;
+        nested.push(std::path::PathBuf::from(rel));
+    }
+    Ok(nested)
+}
+
 /// True se o path é um subvolume btrfs (não só diretório).
 pub fn is_subvolume(path: &Path) -> bool {
     Command::new("btrfs")
@@ -198,4 +236,23 @@ pub fn fs_uuid(mountpoint: &str) -> Result<String> {
         bail!("UUID vazio pra {mountpoint}");
     }
     Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_nested_subvolumes;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_nested_paths_relative_to_subvol() {
+        let listing = "ID 257 gen 9 top level 256 path @/.snapshots\n\
+                       ID 258 gen 10 top level 256 path @/var/lib/my dir/sub one\n";
+        assert_eq!(
+            parse_nested_subvolumes(listing, "@").unwrap(),
+            vec![PathBuf::from(".snapshots"), PathBuf::from("var/lib/my dir/sub one")]
+        );
+        assert!(parse_nested_subvolumes("", "@").unwrap().is_empty());
+        // Path de outro subvolume: listagem inesperada vira erro, não é ignorada.
+        assert!(parse_nested_subvolumes("ID 1 gen 1 top level 5 path @home/x\n", "@").is_err());
+    }
 }
