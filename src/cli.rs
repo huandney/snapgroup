@@ -57,4 +57,7 @@ pub enum Command {
     /// Uso interno: limpa discards e se desarma do systemd. Não invoque manualmente.
     #[command(hide = true)]
     BootClean,
+    /// Uso interno: falha se há restauração pendente. Chamado pelo hook do pacman.
+    #[command(hide = true)]
+    PendingCheck,
 }

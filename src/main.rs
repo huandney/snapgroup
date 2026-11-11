@@ -44,6 +44,7 @@ fn main() -> Result<()> {
         }
         cli::Command::List => commands::list(),
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
+        cli::Command::PendingCheck => commands::pending_check(),
         cli::Command::BootClean => match lock::try_acquire()? {
             Some(_lock) => commands::boot_clean(),
             None => {

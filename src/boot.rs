@@ -952,7 +952,7 @@ fn strip_img_ext(s: &str) -> &str {
 /// Extrai entradas de kernel ativas diretamente do limine.conf (se existir),
 /// ignorando subentradas de histórico/snapshots e entradas de outros SOs (protocol: efi).
 fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Result<()> {
-    let conf_path = boot.join("limine.conf");
+    let conf_path = limine_conf_path(boot);
     if !conf_path.exists() {
         return Ok(());
     }
@@ -1027,6 +1027,9 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
             continue;
         };
         let full_path = boot.join(rel);
+        if !is_vmlinuz && !is_regenerable_initramfs(&full_path) {
+            continue;
+        }
         if full_path.exists() {
             pending.push((is_vmlinuz, full_path));
         }
@@ -1038,6 +1041,17 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
         out,
     );
     Ok(())
+}
+
+/// Um `module_path` só é alvo de mkinitcpio se for o initramfs principal.
+/// Microcode (`amd-ucode.img`) e fallback também são módulos de uma entrada
+/// linux; regenerá-los os trocaria por uma cópia do initramfs comum.
+fn is_regenerable_initramfs(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    !["ucode", "microcode", "fallback"].iter().any(|skip| name.contains(skip))
 }
 
 /// Registra os paths acumulados de uma entrada do limine.conf, mas só se ela
@@ -1054,6 +1068,14 @@ fn flush_limine_entry(
     if protocol != Some("linux") {
         return;
     }
+    // O nome do arquivo (`vmlinuz-<pkgbase>`, convenção Arch) identifica o
+    // kernel melhor que o título da entrada, que é texto livre ("Arch Linux").
+    let name_from_file = paths
+        .iter()
+        .filter(|(is_vmlinuz, _)| *is_vmlinuz)
+        .filter_map(|(_, p)| p.file_name()?.to_str())
+        .find_map(|name| classify_boot_file(name).map(|(kernel, _)| kernel.to_string()));
+    let kernel_name = name_from_file.as_deref().or(kernel_name);
     for (is_vmlinuz, full_path) in paths {
         let k_name = kernel_name.map(str::to_string).unwrap_or_else(|| {
             full_path
@@ -1087,13 +1109,35 @@ fn critical_boot_files(boot: &Path, groups: &[KernelGroup]) -> Vec<PathBuf> {
         files.extend(g.vmlinuz_paths.iter().cloned());
         files.extend(g.initramfs_paths.iter().cloned());
     }
-    for extra in ["limine.conf", "limine.conf.old"] {
-        let p = boot.join(extra);
+    let conf = limine_conf_path(boot);
+    for p in [conf.with_file_name("limine.conf.old"), conf] {
         if p.exists() {
             files.push(p);
         }
     }
     files
+}
+
+/// Onde o limine.conf vive dentro da partição de boot. O Limine aceita mais de
+/// um lugar; olhar só a raiz deixava os hashes sem atualizar nos outros layouts
+/// e o verify passava ("sem limine.conf, nada a validar") com o bootloader
+/// prestes a recusar a entrada. Lista afirmativa, na ordem de busca; sem
+/// nenhum, devolve o caminho da raiz (inexistente → callers tratam como "sem
+/// limine").
+fn limine_conf_path(boot: &Path) -> PathBuf {
+    const CANDIDATES: [&str; 6] = [
+        "limine.conf",
+        "limine/limine.conf",
+        "boot/limine.conf",
+        "boot/limine/limine.conf",
+        "EFI/BOOT/limine.conf",
+        "EFI/limine/limine.conf",
+    ];
+    CANDIDATES
+        .iter()
+        .map(|rel| boot.join(rel))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| boot.join(CANDIDATES[0]))
 }
 
 fn boot_backup_dir(boot: &Path) -> PathBuf {
@@ -1174,7 +1218,7 @@ fn restore_backup_dir(src: &Path, dest: &Path) -> Result<()> {
 }
 
 fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
-    let path = boot.join("limine.conf");
+    let path = limine_conf_path(boot);
     if !path.exists() {
         return Ok(());
     }
@@ -1223,7 +1267,7 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
 /// validado pelo Limine, e arquivo ausente já é pego pelo scan de kernels.
 /// `limine.conf` ausente → `Ok(true)` (nada a verificar / sistema sem limine).
 fn limine_hashes_match(boot: &Path) -> Result<bool> {
-    let path = boot.join("limine.conf");
+    let path = limine_conf_path(boot);
     if !path.exists() {
         return Ok(true);
     }
@@ -1663,6 +1707,57 @@ mod tests {
         let g = groups.get("linux").expect("linux");
         assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
         assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_limine_conf_names_by_file_and_skips_ucode_and_fallback() {
+        use super::scan_limine_conf;
+        let base = std::env::temp_dir().join(format!("snapg_test_limine_flat_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // limine.conf fora da raiz da partição.
+        std::fs::create_dir_all(base.join("EFI/limine")).unwrap();
+        for f in ["vmlinuz-linux", "initramfs-linux.img", "initramfs-linux-fallback.img", "amd-ucode.img"] {
+            std::fs::write(base.join(f), f).unwrap();
+        }
+        let conf = "\
+/Arch Linux
+  protocol: linux
+  kernel_path: boot():/vmlinuz-linux
+  module_path: boot():/amd-ucode.img
+  module_path: boot():/initramfs-linux.img
+
+/Arch Linux (fallback)
+  protocol: linux
+  kernel_path: boot():/vmlinuz-linux
+  module_path: boot():/initramfs-linux-fallback.img
+";
+        std::fs::write(base.join("EFI/limine/limine.conf"), conf).unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_limine_conf(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let g = groups.get("linux").expect("nome vem do arquivo, não do título");
+        assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
+        assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn limine_conf_path_prefers_root_and_falls_back_to_it() {
+        use super::limine_conf_path;
+        let base = std::env::temp_dir().join(format!("snapg_test_limine_path_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("limine")).unwrap();
+
+        assert_eq!(limine_conf_path(&base), base.join("limine.conf"));
+        std::fs::write(base.join("limine/limine.conf"), "").unwrap();
+        assert_eq!(limine_conf_path(&base), base.join("limine/limine.conf"));
+        std::fs::write(base.join("limine.conf"), "").unwrap();
+        assert_eq!(limine_conf_path(&base), base.join("limine.conf"));
 
         let _ = std::fs::remove_dir_all(&base);
     }
