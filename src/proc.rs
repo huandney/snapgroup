@@ -49,9 +49,56 @@ pub fn run_streamed(mut cmd: Command, mut on_line: impl FnMut(&str)) -> Result<(
     Ok(())
 }
 
+const TERMINATION_SIGNALS: [libc::c_int; 4] =
+    [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
+
+/// Enquanto vive, o processo ignora Ctrl-C/kill/fechamento do terminal. Envolve
+/// as sequências de rename de subvolume: morrer entre "ativo → backup" e
+/// "novo → ativo" deixa o sistema sem o subvol que o fstab monta no boot.
+///
+/// Ignora (disposição, do processo inteiro) em vez de bloquear por máscara: a
+/// máscara é por thread, e a thread do spinner receberia o sinal e mataria o
+/// processo do mesmo jeito. O sinal recebido durante a seção é descartado, não
+/// adiado — a seção dura milissegundos.
+pub struct SignalShield {
+    previous: [libc::sighandler_t; 4],
+}
+
+pub fn shield_termination_signals() -> SignalShield {
+    let previous = TERMINATION_SIGNALS.map(|sig| unsafe { libc::signal(sig, libc::SIG_IGN) });
+    SignalShield { previous }
+}
+
+impl Drop for SignalShield {
+    fn drop(&mut self) {
+        for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(self.previous) {
+            unsafe { libc::signal(sig, handler) };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shield_ignores_termination_signals() {
+        // Num filho: a disposição de sinais é do processo inteiro, e outros
+        // testes (threads do mesmo processo) armam e desarmam o escudo em
+        // paralelo. O filho só usa chamadas async-signal-safe.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            let shield = shield_termination_signals();
+            // Sem o escudo, este raise mataria o filho (status != exit 0).
+            unsafe { libc::raise(libc::SIGHUP) };
+            std::mem::forget(shield);
+            unsafe { libc::_exit(0) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0);
+    }
 
     fn sh(script: &str) -> Command {
         let mut c = Command::new("sh");
