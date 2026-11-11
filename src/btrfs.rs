@@ -7,9 +7,11 @@ use std::process::Command;
 /// Necessário pra criar/renomear subvolumes irmãos como @, @home — operações
 /// que exigem acesso ao top-level, não às mounts individuais.
 pub fn mount_toplevel(uuid: &str, target: &Path) -> Result<()> {
-    fs::create_dir_all(target).context("criar diretório de mount")?;
+    create_private_mount_dir(target).context("criar diretório de mount")?;
+    // nosuid/nodev: o top-level expõe regret/undo/discard, cópias antigas do
+    // root com binários setuid que não devem ser executáveis por este mount.
     let out = Command::new("mount")
-        .args(["-o", "subvolid=5", "-U", uuid])
+        .args(["-o", "subvolid=5,nosuid,nodev", "-U", uuid])
         .arg(target)
         .output()
         .context("mount falhou")?;
@@ -21,6 +23,21 @@ pub fn mount_toplevel(uuid: &str, target: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Cria o mountpoint com o diretório pai (`/run/snapgroup`) em 0700. Os mounts
+/// do snapg dão acesso a subvolumes fora da proteção 0750 do `.snapshots`, e
+/// ficam de pé enquanto uma TUI espera — ou para sempre, se o processo morrer.
+/// Re-aplica o modo a cada chamada: o pai pode ter sido criado 0755 por uma
+/// versão anterior neste mesmo boot.
+pub fn create_private_mount_dir(target: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(target).with_context(|| format!("criar {}", target.display()))?;
+    let parent = target
+        .parent()
+        .with_context(|| format!("mountpoint sem diretório pai: {}", target.display()))?;
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("restringir {}", parent.display()))
 }
 
 pub fn umount_toplevel(target: &Path) -> Result<()> {
