@@ -906,6 +906,7 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
     let mut in_snapshots = false;
     let mut current_kernel_name: Option<String> = None;
     let mut current_protocol: Option<String> = None;
+    let mut pending: Vec<(bool, PathBuf)> = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -929,6 +930,12 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
                 && !trimmed.starts_with("///")
                 && !trimmed.starts_with("////")
             {
+                flush_limine_entry(
+                    current_protocol.as_deref(),
+                    current_kernel_name.as_deref(),
+                    &mut pending,
+                    out,
+                );
                 current_protocol = None;
                 current_kernel_name = None;
             }
@@ -949,45 +956,72 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
             }
         }
 
-        // Ignora entradas de outros sistemas operacionais / chainloaders (ex: protocol: efi do Windows)
-        if current_protocol.as_deref() == Some("efi") {
+        // Só acumula; quem decide é `flush_limine_entry`, ao fim da entrada,
+        // quando o protocolo já é conhecido — a ordem das chaves é livre no Limine.
+        // `image_path` fica de fora: só existe em chainload, nunca é initramfs.
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let is_vmlinuz = matches!(key.trim(), "path" | "kernel_path");
+        if !is_vmlinuz && key.trim() != "module_path" {
             continue;
         }
-
-        if let Some((key, value)) = trimmed.split_once(':') {
-            let key = key.trim();
-            let val = value.trim();
-            let uri_without_hash = val.split_once('#').map(|(u, _)| u).unwrap_or(val).trim();
-            if let Some(rel) = uri_without_hash.strip_prefix("boot():/") {
-                let full_path = boot.join(rel);
-                if full_path.exists() {
-                    let is_vmlinuz = matches!(key, "path" | "kernel_path");
-                    let is_initramfs = matches!(key, "module_path" | "image_path");
-                    if is_vmlinuz || is_initramfs {
-                        let k_name = current_kernel_name.clone().unwrap_or_else(|| {
-                            full_path
-                                .parent()
-                                .and_then(|p| p.file_name())
-                                .and_then(|n| n.to_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| "default".to_string())
-                        });
-                        let group = out.entry(k_name.clone()).or_insert_with(|| KernelGroup {
-                            kernel_name: k_name,
-                            vmlinuz_paths: Vec::new(),
-                            initramfs_paths: Vec::new(),
-                        });
-                        if is_vmlinuz && !group.vmlinuz_paths.contains(&full_path) {
-                            group.vmlinuz_paths.push(full_path);
-                        } else if is_initramfs && !group.initramfs_paths.contains(&full_path) {
-                            group.initramfs_paths.push(full_path);
-                        }
-                    }
-                }
-            }
+        let val = value.trim();
+        let uri_without_hash = val.split_once('#').map(|(u, _)| u).unwrap_or(val).trim();
+        let Some(rel) = uri_without_hash.strip_prefix("boot():/") else {
+            continue;
+        };
+        let full_path = boot.join(rel);
+        if full_path.exists() {
+            pending.push((is_vmlinuz, full_path));
         }
     }
+    flush_limine_entry(
+        current_protocol.as_deref(),
+        current_kernel_name.as_deref(),
+        &mut pending,
+        out,
+    );
     Ok(())
+}
+
+/// Registra os paths acumulados de uma entrada do limine.conf, mas só se ela
+/// declarou `protocol: linux`. Lista afirmativa: chainload de outro SO (`efi`,
+/// `efi_chainload`, `bios`…) ou entrada sem protocolo nunca vira alvo de
+/// `fs::copy`/mkinitcpio, qualquer que seja a ordem das chaves.
+fn flush_limine_entry(
+    protocol: Option<&str>,
+    kernel_name: Option<&str>,
+    pending: &mut Vec<(bool, PathBuf)>,
+    out: &mut HashMap<String, KernelGroup>,
+) {
+    let paths = std::mem::take(pending);
+    if protocol != Some("linux") {
+        return;
+    }
+    for (is_vmlinuz, full_path) in paths {
+        let k_name = kernel_name.map(str::to_string).unwrap_or_else(|| {
+            full_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "default".to_string())
+        });
+        let group = out.entry(k_name.clone()).or_insert_with(|| KernelGroup {
+            kernel_name: k_name,
+            vmlinuz_paths: Vec::new(),
+            initramfs_paths: Vec::new(),
+        });
+        let list = if is_vmlinuz {
+            &mut group.vmlinuz_paths
+        } else {
+            &mut group.initramfs_paths
+        };
+        if !list.contains(&full_path) {
+            list.push(full_path);
+        }
+    }
 }
 
 /// Conjunto de arquivos críticos para backup: vmlinuz/initramfs ativos de
@@ -1011,8 +1045,16 @@ fn boot_backup_dir(boot: &Path) -> PathBuf {
     boot.join(".snapg_boot_backup")
 }
 
+/// Copia para um diretório temporário e só o renomeia para o nome final com
+/// todos os arquivos no lugar. O nome final é o sinal de "sync interrompido"
+/// e a fonte do rollback: um backup pela metade (Ctrl-C/queda durante a cópia)
+/// seria reutilizado e restauraria um arquivo truncado por cima do ativo.
 fn backup_boot_files(boot: &Path, files: &[PathBuf], mut on_file: impl FnMut(&str)) -> Result<()> {
-    let backup = boot_backup_dir(boot);
+    let final_dir = boot_backup_dir(boot);
+    if final_dir.exists() {
+        let _ = fs::remove_dir_all(&final_dir);
+    }
+    let backup = boot.join(".snapg_boot_backup.tmp");
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
@@ -1032,6 +1074,7 @@ fn backup_boot_files(boot: &Path, files: &[PathBuf], mut on_file: impl FnMut(&st
         fs::copy(src, &dest)
             .with_context(|| format!("backup {} → {}", src.display(), dest.display()))?;
     }
+    fs::rename(&backup, &final_dir).context("fechar backup do boot")?;
     Ok(())
 }
 
@@ -1521,6 +1564,74 @@ mod tests {
         assert_eq!(cachy_group.vmlinuz_paths.len(), 1);
         assert_eq!(cachy_group.initramfs_paths.len(), 1);
         assert!(!groups.contains_key("Windows"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_limine_conf_ignores_chainload_in_any_key_order_or_alias() {
+        use super::scan_limine_conf;
+        let base = std::env::temp_dir().join(format!("snapg_test_limine_chain_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("EFI/Microsoft/Boot")).unwrap();
+        std::fs::write(base.join("EFI/Microsoft/Boot/bootmgfw.efi"), "win").unwrap();
+        std::fs::write(base.join("vmlinuz-linux"), "vmlinuz").unwrap();
+        std::fs::write(base.join("initramfs-linux.img"), "initramfs").unwrap();
+
+        // Chave antes do protocolo, alias de chainload, entrada sem protocolo e
+        // uma entrada linux com o protocolo por último.
+        let conf = "\
+/Windows
+  image_path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+  protocol: efi
+
+/Windows antigo
+  protocol: efi_chainload
+  image_path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+  path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+
+/Sem protocolo
+  module_path: boot():/EFI/Microsoft/Boot/bootmgfw.efi
+
+/+Arch
+  //linux
+  module_path: boot():/initramfs-linux.img
+  kernel_path: boot():/vmlinuz-linux
+  protocol: linux
+";
+        std::fs::write(base.join("limine.conf"), conf).unwrap();
+
+        let mut groups = std::collections::HashMap::new();
+        scan_limine_conf(&base, &mut groups).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        let g = groups.get("linux").expect("linux");
+        assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
+        assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backup_is_only_visible_once_complete() {
+        use super::backup_boot_files;
+        let base = std::env::temp_dir().join(format!("snapg_test_backup_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("vmlinuz-linux"), "vmlinuz").unwrap();
+
+        // Falha no meio (arquivo ausente): nada pode sobrar no nome final.
+        let files = [base.join("vmlinuz-linux"), base.join("ausente")];
+        assert!(backup_boot_files(&base, &files, |_| {}).is_err());
+        assert!(!boot_backup_remnant(&base));
+
+        backup_boot_files(&base, &files[..1], |_| {}).unwrap();
+        assert!(boot_backup_remnant(&base));
+        assert_eq!(
+            std::fs::read_to_string(base.join(".snapg_boot_backup/vmlinuz-linux")).unwrap(),
+            "vmlinuz"
+        );
+        assert!(!base.join(".snapg_boot_backup.tmp").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }
