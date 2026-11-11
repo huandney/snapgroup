@@ -935,6 +935,8 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
+    boot::ensure_fat32_sync_supported()?;
+
     let label = btrfs::now_local_label().context("obter label de tempo")?;
     let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
     let result = rollback::rollback_root_explicit_preserving_regret(toplevel, root_subvol, &src, &label);
@@ -978,6 +980,10 @@ fn execute_restore_checkpoint(
     mount_path: &Path,
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
+    if group::root_member(group)?.is_some() {
+        boot::ensure_fat32_sync_supported()?;
+    }
+
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
@@ -1219,6 +1225,10 @@ fn cleanup_created_regret_snapshot(item: &CreatedRegretSnapshot) {
 }
 
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
+    if regret.entries.iter().any(|e| e.mountpoint == "/") {
+        boot::ensure_fat32_sync_supported()?;
+    }
+
     let done: Vec<rollback::Done> = regret
         .entries
         .into_iter()

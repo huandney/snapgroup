@@ -94,6 +94,41 @@ fn lock_limine_mutex() -> Result<Option<fs::File>> {
     }
 }
 
+/// Uma UKI empacota kernel + initramfs + cmdline num único `.efi`. O sync só
+/// sabe copiar o vmlinuz e regenerar o initramfs; aplicado a uma UKI, trocaria
+/// a imagem inteira por um kernel sem initramfs — e o verify ainda passaria.
+fn find_uki(groups: &[KernelGroup]) -> Option<&Path> {
+    groups
+        .iter()
+        .flat_map(|g| &g.vmlinuz_paths)
+        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("efi")))
+        .map(PathBuf::as_path)
+}
+
+fn uki_unsupported(uki: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "/boot usa UKI ({}), que o snapg ainda não sabe regenerar.\n  \
+         Nada foi alterado em /boot.",
+        uki.display()
+    )
+}
+
+/// Preflight dos restores que trocam o root: recusa ANTES do rollback quando o
+/// sync de /boot que viria depois não é suportado. Recusar só no sync deixaria
+/// uma restauração pendente que não dá para concluir nem cancelar (o cancel
+/// também sincroniza o /boot). /boot não-FAT32 → `Ok` (nada a sincronizar).
+pub fn ensure_fat32_sync_supported() -> Result<()> {
+    let boot = Path::new("/boot");
+    if !is_fat32_path(boot) {
+        return Ok(());
+    }
+    let groups = discover_kernel_groups(boot)?;
+    match find_uki(&groups) {
+        Some(uki) => Err(uki_unsupported(uki)),
+        None => Ok(()),
+    }
+}
+
 pub fn sync_fat32_paths(restored_root: &Path, boot: &Path) -> Result<()> {
     let mut panel = crate::ui::boot_sync::BootSyncPanel::new();
     sync_fat32_paths_with_panel(restored_root, boot, &mut panel)
@@ -139,6 +174,9 @@ fn sync_fat32_paths_with_panel(
     let groups = discover_kernel_groups(boot)?;
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
+    }
+    if let Some(uki) = find_uki(&groups) {
+        return Err(uki_unsupported(uki));
     }
 
     let interrupted = boot_backup_remnant(boot);
@@ -253,7 +291,7 @@ fn sync_inner(
         }
         for dest in &group.vmlinuz_paths {
             panel.start_vmlinuz();
-            fs::copy(&snap_vmlinuz, dest).with_context(|| {
+            copy_atomic(&snap_vmlinuz, dest).with_context(|| {
                 format!(
                     "copiar vmlinuz {} → {}",
                     snap_vmlinuz.display(),
@@ -671,6 +709,26 @@ fn clean_mkinitcpio_line(l: &str) -> String {
     t.trim_start().to_string()
 }
 
+/// Temporário no mesmo diretório do destino, para o rename final ser atômico.
+/// O `.` inicial impede que `scan_flat_boot_dir` o classifique como artefato.
+fn tmp_sibling(dest: &Path) -> Result<PathBuf> {
+    let file_name = dest
+        .file_name()
+        .with_context(|| format!("destino sem nome de arquivo: {}", dest.display()))?;
+    Ok(dest.with_file_name(format!(".{}.snapg_tmp", file_name.to_string_lossy())))
+}
+
+/// Copia para um temporário e renomeia por cima do destino. Copiar direto
+/// deixaria um kernel truncado no caminho ativo se a cópia fosse interrompida.
+fn copy_atomic(src: &Path, dest: &Path) -> Result<()> {
+    let tmp = tmp_sibling(dest)?;
+    if let Err(e) = fs::copy(src, &tmp) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
+    fs::rename(&tmp, dest).with_context(|| format!("mover {} → {}", tmp.display(), dest.display()))
+}
+
 fn regen_initramfs(
     config: &Path,
     kver: &str,
@@ -683,10 +741,7 @@ fn regen_initramfs(
     // se o mkinitcpio fosse interrompido (SIGKILL no reboot, queda de luz) —
     // bootar com initramfs truncado cai em emergency mode. O `.` inicial impede
     // que o temp seja classificado como artefato de boot por `scan_boot_dir`.
-    let file_name = out
-        .file_name()
-        .with_context(|| format!("initramfs sem nome de arquivo: {}", out.display()))?;
-    let tmp = out.with_file_name(format!(".{}.snapg_tmp", file_name.to_string_lossy()));
+    let tmp = tmp_sibling(out)?;
 
     let mut cmd = Command::new("mkinitcpio");
     cmd.args(["--nopost", "-c"])
@@ -1608,6 +1663,47 @@ mod tests {
         let g = groups.get("linux").expect("linux");
         assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
         assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn find_uki_flags_efi_images_only() {
+        use super::{KernelGroup, find_uki};
+        let plain = KernelGroup {
+            kernel_name: "linux".to_string(),
+            vmlinuz_paths: vec![Path::new("/boot/vmlinuz-linux").to_path_buf()],
+            initramfs_paths: Vec::new(),
+        };
+        assert_eq!(find_uki(std::slice::from_ref(&plain)), None);
+
+        let uki = KernelGroup {
+            kernel_name: "linux-cachyos".to_string(),
+            vmlinuz_paths: vec![Path::new("/boot/EFI/Linux/id_linux-cachyos.efi").to_path_buf()],
+            initramfs_paths: Vec::new(),
+        };
+        assert_eq!(
+            find_uki(&[plain, uki]),
+            Some(Path::new("/boot/EFI/Linux/id_linux-cachyos.efi"))
+        );
+    }
+
+    #[test]
+    fn copy_atomic_replaces_dest_and_leaves_no_temp() {
+        use super::copy_atomic;
+        let base = std::env::temp_dir().join(format!("snapg_test_atomic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("src"), "novo").unwrap();
+        std::fs::write(base.join("vmlinuz-linux"), "velho").unwrap();
+
+        copy_atomic(&base.join("src"), &base.join("vmlinuz-linux")).unwrap();
+        assert_eq!(std::fs::read_to_string(base.join("vmlinuz-linux")).unwrap(), "novo");
+
+        // Origem ausente: destino intacto e nenhum temporário sobrando.
+        assert!(copy_atomic(&base.join("ausente"), &base.join("vmlinuz-linux")).is_err());
+        assert_eq!(std::fs::read_to_string(base.join("vmlinuz-linux")).unwrap(), "novo");
+        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 2);
 
         let _ = std::fs::remove_dir_all(&base);
     }
