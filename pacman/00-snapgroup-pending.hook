@@ -1,10 +1,29 @@
+# Aborta transações que regeneram o initramfs ou trocam o kernel enquanto uma
+# restauração do root aguarda reboot. Os alvos espelham os do
+# 90-mkinitcpio-install.hook: qualquer um deles reescreve /boot a partir do
+# root antigo. O prefixo 00 roda antes de hooks PreTransaction com efeito
+# colateral (ex: snap-pac), que deixariam um snapshot "pre" órfão a cada
+# tentativa bloqueada.
 [Trigger]
 Operation = Install
 Operation = Upgrade
 Operation = Remove
 Type = Path
 Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/modules/*/extramodules/
 Target = usr/lib/initcpio/*
+Target = usr/lib/firmware/*
+Target = usr/src/*/dkms.conf
+Target = usr/lib/systemd/systemd
+Target = usr/lib/systemd/systemd-udevd
+Target = usr/lib/modprobe.d/
+Target = usr/bin/cryptsetup
+Target = usr/bin/lvm
+Target = usr/bin/mdadm
+Target = usr/bin/pdata_tools
+Target = usr/lib/libcryptsetup.so
+Target = usr/lib/libp11-kit.so
+Target = usr/lib/libpcsclite.so
 
 [Action]
 Description = Verificando restauração pendente do snapgroup...

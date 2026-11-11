@@ -31,7 +31,7 @@ impl RestoreRegretPolicy {
 
 pub fn save(description: Option<String>) -> Result<()> {
     let cfg = config::load();
-    let id = unique_group_id()?;
+    let now = epoch_now()?;
 
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
@@ -62,7 +62,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // nome com o auto-nome como placeholder — Enter direto o aceita). Sem TTY
     // (script/cron), usa o mesmo auto-nome sem prompt — interatividade
     // quebraria automações que nunca a pediram.
-    let auto_name = default_checkpoint_name(id);
+    let auto_name = default_checkpoint_name(now);
     let desc = match description {
         Some(d) => d,
         None if crate::ui::term::stdout_is_tty() => {
@@ -79,6 +79,10 @@ pub fn save(description: Option<String>) -> Result<()> {
 
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
+
+    // Só agora, depois do gate de pending: a varredura de ids chama o snapper,
+    // que falha com uma restauração pendente (o `.snapshots` já foi movido).
+    let id = unique_group_id()?;
 
     // Um membro que falha desfaz os já criados: grupo pela metade apareceria
     // no restore como checkpoint e restauraria só parte do sistema.
@@ -1639,12 +1643,20 @@ fn unique_group_id() -> Result<i64> {
     Ok(id)
 }
 
+/// Só uma restauração pendente que troca o `/` descasa /boot e módulos. Um
+/// pending só de `/home` não muda o root que recebe os módulos novos.
+fn pending_restore_swaps_root() -> Result<bool> {
+    let configs = snapper::list_configs()?;
+    let pending = pending_restore_from_live(&configs)?.unwrap_or_default();
+    Ok(pending.iter().any(|d| d.mountpoint == "/"))
+}
+
 /// Chamado pelo hook do pacman antes de transações que mexem em kernel ou
 /// initramfs. Com uma restauração pendente, o kernel novo iria para o /boot
 /// e os módulos para o root antigo; o reboot subiria o root restaurado com um
 /// kernel que ele não tem. Falha de diagnóstico não bloqueia o pacman.
 pub fn pending_check() -> Result<()> {
-    if !has_pending_restore().unwrap_or(false) {
+    if !pending_restore_swaps_root().unwrap_or(false) {
         return Ok(());
     }
     bail!(
