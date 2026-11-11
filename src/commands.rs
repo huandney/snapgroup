@@ -1578,8 +1578,8 @@ fn boot_clean_inner(mount_path: &Path) -> Result<()> {
 
     let total = targets.len();
     let mut ok = 0usize;
-    for (name, path) in &targets {
-        match btrfs::delete_subvolume(path) {
+    for (name, _path) in &targets {
+        match btrfs::delete_subvolume_tree(mount_path, name) {
             Ok(()) => {
                 crate::ui::boot_clean::print_cleanup_target_removed(name);
                 ok += 1;
