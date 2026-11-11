@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 /// Monta o subvolume top-level (subvolid=5) num path temporário.
 /// Necessário pra criar/renomear subvolumes irmãos como @, @home — operações
@@ -22,6 +23,7 @@ pub fn mount_toplevel(uuid: &str, target: &Path) -> Result<()> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    remember_mount(target);
     Ok(())
 }
 
@@ -52,8 +54,51 @@ pub fn umount_toplevel(target: &Path) -> Result<()> {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    LIVE_MOUNTS.fetch_sub(1, Ordering::SeqCst);
     let _ = fs::remove_dir(target);
     Ok(())
+}
+
+// Estado mínimo para o handler de sinal desmontar o top-level. O processo só
+// monta um caminho (`/run/snapgroup/<uuid de />`), possivelmente empilhado.
+static LIVE_MOUNTS: AtomicUsize = AtomicUsize::new(0);
+static LIVE_MOUNT_PATH: AtomicPtr<libc::c_char> = AtomicPtr::new(std::ptr::null_mut());
+
+fn remember_mount(target: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    if LIVE_MOUNT_PATH.load(Ordering::SeqCst).is_null()
+        && let Ok(path) = std::ffi::CString::new(target.as_os_str().as_bytes())
+    {
+        LIVE_MOUNT_PATH.store(path.into_raw(), Ordering::SeqCst);
+    }
+    LIVE_MOUNTS.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Faz Ctrl-C / kill / fechamento do terminal desmontarem o top-level antes
+/// de o processo morrer. Sem isto o mount sobrevivia ao snapg até alguém
+/// desmontar à mão. Durante a troca de subvolumes o `SignalShield` ignora
+/// esses sinais; ao sair de escopo ele devolve este handler.
+pub fn unmount_on_termination() {
+    for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        unsafe { libc::signal(sig, on_termination as *const () as libc::sighandler_t) };
+    }
+}
+
+/// Só syscalls async-signal-safe. Detach lazy: quem ainda usa o mount (um
+/// mkinitcpio filho, por exemplo) termina sem segurar o caminho. Depois repõe
+/// a ação padrão e re-envia o sinal, para o status de saída ser o de costume.
+extern "C" fn on_termination(sig: libc::c_int) {
+    let path = LIVE_MOUNT_PATH.load(Ordering::SeqCst);
+    if !path.is_null() {
+        for _ in 0..LIVE_MOUNTS.load(Ordering::SeqCst) {
+            unsafe { libc::umount2(path, libc::MNT_DETACH) };
+        }
+        unsafe { libc::rmdir(path) };
+    }
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
 }
 
 pub fn create_snapshot(source: &Path, dest: &Path) -> Result<()> {
@@ -242,6 +287,21 @@ pub fn fs_uuid(mountpoint: &str) -> Result<String> {
 mod tests {
     use super::parse_nested_subvolumes;
     use std::path::PathBuf;
+
+    #[test]
+    fn termination_handler_still_ends_the_process_with_the_signal() {
+        // Num filho: disposição de sinais é do processo inteiro (ver proc.rs).
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            super::unmount_on_termination();
+            unsafe { libc::raise(libc::SIGTERM) };
+            unsafe { libc::_exit(0) }; // só chega aqui se o sinal não matou
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGTERM);
+    }
 
     #[test]
     fn parses_nested_paths_relative_to_subvol() {
