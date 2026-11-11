@@ -1634,6 +1634,21 @@ fn unique_group_id() -> Result<i64> {
     Ok(id)
 }
 
+/// Chamado pelo hook do pacman antes de transações que mexem em kernel ou
+/// initramfs. Com uma restauração pendente, o kernel novo iria para o /boot
+/// e os módulos para o root antigo; o reboot subiria o root restaurado com um
+/// kernel que ele não tem. Falha de diagnóstico não bloqueia o pacman.
+pub fn pending_check() -> Result<()> {
+    if !has_pending_restore().unwrap_or(false) {
+        return Ok(());
+    }
+    bail!(
+        "há uma restauração do snapgroup aguardando reboot.\n  \
+         Atualizar kernel/initramfs agora deixaria o /boot fora de sincronia com o root restaurado.\n  \
+         Reinicie, ou rode 'snapg restore' para cancelar a restauração, e repita a transação."
+    )
+}
+
 fn default_checkpoint_name(epoch: i64) -> String {
     match local_datetime_from_epoch(epoch) {
         Ok(date) => format!("Checkpoint {date}"),
