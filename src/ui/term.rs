@@ -173,6 +173,16 @@ pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
 }
 
+/// Itens por página de um Select/MultiSelect que tem `lines_above` linhas
+/// impressas acima da lista (cabeçalho + linhas do prompt). Ao paginar, o
+/// dialoguer reserva só a linha do prompt; sem este limite a página estoura a
+/// altura do terminal e o cabeçalho rola para fora. O +1 é a linha do cursor
+/// após o último item.
+pub fn picker_page_len(lines_above: usize) -> usize {
+    let rows = console::Term::stdout().size().0 as usize;
+    rows.saturating_sub(lines_above + 1).max(1)
+}
+
 pub fn content_width() -> usize {
     let width = console::Term::stdout().size().1 as usize;
     width.saturating_sub(CONTENT_INDENT.chars().count()).max(20)

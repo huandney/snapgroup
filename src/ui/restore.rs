@@ -8,7 +8,8 @@ use crate::ui::checkpoints::{
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, input_line, line, prompt_bold,
+    THEME, branch, clear_screen, confirm, content_width, header, input_line, line, picker_page_len,
+    prompt_bold,
     prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
     truncate_for_terminal,
     wrap_text,
@@ -229,6 +230,7 @@ pub(crate) fn select_restore_action(
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
         .with_prompt(prompt)
         .items(&items)
+        .max_length(picker_page_len(4))
         .default(0)
         .clear(true)
         .report(false)
@@ -355,6 +357,7 @@ pub(crate) fn select_root_snapshot(
     let Some(selection) = dialoguer::Select::with_theme(&THEME)
         .with_prompt("Qual kernel manter no /")
         .items(&items)
+        .max_length(picker_page_len(3))
         .default(0)
         .clear(true)
         .report(false)

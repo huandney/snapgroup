@@ -139,6 +139,7 @@ fn select_delete_targets_manually(
     let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
         .with_prompt(prompt)
         .items(&items)
+        .max_length(crate::ui::term::picker_page_len(4))
         .clear(true)
         .report(false)
         .interact_opt()

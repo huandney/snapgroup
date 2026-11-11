@@ -10,7 +10,7 @@ use crate::ui::restore::{
     RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
-use crate::ui::term::{clear_screen, confirm};
+use crate::ui::term::{clear_screen, confirm, header};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
@@ -543,6 +543,9 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
         return Ok(());
     };
 
+    // Fase de execução no terminal normal (o picker já saiu do alt screen):
+    // o cabeçalho mantém a identidade do snapg até o "Próximo passo".
+    header("Restaurar só o /");
     if !confirm(&format!(
         "Restaurar o / para o snapshot #{number}? Troca o root que boota (home e /root ficam intactos)."
     ))? {
@@ -992,6 +995,7 @@ fn execute_restore_checkpoint(
     mount_path: &Path,
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
+    header("Restauração");
     if group::root_member(group)?.is_some() {
         boot::ensure_fat32_sync_supported()?;
     }
@@ -1237,6 +1241,7 @@ fn cleanup_created_regret_snapshot(item: &CreatedRegretSnapshot) {
 }
 
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
+    header("Restauração");
     if regret.entries.iter().any(|e| e.mountpoint == "/") {
         boot::ensure_fat32_sync_supported()?;
     }

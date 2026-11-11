@@ -729,6 +729,12 @@ fn copy_atomic(src: &Path, dest: &Path) -> Result<()> {
     fs::rename(&tmp, dest).with_context(|| format!("mover {} → {}", tmp.display(), dest.display()))
 }
 
+/// LIMITAÇÃO: o mkinitcpio roda no sistema vivo. Só o `mkinitcpio.conf` e os
+/// módulos do kernel vêm de `restored_root`; hooks, binários, firmware e os
+/// drop-ins de `/etc/mkinitcpio.conf.d` são os do sistema atual, e as opções do
+/// preset (`/etc/mkinitcpio.d/*.preset`) não são aplicadas. Um restore para
+/// antes de uma mudança nesses pontos gera um initramfs que não é idêntico ao
+/// da época. Fechar isso exige rodar o mkinitcpio em chroot do root restaurado.
 fn regen_initramfs(
     config: &Path,
     kver: &str,

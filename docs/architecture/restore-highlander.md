@@ -99,6 +99,29 @@ todo o histórico visível.
 - Helper novo em `src/btrfs.rs`: `is_subvolume()` (check via exit code de
   `btrfs subvolume show`).
 
+### 5.1.1. Demais subvolumes aninhados
+
+O mesmo problema vale para qualquer subvolume criado dentro de `@`/`@home`
+(`/var/lib/machines`, `/var/lib/portables`, subvolumes do Docker, um
+`~/.cache` separado): o snapshot não desce neles, então ficavam para trás no
+backup. O sistema subia com os diretórios vazios e o backup deixava de ser
+deletável (`Directory not empty`), travando o `save` seguinte.
+
+**Regra:** o que está fora dos snapshots acompanha o nome ativo. A etapa de
+`.snapshots` foi generalizada:
+
+- `btrfs::nested_subvolumes()` lista os filhos diretos do subvol ativo
+  (`btrfs subvolume list -o`).
+- Fase 1 (`nested_to_carry`): confere que cada um cabe no intermediate —
+  destino ausente ou diretório vazio, sem symlink no caminho. Conflito aborta
+  com o sistema vivo intacto.
+- Commit e as três reversões (`revert_partial`, `revert_regret`,
+  `cancel_regret_undo`) usam `move_nested`, tudo-ou-nada; pais que faltam no
+  destino são criados com dono e modo da origem.
+- Cobertura em btrfs real: teste `#[ignore]`
+  `nested_subvolumes_follow_the_active_subvol_on_real_btrfs`, rodado como root
+  contra uma imagem de loopback (`SNAPG_TEST_BTRFS=<mount>`).
+
 ### 5.2. Naming alinhado com `btrfs-assistant`
 
 Subvolumes de backup usam timestamp local `YYYY-MM-DD_HH:MM:SS` em vez de

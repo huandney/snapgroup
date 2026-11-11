@@ -64,6 +64,12 @@ Se o Regret representa uma restauração pendente de reboot, selecioná-lo no `s
 
 Quando `/boot` está em FAT32 (fora do snapshot Btrfs), kernel e initramfs não viajam com o rollback. Nesse caso o `restore` sincroniza `/boot` com o snapshot restaurado (copia o `vmlinuz`, regenera o initramfs a partir do root restaurado, re-injeta os hashes BLAKE2B no `limine.conf`). Se a sincronização falhar ou ficar dessincronizada, o reboot é **bloqueado** com instrução de recuperação — bootar ali cairia em Emergency Mode.
 
+Limitações desse sync:
+
+- **UKI não é suportada.** Se `/boot` tem uma UKI (`EFI/Linux/*.efi`), restores que trocam o `/` são recusados antes de qualquer alteração.
+- **O initramfs é regenerado com as ferramentas do sistema atual.** Só o `mkinitcpio.conf` e os módulos do kernel vêm do root restaurado; hooks, binários e opções de preset são os do sistema em execução.
+- **Subvolumes aninhados acompanham o sistema ativo.** O que vive em subvolume próprio dentro de `@`/`@home` (ex: `/var/lib/machines`, camadas do Docker) fica fora dos snapshots e não é revertido pelo `restore`.
+
 ## Status
 
 Beta. Sem testes de integração ainda — valide o ciclo `save` → `restore` → restaurar o Regret num ambiente descartável antes de confiar como botão de pânico.
