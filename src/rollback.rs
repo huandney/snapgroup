@@ -164,6 +164,9 @@ fn rollback_group_with_commit(
         }
     }
 
+    // Fase 2 inteira sob escudo: o grupo commita por completo ou falha por
+    // erro tratado, nunca por um Ctrl-C no meio dos renames.
+    let _shield = crate::proc::shield_termination_signals();
     let mut done = Vec::new();
     for p in &preps {
         let result = match mode {
@@ -286,6 +289,7 @@ pub fn rollback_root_explicit_preserving_regret(
         mountpoint: "/".to_string(),
         current_subvol,
     };
+    let _shield = crate::proc::shield_termination_signals();
     commit_prep_preserving_regret(&prep, toplevel, label)
 }
 
@@ -460,6 +464,7 @@ fn commit_prepared_subvol(
 ///
 /// **Não usar pra `revert_regret`**, onde `current` É a rootfs viva.
 pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
+    let _shield = crate::proc::shield_termination_signals();
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
@@ -515,6 +520,7 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
 /// cancelar faz o swap inverso e preserva o Regret; após reboot, o subvol fica
 /// desmontado e pode ser limpo pelo boot-clean.
 pub fn revert_regret(done: &[Done], toplevel: &Path, label: &str) -> Result<()> {
+    let _shield = crate::proc::shield_termination_signals();
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let backup = toplevel.join(&d.backup_subvol);
@@ -555,6 +561,7 @@ pub fn revert_regret(done: &[Done], toplevel: &Path, label: &str) -> Result<()> 
 /// cancelar, ele volta para o slot fixo `_snapg_regret`, e o `_snapg_undo_*`
 /// volta para o nome ativo. Nada é deletado.
 pub fn cancel_regret_undo(done: &[Done], toplevel: &Path) -> Result<()> {
+    let _shield = crate::proc::shield_termination_signals();
     for d in done.iter().rev() {
         let current = toplevel.join(&d.current_subvol);
         let undo = toplevel.join(&d.backup_subvol);
