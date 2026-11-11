@@ -58,6 +58,7 @@ fn select_target(
     dialoguer::Select::with_theme(&THEME)
         .with_prompt(prompt)
         .items(&items)
+        .max_length(crate::ui::term::picker_page_len(4))
         .default(0)
         .clear(true)
         .report(false)
