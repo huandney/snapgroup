@@ -1387,7 +1387,7 @@ fn delete_interactive(
 
     // A leitura dos metadados (alguns segundos) roda enquanto a lista já está
     // na tela; a estimativa aparece quando ela termina.
-    let mut space = SpaceEstimator::start(groups, &orphans, mount_path, purge);
+    let mut space = SpaceEstimator::start(groups, &orphans, mount_path);
     let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, purge, trash_days };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
     let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
@@ -1397,7 +1397,8 @@ fn delete_interactive(
     let chosen_groups: BTreeSet<usize> = plan.groups.iter().copied().collect();
     let chosen_orphans: BTreeSet<usize> = plan.orphans.iter().copied().collect();
     let predicted = match space.estimate(&chosen_groups, &chosen_orphans) {
-        Estimate::Ready { now, .. } => Some(now),
+        Estimate::Ready { orphans, auto, fixed, .. } if purge => Some(orphans + auto + fixed),
+        Estimate::Ready { orphans, .. } => Some(orphans),
         _ => None,
     };
 
@@ -1453,11 +1454,12 @@ struct SpaceEstimator {
     map: Option<std::result::Result<space::SpaceMap, String>>,
     group_ids: SubvolIds,
     orphan_ids: SubvolIds,
-    purge: bool,
+    /// Por checkpoint: automático (entra na retenção) ou fixo.
+    auto: Vec<bool>,
 }
 
 impl SpaceEstimator {
-    fn start(groups: &[Group], orphans: &[OrphanBackup], toplevel: &Path, purge: bool) -> Self {
+    fn start(groups: &[Group], orphans: &[OrphanBackup], toplevel: &Path) -> Self {
         let ids = subvol_ids(groups, orphans, toplevel);
         let (group_ids, orphan_ids, map, scan) = match ids {
             Ok((g, o)) => {
@@ -1471,7 +1473,8 @@ impl SpaceEstimator {
             }
             Err(e) => (Vec::new(), Vec::new(), Some(Err(format!("{e:#}"))), None),
         };
-        Self { scan, map, group_ids, orphan_ids, purge }
+        let auto = groups.iter().map(group::is_auto).collect();
+        Self { scan, map, group_ids, orphan_ids, auto }
     }
 
     fn estimate(&mut self, groups: &BTreeSet<usize>, orphans: &BTreeSet<usize>) -> Estimate {
@@ -1488,20 +1491,18 @@ impl SpaceEstimator {
             Some(Err(reason)) => return Estimate::Unavailable(reason.clone()),
             Some(Ok(map)) => map,
         };
-        let mut now_ids: Vec<u64> = orphans.iter().flat_map(|&i| self.orphan_ids[i].iter().copied()).collect();
-        let group_ids = groups.iter().flat_map(|&i| self.group_ids[i].iter().copied());
-        if self.purge {
-            now_ids.extend(group_ids);
-            let now = map.freed(&now_ids).total();
-            return Estimate::Ready { now, later: 0, scanned: map.stats.data_bytes + map.stats.metadata_bytes };
-        }
-        let mut all_ids = now_ids.clone();
-        all_ids.extend(group_ids);
-        let now = map.freed(&now_ids).total();
-        let all = map.freed(&all_ids).total();
+        // Cada tipo entra sobre os anteriores: o que ele acrescenta é a parte
+        // dele. Assim as três partes somam o total da seleção.
+        let mut ids: Vec<u64> = orphans.iter().flat_map(|&i| self.orphan_ids[i].iter().copied()).collect();
+        let orphans_freed = map.freed(&ids).total();
+        ids.extend(groups.iter().filter(|&&i| self.auto[i]).flat_map(|&i| self.group_ids[i].iter().copied()));
+        let with_auto = map.freed(&ids).total();
+        ids.extend(groups.iter().filter(|&&i| !self.auto[i]).flat_map(|&i| self.group_ids[i].iter().copied()));
+        let all = map.freed(&ids).total();
         Estimate::Ready {
-            now,
-            later: all.saturating_sub(now),
+            orphans: orphans_freed,
+            auto: with_auto.saturating_sub(orphans_freed),
+            fixed: all.saturating_sub(with_auto),
             scanned: map.stats.data_bytes + map.stats.metadata_bytes,
         }
     }

@@ -15,13 +15,20 @@ pub(crate) struct DeletePlan {
     pub(crate) orphans: Vec<usize>,
 }
 
-/// Espaço que a seleção libera. `now` sai na hora (backups, ou tudo com
-/// `--purge`); `later` só quando o purge esvaziar a lixeira.
+/// Espaço que a seleção libera, separado por tipo na ordem em que é somado:
+/// backups, depois automáticos, depois fixos. Cada parte é o que ela acrescenta
+/// às anteriores (o que dois tipos dividem conta uma vez, no primeiro).
+/// Backups saem na hora; checkpoints, no purge da lixeira (ou na hora com
+/// `--purge`).
 pub(crate) enum Estimate {
     Pending,
     Unavailable(String),
-    Ready { now: u64, later: u64, scanned: u64 },
+    Ready { orphans: u64, auto: u64, fixed: u64, scanned: u64 },
 }
+
+/// Lilás dos checkpoints fixos: longe do amarelo ("agora") e do azul-claro
+/// ("no purge") que marcam a seleção.
+const FIXED_COLOR: u8 = 140;
 
 /// O que a tela precisa saber de fora dela.
 pub(crate) struct DeleteContext<'a> {
@@ -78,6 +85,18 @@ fn toggle_all(set: &mut BTreeSet<usize>, all: impl Iterator<Item = usize>) {
         return;
     }
     set.extend(all);
+}
+
+/// `t`: marca tudo da lista, ou desmarca tudo se já estava tudo marcado.
+fn toggle_everything(ctx: &DeleteContext<'_>, sel: &mut Selection) {
+    let everything = sel.groups.len() == ctx.groups.len() && sel.orphans.len() == ctx.orphans.len();
+    if everything {
+        sel.groups.clear();
+        sel.orphans.clear();
+        return;
+    }
+    sel.groups.extend(0..ctx.groups.len());
+    sel.orphans.extend(0..ctx.orphans.len());
 }
 
 /// Lista → revisão → plano. Esc na revisão volta para a lista com a seleção
@@ -152,11 +171,16 @@ fn pick(
                     sel.toggle(row);
                 }
             }
-            Key::Char('a') => toggle_all(&mut sel.orphans, 0..ctx.orphans.len()),
-            Key::Char('t') => toggle_all(
+            Key::Char('o') => toggle_all(&mut sel.orphans, 0..ctx.orphans.len()),
+            Key::Char('a') => toggle_all(
                 &mut sel.groups,
                 (0..ctx.groups.len()).filter(|&i| group::is_auto(&ctx.groups[i])),
             ),
+            Key::Char('f') => toggle_all(
+                &mut sel.groups,
+                (0..ctx.groups.len()).filter(|&i| !group::is_auto(&ctx.groups[i])),
+            ),
+            Key::Char('t') => toggle_everything(ctx, sel),
             Key::Enter if !sel.is_empty() => {
                 let _ = term.show_cursor();
                 return Ok(true);
@@ -218,12 +242,15 @@ fn render(
     out.push(String::new());
     let mut keys = vec!["espaço marca"];
     if !ctx.orphans.is_empty() {
-        keys.push("a órfãos");
+        keys.push("o órfãos");
     }
-    if !ctx.groups.is_empty() {
-        keys.push("t automáticos");
+    if ctx.groups.iter().any(group::is_auto) {
+        keys.push("a automáticos");
     }
-    keys.extend(["enter revisa", "esc sai"]);
+    if ctx.groups.iter().any(|g| !group::is_auto(g)) {
+        keys.push("f fixos");
+    }
+    keys.extend(["t tudo", "enter revisa", "esc sai"]);
     let position = if list.len() > height {
         format!("   {}/{}", sel.cursor + 1, rows.len())
     } else {
@@ -253,9 +280,9 @@ fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: 
             style("░".repeat(cells)).dim().to_string(),
             style(format!("espaço indisponível: {reason}")).dim().to_string(),
         ),
-        Estimate::Ready { now, later, scanned } => (
-            space_bar(*now, *later, *scanned, cells),
-            freed_text(sel, *now, *later),
+        Estimate::Ready { orphans, auto, fixed, scanned } => (
+            space_bar(&[(*orphans, Paint::Now), (*auto, Paint::Purge), (*fixed, Paint::Fixed)], *scanned, cells),
+            freed_text(ctx, sel, *orphans, *auto, *fixed),
         ),
     };
     vec![
@@ -266,35 +293,79 @@ fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: 
     ]
 }
 
-fn freed_text(sel: &Selection, now: u64, later: u64) -> String {
+#[derive(Clone, Copy)]
+enum Paint {
+    Now,
+    Purge,
+    Fixed,
+}
+
+fn paint(text: String, paint: Paint) -> String {
+    match paint {
+        Paint::Now => style(text).yellow().to_string(),
+        Paint::Purge => style(text).cyan().to_string(),
+        Paint::Fixed => style(text).color256(FIXED_COLOR).to_string(),
+    }
+}
+
+/// "libera 8.6 GiB agora · 2.1 GiB automáticos + 1.1 GiB fixos no purge da
+/// lixeira", na cor de cada parte da barra. Com `--purge`, tudo sai agora.
+fn freed_text(ctx: &DeleteContext<'_>, sel: &Selection, orphans: u64, auto: u64, fixed: u64) -> String {
     if sel.is_empty() {
         return style("marque itens para ver quanto espaço sai").dim().to_string();
     }
-    let mut parts = vec![style(format!("libera {} agora", human_bytes(now))).yellow().to_string()];
-    if later > 0 {
-        parts.push(style(format!("{} no purge da lixeira", human_bytes(later))).cyan().to_string());
+    let dot = style(" · ").dim().to_string();
+    let plus = style(" + ").dim().to_string();
+    let mut checkpoints = Vec::new();
+    if auto > 0 {
+        checkpoints.push(paint(format!("{} automáticos", human_bytes(auto)), Paint::Purge));
     }
-    parts.join(&style(" · ").dim().to_string())
+    if fixed > 0 {
+        checkpoints.push(paint(format!("{} fixos", human_bytes(fixed)), Paint::Fixed));
+    }
+    let checkpoints = checkpoints.join(&plus);
+    let backups = paint(format!("{} backups", human_bytes(orphans)), Paint::Now);
+    if ctx.purge {
+        let mut all = Vec::new();
+        if orphans > 0 {
+            all.push(backups);
+        }
+        if !checkpoints.is_empty() {
+            all.push(checkpoints);
+        }
+        if all.is_empty() {
+            return style("libera 0 MiB").dim().to_string();
+        }
+        return format!("{} {}{}", style("libera").dim(), all.join(&plus), style(" agora").dim());
+    }
+    let mut parts = Vec::new();
+    if !sel.orphans.is_empty() {
+        parts.push(format!("{} {}", style("libera").dim(), paint(format!("{} agora", human_bytes(orphans)), Paint::Now)));
+    }
+    if !checkpoints.is_empty() {
+        parts.push(format!("{checkpoints}{}", style(" no purge da lixeira").dim()));
+    }
+    if parts.is_empty() {
+        return style("a seleção não libera espaço sozinha").dim().to_string();
+    }
+    parts.join(&dot)
 }
 
-/// Barra na escala de tudo que o disco guarda (dados + metadados lidos).
-fn space_bar(now: u64, later: u64, scanned: u64, cells: usize) -> String {
-    let eighths = |bytes: u64| -> usize {
+/// Barra na escala de tudo que o disco guarda (dados + metadados lidos), uma
+/// cor por tipo, na ordem dada.
+fn space_bar(parts: &[(u64, Paint)], scanned: u64, cells: usize) -> String {
+    let mut bar = String::new();
+    let mut used = 0;
+    for &(bytes, kind) in parts {
         if bytes == 0 || scanned == 0 {
-            return 0;
+            continue;
         }
-        ((bytes as f64 / scanned as f64 * (cells * 8) as f64).round() as usize).max(1)
-    };
-    let (now_e, later_e) = (eighths(now), eighths(later));
-    let now_bar = blocks(now_e);
-    let later_bar = blocks(later_e);
-    let used = now_e.div_ceil(8) + later_e.div_ceil(8);
-    format!(
-        "{}{}{}",
-        style(now_bar).yellow(),
-        style(later_bar).cyan(),
-        style("░".repeat(cells.saturating_sub(used))).dim()
-    )
+        let eighths = ((bytes as f64 / scanned as f64 * (cells * 8) as f64).round() as usize).max(1);
+        used += eighths.div_ceil(8);
+        bar.push_str(&paint(blocks(eighths), kind));
+    }
+    bar.push_str(&style("░".repeat(cells.saturating_sub(used))).dim().to_string());
+    bar
 }
 
 fn blocks(eighths: usize) -> String {
@@ -371,7 +442,8 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
                 kernel_label(ctx.kernel_labels, g.id),
                 short_datetime(group::date(g))
             );
-            lines.push(item_line(at_cursor, sel.has(row), false, &format!("{fix:<FIX_WIDTH$}  "), &text));
+            let kind = if fix.is_empty() { Paint::Purge } else { Paint::Fixed };
+            lines.push(item_line(at_cursor, sel.has(row), kind, &format!("{fix:<FIX_WIDTH$}  "), &text));
         }
     }
 
@@ -412,21 +484,23 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
                 members_text(o),
                 style(origin(o)).dim()
             );
-            lines.push(item_line(at_cursor, sel.has(row), true, &" ".repeat(FIX_WIDTH + 2), &text));
+            lines.push(item_line(at_cursor, sel.has(row), Paint::Now, &" ".repeat(FIX_WIDTH + 2), &text));
         }
     }
     (lines, cursor_line)
 }
 
-fn item_line(at_cursor: bool, marked: bool, orphan: bool, fix: &str, text: &str) -> String {
+/// Caixa na cor do tipo quando marcada (a mesma da barra). Fixo desmarcado
+/// leva o lilás no rótulo e no nome; marcado, tudo vai a negrito.
+fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, text: &str) -> String {
     let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
-    let boxed = match (marked, orphan) {
-        (true, true) => style("[x]").yellow().to_string(),
-        (true, false) => style("[x]").cyan().to_string(),
-        (false, _) => style("[ ]").dim().to_string(),
+    let boxed = if marked { paint("[x]".to_string(), kind) } else { style("[ ]").dim().to_string() };
+    let (fix, text) = match (marked, kind) {
+        (true, _) => (style(fix).dim().to_string(), style(text).bold().to_string()),
+        (false, Paint::Fixed) => (paint(fix.to_string(), kind), paint(text.to_string(), kind)),
+        (false, _) => (style(fix).dim().to_string(), text.to_string()),
     };
-    let text = if marked { style(text).bold().to_string() } else { text.to_string() };
-    format!("{CONTENT_INDENT}{cursor} {boxed} {}{text}", style(fix).dim())
+    format!("{CONTENT_INDENT}{cursor} {boxed} {fix}{text}")
 }
 
 /// `@ @home @root`, com a contagem quando uma base aparece mais de uma vez.
@@ -490,10 +564,11 @@ fn summary_text(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate) -> Str
     if !sel.orphans.is_empty() {
         parts.push(format!("{} backups apagados agora, sem lixeira", sel.orphans.len()));
     }
-    if let Estimate::Ready { now, .. } = est
-        && *now > 0
-    {
-        parts.push(format!("libera {} agora", human_bytes(*now)));
+    if let Estimate::Ready { orphans, auto, fixed, .. } = est {
+        let now = if ctx.purge { orphans + auto + fixed } else { *orphans };
+        if now > 0 {
+            parts.push(format!("libera {} agora", human_bytes(now)));
+        }
     }
     parts.join(" · ")
 }
@@ -583,6 +658,38 @@ mod tests {
             assert!(!frame.ends_with('\n'));
             assert!(frame.contains("SnapGroup"));
         }
+    }
+
+    #[test]
+    fn freed_text_names_each_kind_and_its_destination() {
+        let labels = HashMap::new();
+        let orphans = vec![OrphanBackup {
+            label: "x".to_string(),
+            subvols: vec!["@_backup_x".to_string()],
+            bases: vec!["@".to_string()],
+            created: String::new(),
+        }];
+        let mut ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, purge: false, trash_days: 15 };
+        let sel = Selection {
+            groups: [0, 1].into_iter().collect(),
+            orphans: [0].into_iter().collect(),
+            cursor: 0,
+            offset: 0,
+        };
+        let gib = 1u64 << 30;
+        assert_eq!(
+            super::freed_text(&ctx, &sel, 8 * gib, 2 * gib, gib),
+            "libera 8.0 GiB agora · 2.0 GiB automáticos + 1.0 GiB fixos no purge da lixeira"
+        );
+        assert_eq!(
+            super::freed_text(&ctx, &sel, 8 * gib, 0, gib),
+            "libera 8.0 GiB agora · 1.0 GiB fixos no purge da lixeira"
+        );
+        ctx.purge = true;
+        assert_eq!(
+            super::freed_text(&ctx, &sel, 8 * gib, 2 * gib, gib),
+            "libera 8.0 GiB backups + 2.0 GiB automáticos + 1.0 GiB fixos agora"
+        );
     }
 
     #[test]
