@@ -68,7 +68,7 @@ Limitações desse sync:
 
 - **UKI não é suportada.** Se `/boot` tem uma UKI (`EFI/Linux/*.efi`), restores que trocam o `/` são recusados antes de qualquer alteração.
 - **O initramfs é regenerado com as ferramentas do sistema atual.** Só o `mkinitcpio.conf` e os módulos do kernel vêm do root restaurado; hooks, binários e opções de preset são os do sistema em execução.
-- **Subvolumes aninhados acompanham o sistema ativo.** O que vive em subvolume próprio dentro de `@`/`@home` (ex: `/var/lib/machines`, camadas do Docker) fica fora dos snapshots e não é revertido pelo `restore`.
+- **Subvolumes aninhados acompanham o sistema ativo.** O que vive em subvolume próprio dentro de `@`/`@home` (ex: `/var/lib/machines`, camadas do Docker) fica fora dos snapshots e não é revertido pelo `restore`. Entre o restore e o reboot esses caminhos ficam vazios no sistema em execução; se algo for recriado ali, é preservado como `<nome>.snapg-displaced`.
 
 ## Status
 

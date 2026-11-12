@@ -112,9 +112,21 @@ deletável (`Directory not empty`), travando o `save` seguinte.
 
 - `btrfs::nested_subvolumes()` lista os filhos diretos do subvol ativo
   (`btrfs subvolume list -o`).
-- Fase 1 (`nested_to_carry`): confere que cada um cabe no intermediate —
-  destino ausente ou diretório vazio, sem symlink no caminho. Conflito aborta
-  com o sistema vivo intacto.
+- Fase 1 (`nested_to_carry`): confere o destino de cada um no intermediate.
+  Destino ausente ou diretório vazio é livre. Destino ocupado (o checkpoint
+  tem um diretório comum onde hoje há um subvolume) é posto de lado como
+  `<nome>.snapg-displaced` no momento do move, com aviso — os dois lados são
+  preservados. Só aborta, com o sistema vivo intacto, quando um ancestral não
+  é diretório (symlink/arquivo) ou o `.snapg-displaced` já existe.
+- **Janela até o reboot:** no commit os aninhados saem do subvol antigo, que
+  continua montado como raiz viva. Esses caminhos ficam vazios no sistema em
+  execução até reiniciar, e apps podem recriá-los como diretórios comuns. Se
+  a restauração for cancelada, o que foi recriado também vai para
+  `<nome>.snapg-displaced` em vez de travar o cancelamento.
+- Deleção de backups (`btrfs::delete_subvolume_tree`): regret, undo e discard
+  são apagados junto com subvolumes aninhados **vazios** recriados dentro
+  deles nessa janela (ex: `machines`/`portables` pelo systemd-tmpfiles). Um
+  aninhado com dados não é apagado; o erro nomeia o caminho.
 - Commit e as três reversões (`revert_partial`, `revert_regret`,
   `cancel_regret_undo`) usam `move_nested`, tudo-ou-nada; pais que faltam no
   destino são criados com dono e modo da origem.
