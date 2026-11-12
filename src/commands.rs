@@ -1872,7 +1872,12 @@ pub fn space_probe() -> Result<()> {
     let map = space::scan(Path::new(&device))?;
     let s = &map.stats;
     println!("dispositivo  {device}");
-    println!("leitura      {:.1} s ({} tentativa(s))", s.elapsed.as_secs_f64(), s.attempts);
+    println!(
+        "leitura      {:.1} s ({:.1} s lendo blocos, {} tentativa(s))",
+        s.elapsed.as_secs_f64(),
+        s.reading.as_secs_f64(),
+        s.attempts
+    );
     println!("subvolumes   {} ({} sendo apagados pelo btrfs)", s.subvolumes, s.dead_subvolumes);
     println!("blocos       {} ({} de metadados)", s.blocks, gib(s.metadata_bytes));
     println!("extents      {} ({} de dados)", s.extents, gib(s.data_bytes));

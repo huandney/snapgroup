@@ -175,8 +175,10 @@ fn pick(
 /// (4), branco, e no rodapé branco + dica.
 const FIXED_LINES: usize = 10;
 
+/// Linhas da lista: o que sobra da altura. Mínimo 1, para o quadro nunca
+/// passar da tela a partir de `FIXED_LINES + 1` linhas.
 fn list_height(rows: u16) -> usize {
-    (rows as usize).saturating_sub(FIXED_LINES).max(3)
+    (rows as usize).saturating_sub(FIXED_LINES).max(1)
 }
 
 fn render(
@@ -229,14 +231,11 @@ fn render(
     };
     out.push(format!("{CONTENT_INDENT}{}{}", style(keys.join(" · ")).dim(), style(position).dim()));
 
-    // Reescreve no lugar (sem limpar a tela inteira): evita o piscar.
-    let mut frame = String::from("\x1b[H");
-    for line in out {
-        frame.push_str(&line);
-        frame.push_str("\x1b[K\n");
-    }
-    frame.push_str("\x1b[J");
-    frame
+    // Reescreve no lugar (sem limpar a tela inteira): evita o piscar. A última
+    // linha não ganha `\n`: com o quadro na altura exata do terminal, ele
+    // rolaria a tela e o cabeçalho sairia pelo topo.
+    let body: Vec<String> = out.into_iter().map(|line| format!("{line}\x1b[K")).collect();
+    format!("\x1b[H{}\x1b[J", body.join("\n"))
 }
 
 fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: usize) -> Vec<String> {
@@ -560,7 +559,31 @@ fn key_ready(timeout_ms: i32) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeSet, blocks, human_bytes, toggle_all};
+    use super::{BTreeSet, DeleteContext, Estimate, Row, Selection, blocks, human_bytes, render, toggle_all};
+    use crate::orphan::OrphanBackup;
+    use std::collections::HashMap;
+
+    #[test]
+    fn frame_fills_the_terminal_without_scrolling_it() {
+        let orphans: Vec<OrphanBackup> = (0..40)
+            .map(|i| OrphanBackup {
+                label: format!("2026-05-0{}T00:00:00Z", i % 9 + 1),
+                subvols: vec![format!("@_backup_{i}")],
+                bases: vec!["@".to_string()],
+                created: "2026-05-01 00:00:00".to_string(),
+            })
+            .collect();
+        let labels = HashMap::new();
+        let ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, purge: false, trash_days: 15 };
+        let rows: Vec<Row> = (0..orphans.len()).map(Row::Orphan).collect();
+        let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 39, offset: 0 };
+        for height in [12u16, 24, 40] {
+            let frame = render(&ctx, &rows, &mut sel, &Estimate::Pending, (height, 100));
+            assert_eq!(frame.matches('\n').count() + 1, height as usize, "altura {height}");
+            assert!(!frame.ends_with('\n'));
+            assert!(frame.contains("SnapGroup"));
+        }
+    }
 
     #[test]
     fn toggle_all_marks_then_clears() {

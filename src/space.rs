@@ -78,6 +78,8 @@ pub struct ScanStats {
     pub metadata_bytes: u64,
     pub attempts: usize,
     pub elapsed: Duration,
+    /// Parte do tempo gasta lendo e conferindo blocos (o resto é a conta).
+    pub reading: Duration,
 }
 
 /// Uso do disco por conjunto de subvolumes. `freed` responde em microssegundos
@@ -161,6 +163,7 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
     let mut meta_by_set: HashMap<u32, u64> = HashMap::new();
     let mut extents: HashMap<u64, (u32, u64)> = HashMap::new();
     let mut blocks = 0;
+    let mut reading = Duration::ZERO;
     for level in (0..by_level.len()).rev() {
         let mut pending: Vec<(u64, Pending)> = by_level[level].drain().collect();
         pending.sort_unstable_by_key(|(bytenr, _)| *bytenr);
@@ -169,7 +172,9 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
             for (_, p) in batch {
                 *meta_by_set.entry(p.set).or_default() += disk.nodesize as u64 * meta_mult;
             }
+            let started = Instant::now();
             let found = read_batch(&disk, batch, level as u8)?;
+            reading += started.elapsed();
             for item in found {
                 match item {
                     Found::Child { bytenr, generation, set } => {
@@ -219,6 +224,7 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
             metadata_bytes,
             attempts: 0,
             elapsed: Duration::ZERO,
+            reading,
         },
     })
 }
