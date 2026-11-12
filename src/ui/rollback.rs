@@ -5,6 +5,15 @@ pub(crate) fn print_deleted_regret(name: &str) {
     println!("  regret anterior deletado: {name}");
 }
 
+pub(crate) fn print_nested_displaced(dest: &Path, aside: &Path) {
+    eprintln!(
+        "{} {} já tinha conteúdo; o subvolume aninhado ficou no lugar e o conteúdo anterior foi preservado em {}",
+        style("⚠").yellow().bold(),
+        dest.display(),
+        aside.display()
+    );
+}
+
 pub(crate) fn print_discard_delete_failed(config: &str, discard: &Path, error: &anyhow::Error) {
     eprintln!(
         "{} revert {}: backup restaurado mas subvol descartado não foi deletado: {error:#}",

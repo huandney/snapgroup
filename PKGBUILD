@@ -1,12 +1,13 @@
 # Maintainer: Huandney <huandney@gmail.com>
 pkgname=snapgroup
-pkgver=0.10.1
+pkgver=0.11.0
 pkgrel=1
 pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/restore/list/rename/delete/trash/doctor)"
 arch=('x86_64')
 url="https://github.com/huandney/snapgroup"
 license=('MIT')
-depends=('snapper' 'btrfs-progs' 'util-linux' 'coreutils' 'fzf')
+depends=('snapper' 'btrfs-progs' 'util-linux' 'coreutils' 'systemd' 'sudo')
+optdepends=('mkinitcpio: sincronizar /boot FAT32 após um restore')
 makedepends=('cargo')
 install=snapgroup.install
 backup=('etc/snapgroup.conf')
@@ -22,5 +23,7 @@ package() {
   install -Dm755 "$startdir/target/release/snapg" "$pkgdir/usr/bin/snapg"
   install -Dm644 "$startdir/systemd/snapg-cleanup.service" \
     "$pkgdir/usr/lib/systemd/system/snapg-cleanup.service"
+  install -Dm644 "$startdir/pacman/00-snapgroup-pending.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/00-snapgroup-pending.hook"
   install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }

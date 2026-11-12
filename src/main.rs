@@ -19,6 +19,11 @@ use clap::Parser;
 fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     sudo::ensure_root()?;
+    // Tudo daqui em diante roda como root e chama btrfs/snapper/mount/mkinitcpio
+    // pelo nome. PATH fixo: um sudo que preserve o PATH do usuário não deve
+    // decidir qual binário o root executa. Único thread neste ponto.
+    unsafe { std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin") };
+    btrfs::unmount_on_termination();
     match cli.command {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
@@ -44,6 +49,7 @@ fn main() -> Result<()> {
         }
         cli::Command::List => commands::list(),
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
+        cli::Command::PendingCheck => commands::pending_check(),
         cli::Command::BootClean => match lock::try_acquire()? {
             Some(_lock) => commands::boot_clean(),
             None => {

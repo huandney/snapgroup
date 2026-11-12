@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0-beta] - 2026-11-12
+> Commits: `11b6699`, `d10bff5`, `c7a7794`, `25f0430`, `61fc2ae`, `eab7e29`, `1afb9d1`, `1126ca5`, `fc51d69`, `4e6ecfe`, `e148f73`, `c69c03e`, `0d26dd2`, `82f95eb`, `cf02b09`
+
+### Restore
+- **Fix**: Nested subvolumes (e.g. `.snapshots`, `var/lib/machines`) now follow the active subvolume across the rollback swap and its reversals. An occupied destination is moved aside to `<name>.snapg-displaced` instead of blocking the restore, and backups are deleted together with empty nested children recreated inside them; a nested subvolume holding data is never deleted.
+- **Fix**: `SIGINT`/`SIGTERM`/`SIGHUP`/`SIGQUIT` are ignored while subvolumes are being swapped, and an interrupted `snapg` unmounts the btrfs top-level instead of leaving it mounted.
+- **Fix**: `save` creates the new checkpoint before dropping the Regret, rolls back half-created groups and never reuses a group id.
+- **Security**: snapg mountpoints under `/run/snapgroup` are private (`0700`) and mounted `nosuid,nodev`; `PATH` is pinned to system directories.
+
+### Boot / Recovery
+- **Fix**: Limine scanning only considers `protocol: linux` entries; `limine.conf` is found outside the partition root; microcode and fallback modules are preserved, and fallback initramfs images are regenerated without `autodetect`.
+- **Fix**: Root restores are refused on UKI setups, detected by the PE `.linux` section instead of by file name; `vmlinuz` and the boot backup are written atomically.
+
+### Packaging
+- **Feature**: A pacman hook (`00-snapgroup-pending.hook`) blocks kernel and initramfs transactions while a root restore awaits reboot.
+- **Fix**: Dependencies now declare what snapg actually runs (`systemd`, `sudo`; `mkinitcpio` optional; `fzf` dropped).
+
+### TUI
+- **Fix**: The app header stays on screen through the restore execution phase, and picker column headers stay visible when the list paginates.
+
 ## [0.10.1-beta] - 2026-08-16
 > Commits: `33a4f8f`
 

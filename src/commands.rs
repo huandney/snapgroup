@@ -10,7 +10,7 @@ use crate::ui::restore::{
     RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
 use crate::ui::snapshots;
-use crate::ui::term::{clear_screen, confirm};
+use crate::ui::term::{clear_screen, confirm, header};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::fs;
@@ -31,7 +31,7 @@ impl RestoreRegretPolicy {
 
 pub fn save(description: Option<String>) -> Result<()> {
     let cfg = config::load();
-    let id = epoch_now()?;
+    let now = epoch_now()?;
 
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
@@ -62,7 +62,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // nome com o auto-nome como placeholder — Enter direto o aceita). Sem TTY
     // (script/cron), usa o mesmo auto-nome sem prompt — interatividade
     // quebraria automações que nunca a pediram.
-    let auto_name = default_checkpoint_name(id);
+    let auto_name = default_checkpoint_name(now);
     let desc = match description {
         Some(d) => d,
         None if crate::ui::term::stdout_is_tty() => {
@@ -80,16 +80,32 @@ pub fn save(description: Option<String>) -> Result<()> {
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
 
-    // Highlander: save mata regret existente.
-    // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
-    kill_regrets(&configs)?;
+    // Só agora, depois do gate de pending: a varredura de ids chama o snapper,
+    // que falha com uma restauração pendente (o `.snapshots` já foi movido).
+    let id = unique_group_id()?;
 
+    // Um membro que falha desfaz os já criados: grupo pela metade apareceria
+    // no restore como checkpoint e restauraria só parte do sistema.
+    let mut created: Vec<(&String, u32)> = Vec::new();
     for cfg in &configs {
-        snapper::create(cfg, &desc, id)
-            .with_context(|| format!("criar snapshot em '{cfg}'"))?;
+        match snapper::create(cfg, &desc, id) {
+            Ok(number) => created.push((cfg, number)),
+            Err(e) => {
+                for (done_cfg, number) in created {
+                    let _ = snapper::delete(done_cfg, number);
+                }
+                return Err(e).with_context(|| format!("criar snapshot em '{cfg}'"));
+            }
+        }
     }
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
+
+    // Highlander: save mata regret existente — só depois do checkpoint estar
+    // no disco. Na ordem inversa, uma falha do snapper levava o Regret embora
+    // sem deixar nada no lugar.
+    // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
+    kill_regrets(&configs).context("checkpoint criado, mas o Regret anterior não foi removido")?;
 
     // Cleanup group-aware: o grupo recém-criado é o mais novo, logo protegido
     // pelo "manter os N mais novos". Best-effort — o snapshot já está no disco.
@@ -531,6 +547,9 @@ fn restore_root_only_inner(mount_path: &Path, root_subvol: &str) -> Result<()> {
         return Ok(());
     };
 
+    // Fase de execução no terminal normal (o picker já saiu do alt screen):
+    // o cabeçalho mantém a identidade do snapg até o "Próximo passo".
+    header("Restaurar só o /");
     if !confirm(&format!(
         "Restaurar o / para o snapshot #{number}? Troca o root que boota (home e /root ficam intactos)."
     ))? {
@@ -935,6 +954,8 @@ fn execute_restore_root_to_snapshot(
         .join(number.to_string())
         .join("snapshot");
 
+    boot::ensure_fat32_sync_supported()?;
+
     let label = btrfs::now_local_label().context("obter label de tempo")?;
     let pb = crate::ui::term::spinner(format!("restaurando / → snapshot #{number}…"));
     let result = rollback::rollback_root_explicit_preserving_regret(toplevel, root_subvol, &src, &label);
@@ -978,6 +999,11 @@ fn execute_restore_checkpoint(
     mount_path: &Path,
     regret_policy: RestoreRegretPolicy,
 ) -> Result<()> {
+    header("Restauração");
+    if group::root_member(group)?.is_some() {
+        boot::ensure_fat32_sync_supported()?;
+    }
+
     let pb = crate::ui::term::spinner(format!(
         "restaurando checkpoint {} ({} membros)…",
         group.id,
@@ -1041,7 +1067,7 @@ fn execute_keep_regret_checkpoint(
         return Ok(());
     }
 
-    let id = epoch_now()?;
+    let id = unique_group_id()?;
     let userdata = regret_checkpoint_userdata(id, regret.origin_date.as_deref());
     let pb = crate::ui::term::spinner(format!(
         "guardando Regret como checkpoint {} ({} membros)…",
@@ -1219,6 +1245,11 @@ fn cleanup_created_regret_snapshot(item: &CreatedRegretSnapshot) {
 }
 
 fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
+    header("Restauração");
+    if regret.entries.iter().any(|e| e.mountpoint == "/") {
+        boot::ensure_fat32_sync_supported()?;
+    }
+
     let done: Vec<rollback::Done> = regret
         .entries
         .into_iter()
@@ -1547,8 +1578,8 @@ fn boot_clean_inner(mount_path: &Path) -> Result<()> {
 
     let total = targets.len();
     let mut ok = 0usize;
-    for (name, path) in &targets {
-        match btrfs::delete_subvolume(path) {
+    for (name, _path) in &targets {
+        match btrfs::delete_subvolume_tree(mount_path, name) {
             Ok(()) => {
                 crate::ui::boot_clean::print_cleanup_target_removed(name);
                 ok += 1;
@@ -1598,6 +1629,41 @@ fn epoch_now() -> Result<i64> {
         .duration_since(UNIX_EPOCH)
         .context("epoch agora")?
         .as_secs() as i64)
+}
+
+/// Id de grupo = epoch em segundos, avançado até não colidir. Dois saves no
+/// mesmo segundo (script) se fundiriam num grupo só, com dois membros por
+/// config; o restore desse grupo se atropela na fase de commit.
+fn unique_group_id() -> Result<i64> {
+    let used = group::all_group_ids()?;
+    let mut id = epoch_now()?;
+    while used.contains(&id) {
+        id += 1;
+    }
+    Ok(id)
+}
+
+/// Só uma restauração pendente que troca o `/` descasa /boot e módulos. Um
+/// pending só de `/home` não muda o root que recebe os módulos novos.
+fn pending_restore_swaps_root() -> Result<bool> {
+    let configs = snapper::list_configs()?;
+    let pending = pending_restore_from_live(&configs)?.unwrap_or_default();
+    Ok(pending.iter().any(|d| d.mountpoint == "/"))
+}
+
+/// Chamado pelo hook do pacman antes de transações que mexem em kernel ou
+/// initramfs. Com uma restauração pendente, o kernel novo iria para o /boot
+/// e os módulos para o root antigo; o reboot subiria o root restaurado com um
+/// kernel que ele não tem. Falha de diagnóstico não bloqueia o pacman.
+pub fn pending_check() -> Result<()> {
+    if !pending_restore_swaps_root().unwrap_or(false) {
+        return Ok(());
+    }
+    bail!(
+        "há uma restauração do snapgroup aguardando reboot.\n  \
+         Atualizar kernel/initramfs agora deixaria o /boot fora de sincronia com o root restaurado.\n  \
+         Reinicie, ou rode 'snapg restore' para cancelar a restauração, e repita a transação."
+    )
 }
 
 fn default_checkpoint_name(epoch: i64) -> String {

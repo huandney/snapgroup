@@ -101,6 +101,11 @@ pub fn groups_to_prune(groups: &[Group], keep: usize) -> &[Group] {
     &groups[keep..]
 }
 
+/// Ids em uso, vivos ou na lixeira.
+pub fn all_group_ids() -> Result<Vec<GroupId>> {
+    Ok(scan_all_groups()?.into_iter().map(|g| g.id).collect())
+}
+
 /// Grupos vivos (visíveis): exclui os que estão na lixeira.
 pub fn list_groups() -> Result<Vec<Group>> {
     Ok(scan_all_groups()?.into_iter().filter(|g| !is_trashed(g)).collect())

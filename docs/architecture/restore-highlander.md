@@ -99,6 +99,41 @@ todo o histórico visível.
 - Helper novo em `src/btrfs.rs`: `is_subvolume()` (check via exit code de
   `btrfs subvolume show`).
 
+### 5.1.1. Demais subvolumes aninhados
+
+O mesmo problema vale para qualquer subvolume criado dentro de `@`/`@home`
+(`/var/lib/machines`, `/var/lib/portables`, subvolumes do Docker, um
+`~/.cache` separado): o snapshot não desce neles, então ficavam para trás no
+backup. O sistema subia com os diretórios vazios e o backup deixava de ser
+deletável (`Directory not empty`), travando o `save` seguinte.
+
+**Regra:** o que está fora dos snapshots acompanha o nome ativo. A etapa de
+`.snapshots` foi generalizada:
+
+- `btrfs::nested_subvolumes()` lista os filhos diretos do subvol ativo
+  (`btrfs subvolume list -o`).
+- Fase 1 (`nested_to_carry`): confere o destino de cada um no intermediate.
+  Destino ausente ou diretório vazio é livre. Destino ocupado (o checkpoint
+  tem um diretório comum onde hoje há um subvolume) é posto de lado como
+  `<nome>.snapg-displaced` no momento do move, com aviso — os dois lados são
+  preservados. Só aborta, com o sistema vivo intacto, quando um ancestral não
+  é diretório (symlink/arquivo) ou o `.snapg-displaced` já existe.
+- **Janela até o reboot:** no commit os aninhados saem do subvol antigo, que
+  continua montado como raiz viva. Esses caminhos ficam vazios no sistema em
+  execução até reiniciar, e apps podem recriá-los como diretórios comuns. Se
+  a restauração for cancelada, o que foi recriado também vai para
+  `<nome>.snapg-displaced` em vez de travar o cancelamento.
+- Deleção de backups (`btrfs::delete_subvolume_tree`): regret, undo e discard
+  são apagados junto com subvolumes aninhados **vazios** recriados dentro
+  deles nessa janela (ex: `machines`/`portables` pelo systemd-tmpfiles). Um
+  aninhado com dados não é apagado; o erro nomeia o caminho.
+- Commit e as três reversões (`revert_partial`, `revert_regret`,
+  `cancel_regret_undo`) usam `move_nested`, tudo-ou-nada; pais que faltam no
+  destino são criados com dono e modo da origem.
+- Cobertura em btrfs real: teste `#[ignore]`
+  `nested_subvolumes_follow_the_active_subvol_on_real_btrfs`, rodado como root
+  contra uma imagem de loopback (`SNAPG_TEST_BTRFS=<mount>`).
+
 ### 5.2. Naming alinhado com `btrfs-assistant`
 
 Subvolumes de backup usam timestamp local `YYYY-MM-DD_HH:MM:SS` em vez de
