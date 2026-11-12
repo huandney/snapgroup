@@ -26,9 +26,9 @@ pub(crate) enum Estimate {
     Ready { orphans: u64, auto: u64, fixed: u64, scanned: u64 },
 }
 
-/// Lilás dos checkpoints fixos: longe do amarelo ("agora") e do azul-claro
+/// Rosa dos checkpoints fixos: longe do amarelo ("agora") e do azul-claro
 /// ("no purge") que marcam a seleção.
-const FIXED_COLOR: u8 = 140;
+const FIXED_COLOR: u8 = 211;
 
 /// O que a tela precisa saber de fora dela.
 pub(crate) struct DeleteContext<'a> {
@@ -491,7 +491,7 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
 }
 
 /// Caixa na cor do tipo quando marcada (a mesma da barra). Fixo desmarcado
-/// leva o lilás no rótulo e no nome; marcado, tudo vai a negrito.
+/// leva o rosa no rótulo e no nome; marcado, tudo vai a negrito.
 fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, text: &str) -> String {
     let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
     let boxed = if marked { paint("[x]".to_string(), kind) } else { style("[ ]").dim().to_string() };
