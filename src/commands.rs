@@ -6,6 +6,7 @@ use crate::group::{self, Group, Member};
 use crate::orphan::{self, OrphanBackup};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
+use crate::space;
 use crate::ui::restore::{
     Fat32BootAction, PendingAction, PendingPromptInfo, PendingSyncAction, PostRestoreAction,
     RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
@@ -1726,6 +1727,68 @@ fn pending_restore_swaps_root() -> Result<bool> {
     let configs = snapper::list_configs()?;
     let pending = pending_restore_from_live(&configs)?.unwrap_or_default();
     Ok(pending.iter().any(|d| d.mountpoint == "/"))
+}
+
+/// Diagnóstico da estimativa exata (`snapg space-probe`): tempo da leitura dos
+/// metadados e quanto sairia apagando todos os órfãos, todos os checkpoints ou
+/// os dois. Só leitura.
+pub fn space_probe() -> Result<()> {
+    let device = btrfs::fs_device("/")?;
+    let map = space::scan(Path::new(&device))?;
+    let s = &map.stats;
+    println!("dispositivo  {device}");
+    println!("leitura      {:.1} s ({} tentativa(s))", s.elapsed.as_secs_f64(), s.attempts);
+    println!("subvolumes   {} ({} sendo apagados pelo btrfs)", s.subvolumes, s.dead_subvolumes);
+    println!("blocos       {} ({} de metadados)", s.blocks, gib(s.metadata_bytes));
+    println!("extents      {} ({} de dados)", s.extents, gib(s.data_bytes));
+    println!("conjuntos    {}", s.sets);
+
+    let configs = snapper::list_configs()?;
+    let uuid = btrfs::fs_uuid("/")?;
+    let mount_path = rollback::toplevel_mount_path(&uuid);
+    btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
+    let result = probe_selections(&map, &configs, &mount_path);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+fn probe_selections(map: &space::SpaceMap, configs: &[String], toplevel: &Path) -> Result<()> {
+    let bases = config_base_subvols(configs)?;
+    let mut orphan_ids = Vec::new();
+    for orphan in orphan::find(toplevel, &bases)? {
+        for name in &orphan.subvols {
+            orphan_ids.push(btrfs::subvol_id(&toplevel.join(name))?);
+        }
+    }
+    let mut checkpoint_ids = Vec::new();
+    for g in group::list_groups()? {
+        for m in &g.members {
+            checkpoint_ids.push(btrfs::subvol_id(&rollback::member_snapshot_path(m, toplevel)?)?);
+        }
+    }
+    let both: Vec<u64> = orphan_ids.iter().chain(&checkpoint_ids).copied().collect();
+
+    println!();
+    let started = std::time::Instant::now();
+    for (label, ids) in [
+        ("todos os órfãos", &orphan_ids),
+        ("todos os checkpoints", &checkpoint_ids),
+        ("órfãos + checkpoints", &both),
+    ] {
+        let freed = map.freed(ids);
+        println!(
+            "{label:<22} {:>3} subvolumes   dados {:>10}   metadados {:>10}",
+            ids.len(),
+            gib(freed.data),
+            gib(freed.metadata)
+        );
+    }
+    println!("cálculo das 3 seleções  {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+    Ok(())
+}
+
+fn gib(bytes: u64) -> String {
+    format!("{:.2} GiB", bytes as f64 / (1u64 << 30) as f64)
 }
 
 /// Chamado pelo hook do pacman antes de transações que mexem em kernel ou

@@ -252,6 +252,28 @@ fn parse_nested_subvolumes(listing: &str, subvol: &str) -> Result<Vec<std::path:
     Ok(nested)
 }
 
+/// Id (tree id) do subvolume que contém `path`, pelo ioctl `INO_LOOKUP`:
+/// com `treeid = 0` o kernel devolve a árvore do próprio fd.
+pub fn subvol_id(path: &Path) -> Result<u64> {
+    use std::os::fd::AsRawFd;
+    #[repr(C)]
+    struct InoLookupArgs {
+        treeid: u64,
+        objectid: u64,
+        name: [u8; 4080],
+    }
+    // _IOWR(0x94, 18, struct btrfs_ioctl_ino_lookup_args), 4096 bytes.
+    const BTRFS_IOC_INO_LOOKUP: u64 = 0xD000_9412;
+    let file = fs::File::open(path).with_context(|| format!("abrir {}", path.display()))?;
+    let mut args = InoLookupArgs { treeid: 0, objectid: 256, name: [0; 4080] };
+    // SAFETY: args tem o layout que o ioctl espera e vive durante a chamada.
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), BTRFS_IOC_INO_LOOKUP as _, &mut args) };
+    if rc != 0 {
+        bail!("INO_LOOKUP {}: {}", path.display(), std::io::Error::last_os_error());
+    }
+    Ok(args.treeid)
+}
+
 /// True se o path é um subvolume btrfs (não só diretório).
 pub fn is_subvolume(path: &Path) -> bool {
     Command::new("btrfs")
@@ -301,6 +323,23 @@ pub fn subvol_creation_time(path: &Path) -> Result<String> {
         "Creation time não encontrado em btrfs subvolume show {}",
         path.display()
     )
+}
+
+/// Dispositivo do btrfs montado em `mountpoint`, sem o sufixo `[/subvol]`.
+pub fn fs_device(mountpoint: &str) -> Result<String> {
+    let out = Command::new("findmnt")
+        .args(["-no", "SOURCE", mountpoint])
+        .output()
+        .context("findmnt falhou")?;
+    if !out.status.success() {
+        bail!("findmnt {mountpoint}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let source = String::from_utf8_lossy(&out.stdout);
+    let device = source.trim().split('[').next().unwrap_or_default();
+    if device.is_empty() {
+        bail!("findmnt {mountpoint}: sem dispositivo");
+    }
+    Ok(device.to_string())
 }
 
 pub fn fs_uuid(mountpoint: &str) -> Result<String> {
