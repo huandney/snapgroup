@@ -97,12 +97,81 @@ fn lock_limine_mutex() -> Result<Option<fs::File>> {
 /// Uma UKI empacota kernel + initramfs + cmdline num único `.efi`. O sync só
 /// sabe copiar o vmlinuz e regenerar o initramfs; aplicado a uma UKI, trocaria
 /// a imagem inteira por um kernel sem initramfs — e o verify ainda passaria.
-fn find_uki(groups: &[KernelGroup]) -> Option<&Path> {
-    groups
-        .iter()
-        .flat_map(|g| &g.vmlinuz_paths)
-        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("efi")))
-        .map(PathBuf::as_path)
+///
+/// Dois sinais, qualquer um basta:
+/// - um `.efi` entre os alvos de vmlinuz — seria sobrescrito pelo sync;
+/// - um `.efi` em `EFI/Linux` ou referenciado no limine.conf que seja de fato
+///   uma UKI (PE com seção `.linux`), tenha o nome que tiver. Sem isto, uma
+///   UKI fora do padrão de nome do scan (`arch-linux.efi`, `<id>-<kver>.efi`,
+///   chainload `protocol: efi`) passava pelo preflight e o sync atualizava
+///   arquivos que o firmware nunca boota.
+fn find_uki(boot: &Path, groups: &[KernelGroup]) -> Option<PathBuf> {
+    let target = groups.iter().flat_map(|g| &g.vmlinuz_paths).find(|p| has_efi_ext(p));
+    if let Some(target) = target {
+        return Some(target.clone());
+    }
+    uki_candidates(boot).into_iter().find(|p| is_uki(p))
+}
+
+fn has_efi_ext(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("efi"))
+}
+
+/// Imagens EFI que podem ser uma UKI: tudo em `EFI/Linux` e todo `.efi` que o
+/// limine.conf referencia, em qualquer protocolo.
+fn uki_candidates(boot: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(entries) = fs::read_dir(boot.join("EFI/Linux")) {
+        candidates.extend(entries.flatten().map(|e| e.path()));
+    }
+    if let Ok(conf) = fs::read_to_string(limine_conf_path(boot)) {
+        candidates.extend(conf.lines().filter_map(|l| limine_boot_path_from_line(boot, l)));
+    }
+    candidates.retain(|p| has_efi_ext(p) && p.is_file());
+    candidates
+}
+
+fn is_uki(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    // Cabeçalhos e tabela de seções ficam no começo do arquivo.
+    let mut head = Vec::new();
+    if file.take(64 * 1024).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    pe_has_section(&head, b".linux")
+}
+
+/// True se `data` começa com um executável PE que tem a seção `name`. É a
+/// seção `.linux` (o kernel embutido) que distingue uma UKI de qualquer outro
+/// binário EFI, como o bootloader do Windows.
+fn pe_has_section(data: &[u8], name: &[u8]) -> bool {
+    let u16_at = |at: usize| {
+        data.get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
+    };
+    if data.get(..2) != Some(b"MZ".as_slice()) {
+        return false;
+    }
+    let Some(pe) = data
+        .get(0x3c..0x40)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+    else {
+        return false;
+    };
+    if data.get(pe..pe + 4) != Some(b"PE\0\0".as_slice()) {
+        return false;
+    }
+    let (Some(sections), Some(optional_header)) = (u16_at(pe + 6), u16_at(pe + 20)) else {
+        return false;
+    };
+    let table = pe + 24 + optional_header;
+    (0..sections).any(|i| {
+        data.get(table + i * 40..table + i * 40 + 8)
+            .is_some_and(|raw| raw.split(|b| *b == 0).next() == Some(name))
+    })
 }
 
 fn uki_unsupported(uki: &Path) -> anyhow::Error {
@@ -123,8 +192,8 @@ pub fn ensure_fat32_sync_supported() -> Result<()> {
         return Ok(());
     }
     let groups = discover_kernel_groups(boot)?;
-    match find_uki(&groups) {
-        Some(uki) => Err(uki_unsupported(uki)),
+    match find_uki(boot, &groups) {
+        Some(uki) => Err(uki_unsupported(&uki)),
         None => Ok(()),
     }
 }
@@ -172,11 +241,11 @@ fn sync_fat32_paths_with_panel(
     let _limine_mutex = lock_limine_mutex()?;
 
     let groups = discover_kernel_groups(boot)?;
+    if let Some(uki) = find_uki(boot, &groups) {
+        return Err(uki_unsupported(&uki));
+    }
     if groups.is_empty() {
         bail!("nenhum vmlinuz/initramfs ativo encontrado em {}", boot.display());
-    }
-    if let Some(uki) = find_uki(&groups) {
-        return Err(uki_unsupported(uki));
     }
 
     let interrupted = boot_backup_remnant(boot);
@@ -307,7 +376,8 @@ fn sync_inner(
             // que se atualiza no lugar (sem clear_screen por linha, que empilhava
             // em alguns terminais). Limpa o spinner mesmo em falha, antes do `?`.
             let pb = crate::ui::term::spinner(String::new());
-            let r = regen_initramfs(&config, kver, restored_root, dest, |l| {
+            let fallback = is_fallback_image(dest);
+            let r = regen_initramfs(&config, kver, restored_root, dest, fallback, |l| {
                 pb.set_message(clean_mkinitcpio_line(l));
             });
             pb.finish_and_clear();
@@ -740,6 +810,7 @@ fn regen_initramfs(
     kver: &str,
     restored_root: &Path,
     out: &Path,
+    fallback: bool,
     on_line: impl FnMut(&str),
 ) -> Result<()> {
     // Gera para um temporário no mesmo diretório e renomeia atomicamente.
@@ -756,6 +827,9 @@ fn regen_initramfs(
         .arg(restored_root)
         .arg("-g")
         .arg(&tmp);
+    if fallback {
+        cmd.args(["-S", "autodetect"]);
+    }
     if let Err(e) = crate::proc::run_streamed(cmd, on_line) {
         let _ = fs::remove_file(&tmp);
         return Err(e).with_context(|| format!("mkinitcpio {kver} → {}", out.display()));
@@ -1049,15 +1123,26 @@ fn scan_limine_conf(boot: &Path, out: &mut HashMap<String, KernelGroup>) -> Resu
     Ok(())
 }
 
-/// Um `module_path` só é alvo de mkinitcpio se for o initramfs principal.
-/// Microcode (`amd-ucode.img`) e fallback também são módulos de uma entrada
-/// linux; regenerá-los os trocaria por uma cópia do initramfs comum.
+/// Um `module_path` só é alvo de mkinitcpio se for um initramfs. Microcode
+/// (`amd-ucode.img`) também é módulo de uma entrada linux; regenerá-lo o
+/// trocaria por uma cópia do initramfs. O fallback É regenerado (ver
+/// `is_fallback_image`): deixá-lo de fora o manteria com os módulos do kernel
+/// antigo depois de um restore que troca de kernel.
 fn is_regenerable_initramfs(path: &Path) -> bool {
-    let name = path
-        .file_name()
+    let name = lowercase_file_name(path);
+    !["ucode", "microcode"].iter().any(|skip| name.contains(skip))
+}
+
+/// Imagem de fallback: regenerada sem o hook autodetect, como o preset do
+/// mkinitcpio faz, para continuar servindo de fallback.
+fn is_fallback_image(path: &Path) -> bool {
+    lowercase_file_name(path).contains("fallback")
+}
+
+fn lowercase_file_name(path: &Path) -> String {
+    path.file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    !["ucode", "microcode", "fallback"].iter().any(|skip| name.contains(skip))
+        .unwrap_or_default()
 }
 
 /// Registra os paths acumulados de uma entrada do limine.conf, mas só se ela
@@ -1747,7 +1832,13 @@ mod tests {
         assert_eq!(groups.len(), 1);
         let g = groups.get("linux").expect("nome vem do arquivo, não do título");
         assert_eq!(g.vmlinuz_paths, vec![base.join("vmlinuz-linux")]);
-        assert_eq!(g.initramfs_paths, vec![base.join("initramfs-linux.img")]);
+        // Principal e fallback são regenerados; o microcode fica de fora.
+        assert_eq!(
+            g.initramfs_paths,
+            vec![base.join("initramfs-linux.img"), base.join("initramfs-linux-fallback.img")]
+        );
+        assert!(super::is_fallback_image(&g.initramfs_paths[1]));
+        assert!(!super::is_fallback_image(&g.initramfs_paths[0]));
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1768,25 +1859,72 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// PE mínimo com uma única seção de nome `section`.
+    fn fake_pe(section: &[u8]) -> Vec<u8> {
+        let mut pe = vec![0u8; 0x40];
+        pe[..2].copy_from_slice(b"MZ");
+        pe[0x3c] = 0x40;
+        pe.extend_from_slice(b"PE\0\0");
+        let mut coff = [0u8; 20];
+        coff[2] = 1; // NumberOfSections
+        pe.extend_from_slice(&coff);
+        let mut entry = [0u8; 40];
+        entry[..section.len()].copy_from_slice(section);
+        pe.extend_from_slice(&entry);
+        pe
+    }
+
     #[test]
-    fn find_uki_flags_efi_images_only() {
+    fn pe_section_lookup_tells_uki_from_other_efi_binaries() {
+        use super::pe_has_section;
+        assert!(pe_has_section(&fake_pe(b".linux"), b".linux"));
+        assert!(!pe_has_section(&fake_pe(b".text"), b".linux"));
+        assert!(!pe_has_section(b"uki", b".linux"));
+        assert!(!pe_has_section(&fake_pe(b".linux")[..0x50], b".linux")); // truncado
+    }
+
+    #[test]
+    fn find_uki_sees_targets_and_real_ukis_under_any_name() {
         use super::{KernelGroup, find_uki};
+        let base = std::env::temp_dir().join(format!("snapg_test_find_uki_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("EFI/Linux")).unwrap();
+        std::fs::create_dir_all(base.join("EFI/Microsoft/Boot")).unwrap();
+        std::fs::write(base.join("EFI/Microsoft/Boot/bootmgfw.efi"), fake_pe(b".text")).unwrap();
+        std::fs::write(base.join("limine.conf"), "/Windows\n  protocol: efi\n  path: boot():/EFI/Microsoft/Boot/bootmgfw.efi\n").unwrap();
         let plain = KernelGroup {
             kernel_name: "linux".to_string(),
-            vmlinuz_paths: vec![Path::new("/boot/vmlinuz-linux").to_path_buf()],
+            vmlinuz_paths: vec![base.join("vmlinuz-linux")],
             initramfs_paths: Vec::new(),
         };
-        assert_eq!(find_uki(std::slice::from_ref(&plain)), None);
 
-        let uki = KernelGroup {
+        // Só Windows em chainload e um .efi qualquer em EFI/Linux: não é UKI.
+        std::fs::write(base.join("EFI/Linux/sobra.efi"), "nada").unwrap();
+        assert_eq!(find_uki(&base, std::slice::from_ref(&plain)), None);
+
+        // UKI com nome fora do padrão do scan, em EFI/Linux.
+        std::fs::write(base.join("EFI/Linux/arch-linux.efi"), fake_pe(b".linux")).unwrap();
+        assert_eq!(
+            find_uki(&base, std::slice::from_ref(&plain)),
+            Some(base.join("EFI/Linux/arch-linux.efi"))
+        );
+        std::fs::remove_file(base.join("EFI/Linux/arch-linux.efi")).unwrap();
+
+        // UKI em outro diretório, em chainload pelo limine.conf.
+        std::fs::create_dir_all(base.join("EFI/arch")).unwrap();
+        std::fs::write(base.join("EFI/arch/uki.efi"), fake_pe(b".linux")).unwrap();
+        std::fs::write(base.join("limine.conf"), "/Arch\n  protocol: efi\n  path: boot():/EFI/arch/uki.efi\n").unwrap();
+        assert_eq!(find_uki(&base, std::slice::from_ref(&plain)), Some(base.join("EFI/arch/uki.efi")));
+
+        // Um .efi entre os alvos de vmlinuz é recusado sem olhar o conteúdo.
+        let target = KernelGroup {
             kernel_name: "linux-cachyos".to_string(),
-            vmlinuz_paths: vec![Path::new("/boot/EFI/Linux/id_linux-cachyos.efi").to_path_buf()],
+            vmlinuz_paths: vec![base.join("EFI/Linux/id_linux-cachyos.efi")],
             initramfs_paths: Vec::new(),
         };
-        assert_eq!(
-            find_uki(&[plain, uki]),
-            Some(Path::new("/boot/EFI/Linux/id_linux-cachyos.efi"))
-        );
+        assert_eq!(find_uki(&base, &[target]), Some(base.join("EFI/Linux/id_linux-cachyos.efi")));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

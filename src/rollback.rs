@@ -109,7 +109,7 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
         if !regret_path.exists() {
             continue;
         }
-        btrfs::delete_subvolume(&regret_path)
+        btrfs::delete_subvolume_tree(toplevel, &rname)
             .with_context(|| format!("deletar regret {rname}"))?;
         crate::ui::rollback::print_deleted_regret(&rname);
     }
@@ -278,30 +278,56 @@ fn nested_to_carry(toplevel: &Path, current_subvol: &str, intermediate: &Path) -
     checked.with_context(|| format!("subvolumes aninhados de {current_subvol}"))
 }
 
-/// O destino de um subvolume aninhado precisa estar livre: cada ancestral é um
-/// diretório de verdade (ou ainda não existe) e o ponto final é ausente ou um
-/// diretório vazio — o stub que o snapshot deixa. Symlink no caminho é recusado:
-/// um link absoluto resolveria contra o sistema vivo, fora do subvolume.
-fn check_nested_destination(to: &Path, rel: &Path) -> Result<()> {
+/// Sufixo do que estava no caminho de um subvolume aninhado e foi posto de lado.
+const DISPLACED_SUFFIX: &str = ".snapg-displaced";
+
+fn displaced_path(dest: &Path) -> PathBuf {
+    let mut name = dest.file_name().unwrap_or_default().to_os_string();
+    name.push(DISPLACED_SUFFIX);
+    dest.with_file_name(name)
+}
+
+/// Confere o destino de um subvolume aninhado. `Ok(None)`: livre (ausente ou
+/// diretório vazio — o stub que o snapshot deixa). `Ok(Some(aside))`: ocupado,
+/// e o ocupante deve ser renomeado para `aside` antes do move. Acontece quando
+/// o checkpoint tem um diretório comum onde hoje há um subvolume, ou quando o
+/// sistema vivo recriou o caminho depois de o subvolume ter saído dali. Pôr de
+/// lado preserva os dois lados; recusar tornaria o checkpoint irrestaurável e
+/// a restauração pendente incancelável.
+///
+/// Erro só para o que não dá para contornar: um ancestral que não é diretório
+/// (symlink absoluto resolveria contra o sistema vivo, fora do subvolume) ou
+/// um `aside` que já existe.
+fn check_nested_destination(to: &Path, rel: &Path) -> Result<Option<PathBuf>> {
     let mut cur = to.to_path_buf();
     let mut components = rel.components().peekable();
     while let Some(component) = components.next() {
         cur.push(component);
         let Ok(meta) = fs::symlink_metadata(&cur) else {
-            return Ok(()); // ausente: os diretórios pais serão criados no move
+            return Ok(None); // ausente: os diretórios pais serão criados no move
         };
-        if !meta.is_dir() {
-            bail!("{} existe no destino e não é um diretório", cur.display());
+        if components.peek().is_some() {
+            if !meta.is_dir() {
+                bail!("{} existe no destino e não é um diretório", cur.display());
+            }
+            continue;
         }
-        let is_last = components.peek().is_none();
-        if is_last && fs::read_dir(&cur).with_context(|| format!("ler {}", cur.display()))?.next().is_some() {
+        let free = meta.is_dir()
+            && fs::read_dir(&cur).with_context(|| format!("ler {}", cur.display()))?.next().is_none();
+        if free {
+            return Ok(None);
+        }
+        let aside = displaced_path(&cur);
+        if fs::symlink_metadata(&aside).is_ok() {
             bail!(
-                "{} já tem conteúdo no destino; o subvolume aninhado de mesmo caminho não cabe ali",
-                cur.display()
+                "{} está ocupado e {} já existe; remova um dos dois e tente de novo",
+                cur.display(),
+                aside.display()
             );
         }
+        return Ok(Some(aside));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Cria em `to` os diretórios pais que faltam para `rel_dir`, copiando dono e
@@ -328,27 +354,51 @@ fn create_parents_like(from: &Path, to: &Path, rel_dir: &Path) -> Result<()> {
 
 /// Move cada subvolume aninhado de `from` para o mesmo caminho em `to`. Rename
 /// é metadata-only e sobrevive a mounts/arquivos abertos. Em falha, devolve os
-/// já movidos a `from` — o caller enxerga tudo-ou-nada.
+/// já movidos a `from` e repõe o que foi posto de lado — o caller enxerga
+/// tudo-ou-nada.
 fn move_nested(from: &Path, to: &Path, nested: &[PathBuf]) -> Result<()> {
-    for (moved, rel) in nested.iter().enumerate() {
-        if let Err(e) = move_one_nested(from, to, rel) {
-            for back in nested[..moved].iter().rev() {
-                let _ = fs::rename(to.join(back), from.join(back));
+    let mut displaced = Vec::with_capacity(nested.len());
+    for rel in nested {
+        match move_one_nested(from, to, rel) {
+            Ok(was_displaced) => displaced.push(was_displaced),
+            Err(e) => {
+                for (back, was_displaced) in nested.iter().zip(displaced).rev() {
+                    let dest = to.join(back);
+                    let _ = fs::rename(&dest, from.join(back));
+                    if was_displaced {
+                        let _ = fs::rename(displaced_path(&dest), &dest);
+                    }
+                }
+                return Err(e);
             }
-            return Err(e);
         }
     }
     Ok(())
 }
 
-fn move_one_nested(from: &Path, to: &Path, rel: &Path) -> Result<()> {
-    check_nested_destination(to, rel)?;
+/// `Ok(true)` se o destino estava ocupado e o ocupante foi posto de lado.
+fn move_one_nested(from: &Path, to: &Path, rel: &Path) -> Result<bool> {
+    let aside = check_nested_destination(to, rel)?;
     if let Some(parent) = rel.parent() {
         create_parents_like(from, to, parent)?;
     }
-    fs::rename(from.join(rel), to.join(rel)).with_context(|| {
-        format!("mover {} de {} para {}", rel.display(), from.display(), to.display())
-    })
+    let dest = to.join(rel);
+    if let Some(aside) = &aside {
+        fs::rename(&dest, aside)
+            .with_context(|| format!("pôr de lado {} em {}", dest.display(), aside.display()))?;
+    }
+    if let Err(e) = fs::rename(from.join(rel), &dest) {
+        if let Some(aside) = &aside {
+            let _ = fs::rename(aside, &dest);
+        }
+        return Err(e).with_context(|| {
+            format!("mover {} de {} para {}", rel.display(), from.display(), to.display())
+        });
+    }
+    if let Some(aside) = &aside {
+        crate::ui::rollback::print_nested_displaced(&dest, aside);
+    }
+    Ok(aside.is_some())
 }
 
 /// Aninhados de `subvol`, ou nada se ele não existe (recuperação manual ou
@@ -476,7 +526,7 @@ fn delete_stashed_backup(stashed_backup: Option<StashedBackup>, toplevel: &Path,
         return;
     };
     let stashed = toplevel.join(&stashed_backup.stashed_subvol);
-    if let Err(e) = btrfs::delete_subvolume(&stashed) {
+    if let Err(e) = btrfs::delete_subvolume_tree(toplevel, &stashed_backup.stashed_subvol) {
         crate::ui::rollback::print_stashed_regret_delete_failed(config, &stashed, &e);
     }
 }
@@ -575,6 +625,12 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
         let discard_name = format!("{}.snapgroup_discard", d.current_subvol);
         let discard = toplevel.join(&discard_name);
 
+        // Sobra de um revert anterior cujo delete falhou: o rename da etapa 1
+        // esbarraria nela.
+        if discard.exists() {
+            let _ = btrfs::delete_subvolume_tree(toplevel, &discard_name);
+        }
+
         // 0. Move os aninhados de volta pro backup (simétrico ao commit).
         // Sem isso, cairiam no discard e seriam deletados junto.
         let nested = nested_if_present(toplevel, &d.current_subvol)
@@ -587,10 +643,15 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
         // manual/interrompida ele pode já ter sumido; nesse caso o undo só
         // precisa restaurar o regret para o nome ativo.
         let moved_current_to_discard = current.exists();
-        if moved_current_to_discard {
-            fs::rename(&current, &discard).with_context(|| {
+        if moved_current_to_discard
+            && let Err(e) = fs::rename(&current, &discard)
+        {
+            // Os aninhados já estão no backup; sem devolvê-los, o revertido
+            // seguiria com o nome ativo e esses caminhos vazios.
+            let _ = move_nested(&backup, &current, &nested);
+            return Err(e).with_context(|| {
                 format!("revert {}: tirar revertido de {}", d.config, d.current_subvol)
-            })?;
+            });
         }
 
         // 2. Restaura o backup pro nome ativo (fstab volta a achar)
@@ -606,7 +667,9 @@ pub fn revert_partial(done: &[Done], toplevel: &Path) -> Result<()> {
         }
 
         // 3. Apaga o subvol revertido (SEGURO aqui — nunca foi montado).
-        if moved_current_to_discard && let Err(e) = btrfs::delete_subvolume(&discard) {
+        if moved_current_to_discard
+            && let Err(e) = btrfs::delete_subvolume_tree(toplevel, &discard_name)
+        {
             crate::ui::rollback::print_discard_delete_failed(&d.config, &discard, &e);
         }
     }
@@ -776,7 +839,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_destination_accepts_missing_or_empty_and_rejects_the_rest() {
+    fn nested_destination_is_free_displaceable_or_refused() {
         let base = temp_base("nested_dest");
         std::fs::create_dir_all(base.join("var/lib/stub")).unwrap();
         std::fs::create_dir_all(base.join("var/lib/cheio")).unwrap();
@@ -785,18 +848,29 @@ mod tests {
         std::os::unix::fs::symlink("/", base.join("link")).unwrap();
 
         // Stub vazio do snapshot e caminho que ainda não existe: livres.
-        assert!(check_nested_destination(&base, Path::new("var/lib/stub")).is_ok());
-        assert!(check_nested_destination(&base, Path::new("data/novo")).is_ok());
-        // Diretório com conteúdo, arquivo no caminho e symlink no caminho: recusados.
-        assert!(check_nested_destination(&base, Path::new("var/lib/cheio")).is_err());
+        assert_eq!(check_nested_destination(&base, Path::new("var/lib/stub")).unwrap(), None);
+        assert_eq!(check_nested_destination(&base, Path::new("data/novo")).unwrap(), None);
+        // Ocupado no ponto final (diretório com conteúdo, arquivo): pôr de lado.
+        assert_eq!(
+            check_nested_destination(&base, Path::new("var/lib/cheio")).unwrap(),
+            Some(base.join("var/lib/cheio.snapg-displaced"))
+        );
+        assert_eq!(
+            check_nested_destination(&base, Path::new("var/arquivo")).unwrap(),
+            Some(base.join("var/arquivo.snapg-displaced"))
+        );
+        // Ancestral que não é diretório (arquivo, symlink): recusado.
         assert!(check_nested_destination(&base, Path::new("var/arquivo/sub")).is_err());
         assert!(check_nested_destination(&base, Path::new("link/etc")).is_err());
+        // O lugar do "de lado" já está tomado: recusado.
+        std::fs::create_dir(base.join("var/lib/cheio.snapg-displaced")).unwrap();
+        assert!(check_nested_destination(&base, Path::new("var/lib/cheio")).is_err());
 
         let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
-    fn move_nested_is_all_or_nothing() {
+    fn move_nested_displaces_occupants_and_is_all_or_nothing() {
         let base = temp_base("move_nested");
         let (from, to) = (base.join("from"), base.join("to"));
         std::fs::create_dir_all(from.join("a/um")).unwrap();
@@ -809,12 +883,23 @@ mod tests {
         assert!(to.join("a/um").exists() && to.join("b/dois").exists());
         assert!(!from.join("a/um").exists() && !from.join("b/dois").exists());
 
-        // De volta, com o segundo destino ocupado: o primeiro retorna à origem.
+        // De volta, com o segundo destino recriado e ocupado: o ocupante é
+        // posto de lado e o move acontece.
         std::fs::create_dir_all(from.join("b/dois")).unwrap();
-        std::fs::write(from.join("b/dois/ocupado"), "x").unwrap();
-        assert!(move_nested(&to, &from, &nested).is_err());
-        assert!(to.join("a/um").exists() && to.join("b/dois").exists());
-        assert!(!from.join("a/um").exists());
+        std::fs::write(from.join("b/dois/recriado"), "x").unwrap();
+        move_nested(&to, &from, &nested).unwrap();
+        assert!(from.join("a/um").exists() && from.join("b/dois").exists());
+        assert!(!from.join("b/dois/recriado").exists());
+        assert!(from.join("b/dois.snapg-displaced/recriado").exists());
+
+        // Segundo move impossível (ocupado e o "de lado" também): o primeiro
+        // volta para a origem.
+        std::fs::create_dir_all(to.join("b/dois")).unwrap();
+        std::fs::write(to.join("b/dois/ocupado"), "x").unwrap();
+        std::fs::create_dir_all(to.join("b/dois.snapg-displaced")).unwrap();
+        assert!(move_nested(&from, &to, &nested).is_err());
+        assert!(from.join("a/um").exists() && from.join("b/dois").exists());
+        assert!(!to.join("a/um").exists());
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -879,10 +964,18 @@ mod tests {
         assert!(!top.join("@/marker").exists());
         assert_bare(&regret);
 
-        // Desfazer antes do reboot: o antigo volta com os aninhados.
+        // Enquanto pendente, o sistema vivo (o regret) recria um dos caminhos
+        // como diretório comum, e o tmpfiles recria outro como subvolume vazio.
+        std::fs::create_dir_all(top.join(&regret).join("var/lib/machines")).unwrap();
+        std::fs::write(top.join(&regret).join("var/lib/machines/recriado"), "x").unwrap();
+
+        // Desfazer antes do reboot: o antigo volta com os aninhados, e o que
+        // foi recriado fica de lado em vez de travar o cancelamento.
         revert_partial(std::slice::from_ref(&done), &top).unwrap();
         assert_active_has_nested();
         assert!(top.join("@/marker").exists());
+        assert!(top.join("@/var/lib/machines.snapg-displaced/recriado").exists());
+        std::fs::remove_dir_all(top.join("@/var/lib/machines.snapg-displaced")).unwrap();
         assert!(!top.join(&regret).exists());
         assert!(!top.join("@.snapgroup_discard").exists());
 
@@ -906,7 +999,15 @@ mod tests {
         assert!(!top.join(&undo).exists());
         assert_bare(&regret);
 
-        // O defeito original: o Regret precisa continuar deletável.
-        btrfs::delete_subvolume(&top.join(&regret)).unwrap();
+        // O Regret precisa continuar deletável, mesmo com um subvolume vazio
+        // recriado dentro dele; um aninhado com dados é recusado, não apagado.
+        btrfs_cmd(&["subvolume", "create", &format!("{regret}/vazio")]);
+        btrfs_cmd(&["subvolume", "create", &format!("{regret}/cheio")]);
+        std::fs::write(top.join(&regret).join("cheio/dado"), "x").unwrap();
+        assert!(btrfs::delete_subvolume_tree(&top, &regret).is_err());
+        assert!(top.join(&regret).join("cheio/dado").exists());
+        std::fs::remove_file(top.join(&regret).join("cheio/dado")).unwrap();
+        btrfs::delete_subvolume_tree(&top, &regret).unwrap();
+        assert!(!top.join(&regret).exists());
     }
 }

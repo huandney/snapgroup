@@ -153,6 +153,34 @@ pub fn delete_subvolume(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Deleta `subvol` (nome relativo ao top-level) junto com subvolumes aninhados
+/// VAZIOS dentro dele. Um backup (regret/undo/discard) é a raiz viva até o
+/// reboot, e o systemd-tmpfiles recria `/var/lib/machines` e `portables` como
+/// subvolumes ali depois de os originais terem sido levados para o novo
+/// ativo; o btrfs então recusa deletar o pai ("Directory not empty").
+/// Aninhado com conteúdo não é apagado: pode ser dado que ficou para trás —
+/// o erro nomeia o caminho e a decisão fica com o usuário.
+pub fn delete_subvolume_tree(toplevel: &Path, subvol: &str) -> Result<()> {
+    for child in nested_subvolumes(toplevel, subvol)? {
+        let child_rel = format!("{subvol}/{}", child.display());
+        let child_path = toplevel.join(&child_rel);
+        let has_content = fs::read_dir(&child_path)
+            .with_context(|| format!("ler {}", child_path.display()))?
+            .next()
+            .is_some();
+        if has_content {
+            bail!(
+                "{} contém o subvolume {} com dados; mova-o ou apague-o \
+                 (sudo btrfs subvolume delete) antes de repetir",
+                subvol,
+                child_path.display()
+            );
+        }
+        delete_subvolume(&child_path)?;
+    }
+    delete_subvolume(&toplevel.join(subvol))
+}
+
 /// Retorna o path top-level-relativo de um subvolume dado qualquer caminho dentro dele.
 /// Ex: "/home" -> "@home"; "/home/.snapshots/22/snapshot" -> "@home_snapshots/22/snapshot".
 /// A primeira linha de `btrfs subvolume show` é exatamente essa string.
