@@ -6,6 +6,7 @@ mod config;
 mod doctor;
 mod group;
 mod lock;
+mod orphan;
 mod proc;
 mod rename;
 mod rollback;

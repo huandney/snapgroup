@@ -161,24 +161,34 @@ pub fn delete_subvolume(path: &Path) -> Result<()> {
 /// Aninhado com conteúdo não é apagado: pode ser dado que ficou para trás —
 /// o erro nomeia o caminho e a decisão fica com o usuário.
 pub fn delete_subvolume_tree(toplevel: &Path, subvol: &str) -> Result<()> {
+    // Checa todos antes de apagar qualquer um: nada some pela metade.
+    if let Some(child_path) = nested_with_data(toplevel, subvol)? {
+        bail!(
+            "{} contém o subvolume {} com dados; mova-o ou apague-o \
+             (sudo btrfs subvolume delete) antes de repetir",
+            subvol,
+            child_path.display()
+        );
+    }
     for child in nested_subvolumes(toplevel, subvol)? {
-        let child_rel = format!("{subvol}/{}", child.display());
-        let child_path = toplevel.join(&child_rel);
+        delete_subvolume(&toplevel.join(subvol).join(child))?;
+    }
+    delete_subvolume(&toplevel.join(subvol))
+}
+
+/// Primeiro subvolume aninhado em `subvol` que não está vazio, se houver.
+pub fn nested_with_data(toplevel: &Path, subvol: &str) -> Result<Option<std::path::PathBuf>> {
+    for child in nested_subvolumes(toplevel, subvol)? {
+        let child_path = toplevel.join(subvol).join(child);
         let has_content = fs::read_dir(&child_path)
             .with_context(|| format!("ler {}", child_path.display()))?
             .next()
             .is_some();
         if has_content {
-            bail!(
-                "{} contém o subvolume {} com dados; mova-o ou apague-o \
-                 (sudo btrfs subvolume delete) antes de repetir",
-                subvol,
-                child_path.display()
-            );
+            return Ok(Some(child_path));
         }
-        delete_subvolume(&child_path)?;
     }
-    delete_subvolume(&toplevel.join(subvol))
+    Ok(None)
 }
 
 /// Retorna o path top-level-relativo de um subvolume dado qualquer caminho dentro dele.
