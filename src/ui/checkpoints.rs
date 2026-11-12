@@ -277,8 +277,9 @@ fn group_card(group: &Group, kernel: &str) -> ReviewCard {
 
 fn print_review_card(card: &ReviewCard) {
     let title = truncate_chars(&card.title, content_width().min(80));
+    let detail = truncate_chars(&card.detail, content_width().saturating_sub(3));
     println!("{CONTENT_INDENT}{title}");
-    println!("{}{}", CONTENT_INDENT, style(format!("└─ {}", card.detail)).dim());
+    println!("{}{}", CONTENT_INDENT, style(format!("└─ {detail}")).dim());
 }
 
 fn truncate_chars(value: &str, maximum: usize) -> String {

@@ -96,6 +96,12 @@ pub struct Freed {
     pub metadata: u64,
 }
 
+impl Freed {
+    pub fn total(self) -> u64 {
+        self.data + self.metadata
+    }
+}
+
 impl SpaceMap {
     /// Bytes que saem do disco se todos os `tree_ids` forem apagados. Ids
     /// desconhecidos são ignorados.

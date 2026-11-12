@@ -11,14 +11,28 @@ use std::process::Command;
 
 const BACKUP_INFIX: &str = "_backup_";
 
-/// Backups do mesmo restore (mesmo label) em uma ou mais bases.
+/// Backups criados juntos (o mesmo restore) em uma ou mais bases.
 pub struct OrphanBackup {
+    /// Rótulo do primeiro subvolume (o texto depois de `_backup_`).
     pub label: String,
-    /// Nomes no top-level, na ordem das bases.
+    /// Nomes no top-level, do mais antigo ao mais novo.
     pub subvols: Vec<String>,
+    /// Bases presentes, sem repetição, em ordem alfabética.
     pub bases: Vec<String>,
-    /// `Creation time` do btrfs do primeiro membro (ex: "2026-04-30 17:32:41 -0400").
+    /// Instante do backup do primeiro membro, hora local (ex: "2026-04-30 17:32:41").
     pub created: String,
+}
+
+/// Um restore cria um backup por subvolume, com segundos de diferença (o do
+/// Limine grava cada um com o próprio instante). Até este intervalo, é o mesmo.
+const SAME_RESTORE_SECS: i64 = 60;
+
+struct Candidate {
+    base: String,
+    name: String,
+    label: String,
+    created: String,
+    epoch: Option<i64>,
 }
 
 /// Órfãos das `bases` (subvols das configs do Snapper) sob o top-level montado
@@ -30,33 +44,24 @@ pub fn find(toplevel: &Path, bases: &[String]) -> Result<Vec<OrphanBackup>> {
     let mounted = mounted_btrfs_roots()?;
     let refs = bootloader_references(Path::new("/boot"));
 
-    let mut found = Vec::new();
-    for (label, members) in group_candidates(&entries, bases) {
-        let mut subvols = Vec::new();
-        let mut kept_bases = Vec::new();
-        for (base, name) in members {
-            if is_protected(&name, default.as_deref(), &mounted, &refs)
-                || !btrfs::is_subvolume(&toplevel.join(&name))
-                || btrfs::nested_with_data(toplevel, &name)?.is_some()
-            {
-                continue;
-            }
-            subvols.push(name);
-            kept_bases.push(base);
-        }
-        let Some(first) = subvols.first() else {
+    let mut kept = Vec::new();
+    for (base, name, label) in candidates(&entries, bases) {
+        if is_protected(&name, default.as_deref(), &mounted, &refs)
+            || !btrfs::is_subvolume(&toplevel.join(&name))
+            || btrfs::nested_with_data(toplevel, &name)?.is_some()
+        {
             continue;
-        };
-        let created = btrfs::subvol_creation_time(&toplevel.join(first)).unwrap_or_default();
-        found.push(OrphanBackup {
-            label,
-            subvols,
-            bases: kept_bases,
-            created,
+        }
+        // O backup é o subvolume antigo renomeado: a data de criação do btrfs é
+        // a de quando ele nasceu, não a do backup. O nome guarda o instante real.
+        let epoch = label_epoch(&label).or_else(|| {
+            let created = btrfs::subvol_creation_time(&toplevel.join(&name)).ok()?;
+            creation_epoch(&created)
         });
+        let created = epoch.map(local_datetime).unwrap_or_default();
+        kept.push(Candidate { base, name, label, created, epoch });
     }
-    found.sort_by(|a, b| a.created.cmp(&b.created));
-    Ok(found)
+    Ok(group_by_time(kept, bases))
 }
 
 fn toplevel_entries(toplevel: &Path) -> Result<Vec<String>> {
@@ -69,27 +74,148 @@ fn toplevel_entries(toplevel: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Agrupa `<base>_backup_<label>` por label, membros na ordem de `bases`.
-/// Prefixo exato: `@home_backup_x` não casa com a base `@`.
-fn group_candidates(entries: &[String], bases: &[String]) -> Vec<(String, Vec<(String, String)>)> {
-    let mut groups: Vec<(String, Vec<(String, String)>)> = Vec::new();
+/// `(base, nome, rótulo)` de cada `<base>_backup_<rótulo>`. Prefixo exato:
+/// `@home_backup_x` não casa com a base `@`.
+fn candidates(entries: &[String], bases: &[String]) -> Vec<(String, String, String)> {
+    let mut found = Vec::new();
     for base in bases {
         let prefix = format!("{base}{BACKUP_INFIX}");
-        let mut names: Vec<&String> = entries.iter().filter(|e| e.starts_with(&prefix)).collect();
-        names.sort();
-        for name in names {
+        for name in entries.iter().filter(|e| e.starts_with(&prefix)) {
             let label = &name[prefix.len()..];
-            if label.is_empty() {
-                continue;
-            }
-            let member = (base.clone(), name.clone());
-            match groups.iter_mut().find(|(l, _)| l == label) {
-                Some((_, members)) => members.push(member),
-                None => groups.push((label.to_string(), vec![member])),
+            if !label.is_empty() {
+                found.push((base.clone(), name.clone(), label.to_string()));
             }
         }
     }
+    found
+}
+
+/// Junta em uma linha os backups criados a até `SAME_RESTORE_SECS` do anterior,
+/// mais antigo primeiro. Sem data legível, o backup fica sozinho, no fim.
+fn group_by_time(mut items: Vec<Candidate>, bases: &[String]) -> Vec<OrphanBackup> {
+    items.sort_by(|a, b| a.epoch.cmp(&b.epoch).then_with(|| a.name.cmp(&b.name)));
+    items.sort_by_key(|c| c.epoch.is_none());
+    let mut groups: Vec<(Option<i64>, Vec<Candidate>)> = Vec::new();
+    for item in items {
+        let joins = match (groups.last(), item.epoch) {
+            (Some((Some(last), _)), Some(epoch)) => epoch - last <= SAME_RESTORE_SECS,
+            _ => false,
+        };
+        if joins {
+            let (last, members) = groups.last_mut().expect("grupo existe");
+            *last = item.epoch;
+            members.push(item);
+            continue;
+        }
+        groups.push((item.epoch, vec![item]));
+    }
     groups
+        .into_iter()
+        .map(|(_, members)| {
+            // Ordem alfabética põe `@` (o root) antes de `@home` e `@root`.
+            let mut present: Vec<String> = bases
+                .iter()
+                .filter(|b| members.iter().any(|m| &m.base == *b))
+                .cloned()
+                .collect();
+            present.sort();
+            OrphanBackup {
+                label: members[0].label.clone(),
+                created: members[0].created.clone(),
+                subvols: members.into_iter().map(|m| m.name).collect(),
+                bases: present,
+            }
+        })
+        .collect()
+}
+
+/// Instante gravado no rótulo: ISO em UTC (`2026-11-08T03:03:12.448Z`, do
+/// limine-snapper-restore) ou hora local (`2026-04-26_20:58:44`).
+fn label_epoch(label: &str) -> Option<i64> {
+    if let Some(utc) = label.strip_suffix('Z') {
+        let (date, time) = utc.split_once('T')?;
+        let time = time.split('.').next()?;
+        let (y, m, d) = parse_date(date)?;
+        let (hh, mm, ss) = parse_time(time)?;
+        return Some(days_from_civil(y, m, d) * 86_400 + hh * 3600 + mm * 60 + ss);
+    }
+    let (date, time) = label.split_once('_')?;
+    let (y, m, d) = parse_date(date)?;
+    let (hh, mm, ss) = parse_time(time)?;
+    local_epoch(y, m, d, hh, mm, ss)
+}
+
+fn parse_date(date: &str) -> Option<(i64, i64, i64)> {
+    let mut d = date.split('-').map(|v| v.parse::<i64>().ok());
+    let parsed = (d.next()??, d.next()??, d.next()??);
+    d.next().is_none().then_some(parsed)
+}
+
+fn parse_time(time: &str) -> Option<(i64, i64, i64)> {
+    let mut t = time.split(':').map(|v| v.parse::<i64>().ok());
+    let parsed = (t.next()??, t.next()??, t.next()??);
+    t.next().is_none().then_some(parsed)
+}
+
+/// Hora local em epoch, pelo fuso do sistema (`mktime`).
+fn local_epoch(y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64) -> Option<i64> {
+    // SAFETY: tm é POD; zerado e preenchido campo a campo.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = (y - 1900) as i32;
+    tm.tm_mon = (m - 1) as i32;
+    tm.tm_mday = d as i32;
+    tm.tm_hour = hh as i32;
+    tm.tm_min = mm as i32;
+    tm.tm_sec = ss as i32;
+    tm.tm_isdst = -1;
+    // SAFETY: tm válido; mktime só lê e normaliza.
+    let epoch = unsafe { libc::mktime(&mut tm) };
+    (epoch != -1).then_some(epoch)
+}
+
+/// Epoch como `YYYY-MM-DD HH:MM:SS` na hora local.
+fn local_datetime(epoch: i64) -> String {
+    // SAFETY: localtime_r preenche tm; zerado antes por segurança.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let time: libc::time_t = epoch;
+    // SAFETY: ponteiros válidos durante a chamada.
+    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() {
+        return String::new();
+    }
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
+}
+
+/// `2026-04-30 17:32:41 -0400` (formato do `btrfs subvolume show`) em epoch.
+fn creation_epoch(created: &str) -> Option<i64> {
+    let mut parts = created.split_whitespace();
+    let (date, time, zone) = (parts.next()?, parts.next()?, parts.next()?);
+    let (y, m, day) = parse_date(date)?;
+    let (hh, mm, ss) = parse_time(time)?;
+    if zone.len() != 5 {
+        return None;
+    }
+    let sign = if zone.starts_with('-') { -1 } else { 1 };
+    let offset = sign * (zone[1..3].parse::<i64>().ok()? * 3600 + zone[3..5].parse::<i64>().ok()? * 60);
+    Some(days_from_civil(y, m, day) * 86_400 + hh * 3600 + mm * 60 + ss - offset)
+}
+
+/// Dias desde 1970-01-01 no calendário gregoriano (algoritmo de H. Hinnant).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 fn is_protected(name: &str, default: Option<&str>, mounted: &HashSet<String>, refs: &str) -> bool {
@@ -169,48 +295,83 @@ fn bootloader_references(boot: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_candidates, is_protected, parse_default_subvol, parse_mounted_btrfs_roots};
+    use super::{
+        candidates, creation_epoch, group_by_time, is_protected, label_epoch, parse_default_subvol,
+        parse_mounted_btrfs_roots,
+    };
     use std::collections::HashSet;
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| v.to_string()).collect()
     }
 
+    fn candidate(base: &str, name: &str, epoch: Option<i64>) -> super::Candidate {
+        super::Candidate {
+            base: base.to_string(),
+            name: name.to_string(),
+            label: name.split("_backup_").nth(1).unwrap().to_string(),
+            created: String::new(),
+            epoch,
+        }
+    }
+
     #[test]
-    fn groups_backups_by_label_in_base_order() {
+    fn candidates_need_an_exact_base_prefix_and_a_label() {
         let entries = strings(&[
             "@",
-            "@home",
             "@home_backup_2026-04-26_20:58:44",
-            "@_backup_2026-04-26_20:58:44",
-            "@root_backup_2026-04-26_20:58:44",
             "@_backup_2026-11-08T03:03:06.978Z",
-            "@home_backup_2026-11-08T03:03:12.448Z",
             "@_snapg_regret",
             "@srv_backup_2026-01-01_00:00:00",
             "@_backup_",
         ]);
-        let bases = strings(&["@", "@home", "@root"]);
-        let groups = group_candidates(&entries, &bases);
-        let labels: Vec<&str> = groups.iter().map(|(l, _)| l.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec![
-                "2026-04-26_20:58:44",
-                "2026-11-08T03:03:06.978Z",
-                "2026-11-08T03:03:12.448Z",
-            ]
-        );
-        let first: Vec<&str> = groups[0].1.iter().map(|(b, _)| b.as_str()).collect();
-        assert_eq!(first, vec!["@", "@home", "@root"]);
-        assert_eq!(groups[0].1[1].1, "@home_backup_2026-04-26_20:58:44");
+        let found = candidates(&entries, &strings(&["@", "@home"]));
+        let names: Vec<&str> = found.iter().map(|(_, n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["@_backup_2026-11-08T03:03:06.978Z", "@home_backup_2026-04-26_20:58:44"]);
+        assert!(candidates(&strings(&["@home_backup_x"]), &strings(&["@"])).is_empty());
     }
 
     #[test]
-    fn base_prefix_is_exact() {
-        let entries = strings(&["@home_backup_x"]);
-        assert!(group_candidates(&entries, &strings(&["@"])).is_empty());
-        assert_eq!(group_candidates(&entries, &strings(&["@home"])).len(), 1);
+    fn backups_of_the_same_restore_share_a_row() {
+        let bases = strings(&["@", "@home", "@root"]);
+        let items = vec![
+            candidate("@home", "@home_backup_b", Some(1006)),
+            candidate("@", "@_backup_a", Some(1000)),
+            candidate("@root", "@root_backup_c", Some(1050)),
+            candidate("@", "@_backup_later", Some(1200)),
+            candidate("@", "@_backup_undated", None),
+        ];
+        let groups = group_by_time(items, &bases);
+        let rows: Vec<(Vec<String>, Vec<String>)> =
+            groups.iter().map(|g| (g.subvols.clone(), g.bases.clone())).collect();
+        assert_eq!(
+            rows,
+            vec![
+                (strings(&["@_backup_a", "@home_backup_b", "@root_backup_c"]), bases.clone()),
+                (strings(&["@_backup_later"]), strings(&["@"])),
+                (strings(&["@_backup_undated"]), strings(&["@"])),
+            ]
+        );
+        assert_eq!(groups[0].label, "a");
+    }
+
+    #[test]
+    fn label_time_reads_both_formats() {
+        assert_eq!(label_epoch("2026-04-30T21:32:41.795Z"), Some(1_777_584_761));
+        assert_eq!(label_epoch("1970-01-01T00:00:00Z"), Some(0));
+        assert!(label_epoch("2026-04-26_20:58:44").is_some());
+        assert_eq!(label_epoch("x"), None);
+        assert_eq!(label_epoch("2026-04-26_20:58"), None);
+        assert_eq!(label_epoch("antes-do-update"), None);
+    }
+
+    #[test]
+    fn creation_time_parses_to_utc_epoch() {
+        assert_eq!(creation_epoch("1970-01-01 00:00:00 +0000"), Some(0));
+        assert_eq!(creation_epoch("2026-04-30 17:32:41 -0400"), Some(1_777_584_761));
+        assert_eq!(creation_epoch("2026-04-30 21:32:41 +0000"), Some(1_777_584_761));
+        assert_eq!(creation_epoch(""), None);
+        assert_eq!(creation_epoch("2026-04-30 17:32:41"), None);
     }
 
     #[test]
@@ -272,16 +433,10 @@ mod tests {
 
         let found = super::find(&top, &strings(&["@", "@home"])).unwrap();
         run("umount", &[mnt.to_str().unwrap()]);
-        let mut labels: Vec<(String, Vec<String>)> =
-            found.iter().map(|o| (o.label.clone(), o.subvols.clone())).collect();
-        labels.sort();
-        assert_eq!(
-            labels,
-            vec![
-                ("a".to_string(), strings(&["@_backup_a", "@home_backup_a"])),
-                ("e".to_string(), strings(&["@_backup_e"])),
-            ]
-        );
+        // Criados no mesmo segundo: uma linha só, como os de um restore.
+        let mut offered: Vec<String> = found.iter().flat_map(|o| o.subvols.clone()).collect();
+        offered.sort();
+        assert_eq!(offered, strings(&["@_backup_a", "@_backup_e", "@home_backup_a"]));
         assert!(found.iter().all(|o| !o.created.is_empty()));
 
         crate::btrfs::delete_subvolume_tree(&top, "@_backup_e").unwrap();

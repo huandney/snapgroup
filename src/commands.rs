@@ -11,10 +11,11 @@ use crate::ui::restore::{
     Fat32BootAction, PendingAction, PendingPromptInfo, PendingSyncAction, PostRestoreAction,
     RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
-use crate::ui::snapshots::{self, DeletePlan};
+use crate::ui::delete::{self as delete_ui, DeleteContext, Estimate};
+use crate::ui::snapshots;
 use crate::ui::term::{clear_screen, confirm, header};
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1357,7 +1358,7 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-    let result = delete_interactive(&configs, &groups, &mount_path, purge);
+    let result = delete_interactive(&configs, &groups, &mount_path, purge, cfg.trash_prune_days);
     let _ = btrfs::umount_toplevel(&mount_path);
     result
 }
@@ -1369,6 +1370,7 @@ fn delete_interactive(
     groups: &[Group],
     mount_path: &Path,
     purge: bool,
+    trash_days: u64,
 ) -> Result<()> {
     let kernel_labels = group::kernel_labels(groups, mount_path);
     // Falha ao listar órfãos não pode bloquear o delete de checkpoints.
@@ -1383,21 +1385,154 @@ fn delete_interactive(
         return Ok(());
     }
 
+    // A leitura dos metadados (alguns segundos) roda enquanto a lista já está
+    // na tela; a estimativa aparece quando ela termina.
+    let mut space = SpaceEstimator::start(groups, &orphans, mount_path, purge);
+    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, purge, trash_days };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
-    let Some(plan) = snapshots::select_delete_plan(groups, &kernel_labels, &orphans, purge)? else {
+    let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
         snapshots::print_delete_cancelled();
         return Ok(());
     };
-    match plan {
-        DeletePlan::Groups(indices) => {
-            let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-            apply_delete(&targets, purge)
+    let chosen_groups: BTreeSet<usize> = plan.groups.iter().copied().collect();
+    let chosen_orphans: BTreeSet<usize> = plan.orphans.iter().copied().collect();
+    let predicted = match space.estimate(&chosen_groups, &chosen_orphans) {
+        Estimate::Ready { now, .. } => Some(now),
+        _ => None,
+    };
+
+    let free_before = free_bytes(Path::new("/"));
+    let targets: Vec<&OrphanBackup> = plan.orphans.iter().map(|&i| &orphans[i]).collect();
+    let orphan_result = delete_orphans(&targets, mount_path);
+    let groups_chosen: Vec<&Group> = plan.groups.iter().map(|&i| &groups[i]).collect();
+    let group_result = if groups_chosen.is_empty() { Ok(()) } else { apply_delete(&groups_chosen, purge) };
+
+    // Só o que foi apagado de vez libera espaço agora; a lixeira, no purge.
+    if !targets.is_empty() || (purge && !groups_chosen.is_empty()) {
+        report_freed(mount_path, free_before, predicted);
+    }
+    orphan_result.and(group_result)
+}
+
+/// Espera o btrfs terminar de liberar os blocos (o delete de subvolume é
+/// assíncrono) e mostra o espaço livre antes e depois.
+fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<u64>) {
+    let pb = crate::ui::term::spinner("aguardando o btrfs liberar o espaço…".to_string());
+    let synced = std::process::Command::new("btrfs")
+        .args(["subvolume", "sync"])
+        .arg(toplevel)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    pb.finish_and_clear();
+    let (Some(before), Some(after)) = (free_before, free_bytes(Path::new("/"))) else {
+        return;
+    };
+    snapshots::print_space_freed(before, after, predicted, synced);
+}
+
+/// Espaço livre para o usuário em `path` (statvfs), se legível.
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: caminho C válido e statvfs preenchido quando devolve 0.
+    if unsafe { libc::statvfs(c_path.as_ptr(), st.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: inicializado acima.
+    let st = unsafe { st.assume_init() };
+    Some(st.f_bavail * st.f_frsize)
+}
+
+/// Estimativa da tela de delete: lê os metadados numa thread e, quando pronta,
+/// responde qualquer seleção somando o que só ela possui.
+struct SpaceEstimator {
+    scan: Option<std::thread::JoinHandle<Result<space::SpaceMap>>>,
+    map: Option<std::result::Result<space::SpaceMap, String>>,
+    group_ids: SubvolIds,
+    orphan_ids: SubvolIds,
+    purge: bool,
+}
+
+impl SpaceEstimator {
+    fn start(groups: &[Group], orphans: &[OrphanBackup], toplevel: &Path, purge: bool) -> Self {
+        let ids = subvol_ids(groups, orphans, toplevel);
+        let (group_ids, orphan_ids, map, scan) = match ids {
+            Ok((g, o)) => {
+                let scan = btrfs::fs_device("/").map(|device| {
+                    std::thread::spawn(move || space::scan(Path::new(&device)))
+                });
+                match scan {
+                    Ok(handle) => (g, o, None, Some(handle)),
+                    Err(e) => (g, o, Some(Err(format!("{e:#}"))), None),
+                }
+            }
+            Err(e) => (Vec::new(), Vec::new(), Some(Err(format!("{e:#}"))), None),
+        };
+        Self { scan, map, group_ids, orphan_ids, purge }
+    }
+
+    fn estimate(&mut self, groups: &BTreeSet<usize>, orphans: &BTreeSet<usize>) -> Estimate {
+        if self.scan.as_ref().is_some_and(|h| h.is_finished()) {
+            let handle = self.scan.take().expect("scan existe");
+            self.map = Some(match handle.join() {
+                Ok(Ok(map)) => Ok(map),
+                Ok(Err(e)) => Err(format!("{e:#}")),
+                Err(_) => Err("leitura dos metadados falhou".to_string()),
+            });
         }
-        DeletePlan::Orphans(indices) => {
-            let targets: Vec<&OrphanBackup> = indices.iter().map(|&i| &orphans[i]).collect();
-            delete_orphans(&targets, mount_path)
+        let map = match &self.map {
+            None => return Estimate::Pending,
+            Some(Err(reason)) => return Estimate::Unavailable(reason.clone()),
+            Some(Ok(map)) => map,
+        };
+        let mut now_ids: Vec<u64> = orphans.iter().flat_map(|&i| self.orphan_ids[i].iter().copied()).collect();
+        let group_ids = groups.iter().flat_map(|&i| self.group_ids[i].iter().copied());
+        if self.purge {
+            now_ids.extend(group_ids);
+            let now = map.freed(&now_ids).total();
+            return Estimate::Ready { now, later: 0, scanned: map.stats.data_bytes + map.stats.metadata_bytes };
+        }
+        let mut all_ids = now_ids.clone();
+        all_ids.extend(group_ids);
+        let now = map.freed(&now_ids).total();
+        let all = map.freed(&all_ids).total();
+        Estimate::Ready {
+            now,
+            later: all.saturating_sub(now),
+            scanned: map.stats.data_bytes + map.stats.metadata_bytes,
         }
     }
+}
+
+/// Por item da tela, os tree ids dos seus subvolumes.
+type SubvolIds = Vec<Vec<u64>>;
+
+/// Tree id de cada membro de checkpoint e de cada subvolume órfão.
+fn subvol_ids(
+    groups: &[Group],
+    orphans: &[OrphanBackup],
+    toplevel: &Path,
+) -> Result<(SubvolIds, SubvolIds)> {
+    let mut group_ids = Vec::new();
+    for g in groups {
+        let mut ids = Vec::new();
+        for m in &g.members {
+            ids.push(btrfs::subvol_id(&rollback::member_snapshot_path(m, toplevel)?)?);
+        }
+        group_ids.push(ids);
+    }
+    let mut orphan_ids = Vec::new();
+    for o in orphans {
+        let mut ids = Vec::new();
+        for name in &o.subvols {
+            ids.push(btrfs::subvol_id(&toplevel.join(name))?);
+        }
+        orphan_ids.push(ids);
+    }
+    Ok((group_ids, orphan_ids))
 }
 
 fn config_base_subvols(configs: &[String]) -> Result<Vec<String>> {
