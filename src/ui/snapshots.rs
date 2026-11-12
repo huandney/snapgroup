@@ -20,6 +20,7 @@ pub(crate) fn prompt_save_name(
     mountpoints: &mut [String],
     kernel: &str,
     placeholder: &str,
+    keep_groups: usize,
 ) -> Result<Option<String>> {
     let _alt = AltScreen::enter();
     let badges = member_badges(mountpoints);
@@ -29,6 +30,17 @@ pub(crate) fn prompt_save_name(
         header("Salvar checkpoint");
         line(format_args!("{:<9} {}", "membros", badges));
         line(format_args!("{:<9} {}", "kernel", kernel));
+        // Sem retenção (KEEP_GROUPS=0) a diferença não muda nada: sem aviso.
+        if keep_groups > 0 {
+            line(format_args!(
+                "{:<9} {}",
+                "retenção",
+                style(format!(
+                    "nome padrão entra nos {keep_groups} automáticos mantidos · nome digitado fixa"
+                ))
+                .dim()
+            ));
+        }
         println!();
     })
 }

@@ -63,8 +63,14 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
     serde_json::from_value(arr).context("schema de snapshot inesperado")
 }
 
-pub fn create(config: &str, description: &str, group_id: i64) -> Result<u32> {
-    let userdata = format!("snapgroup-id={group_id}");
+/// Cria um membro de grupo. `auto` grava se o checkpoint saiu com o nome
+/// padrão: decide se ele entra na retenção (`KEEP_GROUPS`).
+pub fn create(config: &str, description: &str, group_id: i64, auto: bool) -> Result<u32> {
+    let userdata = format!(
+        "snapgroup-id={group_id},{}={}",
+        crate::group::AUTO_KEY,
+        u8::from(auto)
+    );
     create_with_userdata(config, description, &userdata)
 }
 
@@ -134,6 +140,16 @@ pub fn untrash(config: &str, number: u32, group_id: i64) -> Result<()> {
         config,
         number,
         &format!("snapgroup-id={group_id},snapgroup-trash=,snapgroup-trash-reason="),
+    )
+}
+
+/// Fixa um membro: tira-o da retenção. Re-afirma o id pelo mesmo motivo do
+/// `trash` (merge-vs-replace do `modify --userdata`).
+pub fn pin(config: &str, number: u32, group_id: i64) -> Result<()> {
+    modify_userdata(
+        config,
+        number,
+        &format!("snapgroup-id={group_id},{}=0", crate::group::AUTO_KEY),
     )
 }
 

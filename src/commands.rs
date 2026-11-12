@@ -67,15 +67,23 @@ pub fn save(description: Option<String>) -> Result<()> {
         Some(d) => d,
         None if crate::ui::term::stdout_is_tty() => {
             let kernel = boot::kernel_label(Path::new("/"));
-            let Some(d) = snapshots::prompt_save_name(&mut mountpoints, &kernel, &auto_name)?
+            let Some(d) = snapshots::prompt_save_name(
+                &mut mountpoints,
+                &kernel,
+                &auto_name,
+                cfg.keep_groups,
+            )?
             else {
                 snapshots::print_save_cancelled();
                 return Ok(());
             };
             d
         }
-        None => auto_name,
+        None => auto_name.clone(),
     };
+    // Aceitar o nome padrão (Enter, ou sem TTY) marca o checkpoint como
+    // automático: ele entra na retenção. Um nome escolhido o fixa.
+    let auto = desc == auto_name;
 
     // Preflight: aborta antes de tocar estado se alguma config vive em outro FS.
     rollback::ensure_single_filesystem(&configs)?;
@@ -88,7 +96,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // no restore como checkpoint e restauraria só parte do sistema.
     let mut created: Vec<(&String, u32)> = Vec::new();
     for cfg in &configs {
-        match snapper::create(cfg, &desc, id) {
+        match snapper::create(cfg, &desc, id, auto) {
             Ok(number) => created.push((cfg, number)),
             Err(e) => {
                 for (done_cfg, number) in created {
@@ -156,6 +164,7 @@ fn run_cleanup(cfg: &config::Config) {
 
 fn try_cleanup(keep: usize) -> Result<()> {
     let groups = group::list_groups()?; // visíveis, newest-first
+    // Só automáticos contam e saem; fixos ficam até um `delete`.
     let prune = group::groups_to_prune(&groups, keep);
     if prune.is_empty() {
         return Ok(());
@@ -1117,6 +1126,8 @@ fn regret_checkpoint_userdata(id: i64, origin_date: Option<&str>) -> String {
     let mut fields = vec![
         format!("snapgroup-id={id}"),
         "snapgroup-origin=regret".to_string(),
+        // Guardar o Regret é uma escolha explícita: o checkpoint nasce fixo.
+        format!("{}=0", group::AUTO_KEY),
     ];
     if let Some(date) = origin_date {
         fields.push(format!("snapgroup-origin-date={date}"));
