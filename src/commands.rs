@@ -100,7 +100,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, None, None))?;
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, None))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -132,6 +132,12 @@ pub fn save(description: Option<String>) -> Result<()> {
 /// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
 pub fn save_pacman() -> Result<()> {
     let cfg = config::load();
+    // O pacman lê a saída do hook por um pipe: as cores seguem as dele.
+    let cmdline = pacman::parent_cmdline();
+    if cmdline.as_deref().is_some_and(pacman::pacman_shows_color) {
+        console::set_colors_enabled(true);
+        console::set_colors_enabled_stderr(true);
+    }
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
@@ -152,27 +158,55 @@ pub fn save_pacman() -> Result<()> {
         return Ok(());
     }
 
+    // Uma execução do paru/makepkg faz várias transações: a primeira cria o
+    // checkpoint, as outras só contam nele. Restaurar desfaz a execução toda.
+    let helper = cmdline.as_ref().and(pacman::helper_above_parent());
+    if let Some(helper) = &helper
+        && let Some(covering) = covering_checkpoint(&helper.session)?
+    {
+        count_session_transaction(&covering);
+        crate::ui::pacman::print_hook_covered(&covering, &helper.name);
+        return Ok(());
+    }
+
     let mut mountpoints = Vec::new();
     for cfg in &configs {
         mountpoints.push(snapper::config_subvolume(cfg)?);
     }
     // Os pacotes vêm no stdin só quando o pacman chamou: rodado à mão (script,
     // ssh sem tty) um stdin que nunca fecha travaria aqui com o lock pego.
-    let cmdline = pacman::parent_cmdline();
     let targets = if cmdline.is_some() { pacman::read_targets() } else { Vec::new() };
-    let desc = pacman::checkpoint_name(cmdline.as_deref(), &targets);
-    let anchor = pacman_log::anchor_now();
+    let desc = pacman::checkpoint_name(cmdline.as_deref(), &targets, helper.as_ref());
+    let marks = snapper::PacmanMarks {
+        anchor: pacman_log::anchor_now(),
+        op: cmdline.as_deref().and_then(pacman::operation),
+        session: helper.as_ref().map(|h| h.session.as_str()),
+    };
 
     rollback::ensure_single_filesystem(&configs)?;
     let id = unique_group_id()?;
-    create_members(&configs, |cfg| {
-        snapper::create(cfg, &desc, id, true, anchor, Some(group::TRIGGER_PACMAN))
-    })?;
-    snapshots::print_save_created(id, &desc, &mut mountpoints);
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, true, Some(&marks)))?;
+    crate::ui::pacman::print_hook_saved(id, &desc, &mut mountpoints);
 
     purge_expired_trash(&cfg);
     run_cleanup(&cfg);
     Ok(())
+}
+
+/// O checkpoint do pacman mais novo, se ele for desta execução do ajudante.
+/// O pacman não roda duas transações ao mesmo tempo, então o mais novo basta.
+fn covering_checkpoint(session: &str) -> Result<Option<Group>> {
+    let newest = group::list_groups()?.into_iter().find(group::is_pacman);
+    Ok(newest.filter(|g| group::pacman_session(g) == Some(session)))
+}
+
+/// Best-effort: um membro que falha só deixa o `snapg log` mostrando menos
+/// transações da execução.
+fn count_session_transaction(group: &Group) {
+    let count = group::pacman_transactions(group) + 1;
+    for m in &group.members {
+        let _ = snapper::set_session_transactions(&m.config, m.snapshot.number, group.id, count);
+    }
 }
 
 /// `snapg pacman`: só leitura.

@@ -18,6 +18,12 @@ pub const TRIGGER_PACMAN: &str = "pacman";
 pub const PACMAN_LOG_KEY: &str = "snapgroup-pacman-log";
 /// Inode do `pacman.log` no save: um log trocado por outro não vale a posição.
 pub const PACMAN_LOG_INO_KEY: &str = "snapgroup-pacman-log-ino";
+/// Operação da primeira transação do checkpoint (`-Syu`, `-U`).
+pub const PACMAN_OP_KEY: &str = "snapgroup-pacman-op";
+/// Execução do ajudante (paru, makepkg) que o checkpoint cobre: `<pid>-<início>`.
+pub const SESSION_KEY: &str = "snapgroup-session";
+/// Quantas transações a execução já fez (sem a chave: 1).
+pub const SESSION_TX_KEY: &str = "snapgroup-session-tx";
 const DEFAULT_NAME_PREFIX: &str = "Checkpoint ";
 /// Nome padrão antes da 0.8.0: `snapg save <id>`.
 const LEGACY_DEFAULT_NAME_PREFIX: &str = "snapg save ";
@@ -148,6 +154,19 @@ pub fn pacman_log_anchor(group: &Group) -> Option<crate::pacman_log::Anchor> {
         offset: userdata_str(snapshot, PACMAN_LOG_KEY)?.parse().ok()?,
         ino: userdata_str(snapshot, PACMAN_LOG_INO_KEY).and_then(|v| v.parse().ok()),
     })
+}
+
+fn first_userdata<'a>(group: &'a Group, key: &str) -> Option<&'a str> {
+    userdata_str(&group.members.first()?.snapshot, key)
+}
+
+pub fn pacman_session(group: &Group) -> Option<&str> {
+    first_userdata(group, SESSION_KEY)
+}
+
+/// Transações que o checkpoint cobre: as de uma execução do paru, ou 1.
+pub fn pacman_transactions(group: &Group) -> usize {
+    first_userdata(group, SESSION_TX_KEY).and_then(|v| v.parse().ok()).unwrap_or(1)
 }
 
 /// Grupo criado pelo hook do pacman.

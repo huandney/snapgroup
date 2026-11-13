@@ -63,27 +63,45 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
     serde_json::from_value(arr).context("schema de snapshot inesperado")
 }
 
+/// O que só os checkpoints do hook do pacman gravam.
+pub struct PacmanMarks<'a> {
+    /// Onde a transação começa no `pacman.log`.
+    pub anchor: Option<crate::pacman_log::Anchor>,
+    /// Operação da primeira transação (`-Syu`, `-U`): diz a fonte dela, cuja
+    /// linha `Running` fica antes da âncora.
+    pub op: Option<&'a str>,
+    /// Execução do ajudante (paru, makepkg) que o checkpoint cobre.
+    pub session: Option<&'a str>,
+}
+
 /// Cria um membro de grupo. `auto` grava se o checkpoint saiu com o nome
-/// padrão: decide se ele entra na retenção. Só o hook do pacman passa a
-/// âncora no `pacman.log` (o `snapg log` acha a transação por ela) e o
-/// `trigger`, que o põe na fila própria de retenção.
+/// padrão: decide se ele entra na retenção. `pacman` marca o checkpoint do
+/// hook, que tem fila própria de retenção e é achado no `pacman.log`.
 pub fn create(
     config: &str,
     description: &str,
     group_id: i64,
     auto: bool,
-    anchor: Option<crate::pacman_log::Anchor>,
-    trigger: Option<&str>,
+    pacman: Option<&PacmanMarks>,
 ) -> Result<u32> {
-    use crate::group::{AUTO_KEY, PACMAN_LOG_INO_KEY, PACMAN_LOG_KEY, TRIGGER_KEY};
+    use crate::group::{
+        AUTO_KEY, PACMAN_LOG_INO_KEY, PACMAN_LOG_KEY, PACMAN_OP_KEY, SESSION_KEY, TRIGGER_KEY,
+        TRIGGER_PACMAN,
+    };
     let mut userdata = format!("snapgroup-id={group_id},{AUTO_KEY}={}", u8::from(auto));
-    if let Some(trigger) = trigger {
-        userdata.push_str(&format!(",{TRIGGER_KEY}={trigger}"));
-    }
-    if let Some(anchor) = anchor {
-        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={}", anchor.offset));
-        if let Some(ino) = anchor.ino {
-            userdata.push_str(&format!(",{PACMAN_LOG_INO_KEY}={ino}"));
+    if let Some(marks) = pacman {
+        userdata.push_str(&format!(",{TRIGGER_KEY}={TRIGGER_PACMAN}"));
+        if let Some(anchor) = marks.anchor {
+            userdata.push_str(&format!(",{PACMAN_LOG_KEY}={}", anchor.offset));
+            if let Some(ino) = anchor.ino {
+                userdata.push_str(&format!(",{PACMAN_LOG_INO_KEY}={ino}"));
+            }
+        }
+        if let Some(op) = marks.op {
+            userdata.push_str(&format!(",{PACMAN_OP_KEY}={op}"));
+        }
+        if let Some(session) = marks.session {
+            userdata.push_str(&format!(",{SESSION_KEY}={session}"));
         }
     }
     create_with_userdata(config, description, &userdata)
@@ -165,6 +183,16 @@ pub fn pin(config: &str, number: u32, group_id: i64) -> Result<()> {
         config,
         number,
         &format!("snapgroup-id={group_id},{}=0", crate::group::AUTO_KEY),
+    )
+}
+
+/// Mais uma transação da execução que o checkpoint cobre. Re-afirma o id pelo
+/// mesmo motivo do `trash`.
+pub fn set_session_transactions(config: &str, number: u32, group_id: i64, count: usize) -> Result<()> {
+    modify_userdata(
+        config,
+        number,
+        &format!("snapgroup-id={group_id},{}={count}", crate::group::SESSION_TX_KEY),
     )
 }
 

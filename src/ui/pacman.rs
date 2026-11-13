@@ -11,7 +11,7 @@ use crate::ui::checkpoints::picker_prompt;
 use crate::ui::snapshots::{count_text, member_badges};
 use crate::pacman_hooks::Status;
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, clear_screen, header, line, note, path,
+    AltScreen, SELECT_MARKER, THEME, app_header, clear_screen, header, line, note, path,
     picker_page_len, result, result_section, short_datetime, title, truncate_for_terminal, warn,
 };
 use anyhow::{Context, Result};
@@ -129,6 +129,29 @@ pub(crate) fn print_hook_switched(on: bool, status: &Status) {
     if !on && status.snap_pac.is_empty() {
         warn(format_args!("sem snap-pac, as transações do pacman ficam sem checkpoint"));
     }
+}
+
+/// Saída do hook na transação do pacman: a marca e a versão abrem o bloco,
+/// para o checkpoint se destacar entre as linhas dos outros hooks.
+pub(crate) fn print_hook_saved(id: i64, desc: &str, mountpoints: &mut [String]) {
+    app_header();
+    result_section("Salvo");
+    result(format_args!(
+        "{}   {}",
+        style(desc).bold(),
+        style(format!("{} · #{id}", member_badges(mountpoints))).dim()
+    ));
+}
+
+/// Transação seguinte da mesma execução do paru/makepkg: nada novo é salvo.
+pub(crate) fn print_hook_covered(group: &Group, helper: &str) {
+    app_header();
+    result_section("Salvo");
+    result(format_args!(
+        "{}   {}",
+        style(group::description(group)).bold(),
+        style(format!("#{} · já cobre esta execução do {helper}", group.id)).dim()
+    ));
 }
 
 /// Aviso do hook quando o snap-pac também está ligado.
