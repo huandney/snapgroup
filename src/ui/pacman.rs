@@ -176,7 +176,8 @@ fn show_transaction(group: &Group, transactions: Option<&[Transaction]>) -> Resu
     let title_text = if txs.len() > 1 { "Atualização" } else { "Transação do pacman" };
     let intro = || {
         header(title_text);
-        line(format_args!("{}", style(group::description(group)).bold()));
+        let name = crate::ui::term::ellipsize(group::description(group), crate::ui::term::content_width());
+        line(format_args!("{}", style(name).bold()));
         line(format_args!(
             "{}{}",
             style(format!("{} · checkpoint {} · ", short_datetime(group::date(group)), group.id)).dim(),

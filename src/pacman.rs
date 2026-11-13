@@ -180,7 +180,12 @@ fn helper_label(helper: &Helper) -> String {
         };
     }
     let argv: Vec<String> = std::iter::once(name.clone()).chain(helper.args.iter().cloned()).collect();
-    let packages: Vec<String> = helper.args.iter().filter(|arg| !arg.starts_with('-')).cloned().collect();
+    let packages: Vec<String> = helper
+        .args
+        .iter()
+        .filter(|arg| !arg.starts_with('-'))
+        .map(|arg| package_of_arg(arg))
+        .collect();
     match (operation(&argv), packages.is_empty()) {
         (Some("-Syu"), _) | (None, true) => format!("{name} -Syu"),
         (Some(op), true) => format!("{name} {op}"),
@@ -226,6 +231,21 @@ pub fn operation(args: &[String]) -> Option<&'static str> {
         'U' => Some("-U"),
         'R' => Some("-R"),
         _ => None,
+    }
+}
+
+/// `./x/snapgroup-0.12.0-1-x86_64.pkg.tar.zst` → `snapgroup`; um nome de
+/// pacote passa como está. O arquivo leva `<nome>-<versão>-<release>-<arch>`,
+/// e versão, release e arch não têm hífen.
+fn package_of_arg(arg: &str) -> String {
+    let file = arg.rsplit('/').next().unwrap_or(arg);
+    let Some((stem, _)) = file.split_once(".pkg.tar") else {
+        return file.to_string();
+    };
+    let mut parts = stem.rsplitn(4, '-');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(_arch), Some(_rel), Some(_ver), Some(name)) => name.to_string(),
+        _ => stem.to_string(),
     }
 }
 
@@ -311,6 +331,12 @@ mod tests {
         assert_eq!(named(helper("yay", "-Sua", None)), "Antes de yay -Syu");
         assert_eq!(named(helper("paru", "chrome", None)), "Antes de paru chrome");
         assert_eq!(named(helper("makepkg", "-si", Some("snapgroup"))), "Antes de makepkg -si (snapgroup)");
+        // Arquivo de pacote no argumento: só o nome do pacote.
+        assert_eq!(
+            named(helper("paru", "-U /tmp/out/linux-cachyos-headers-7.3.3-1-x86_64.pkg.tar.zst", None)),
+            "Antes de paru -U linux-cachyos-headers"
+        );
+        assert_eq!(named(helper("paru", "/tmp/out/snapgroup-0.12.0-1-x86_64.pkg.tar.zst", None)), "Antes de paru snapgroup");
     }
 
     #[test]
