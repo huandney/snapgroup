@@ -2,7 +2,7 @@ use crate::group::{self, Group, GroupId};
 use crate::orphan::OrphanBackup;
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, MIN_NAME_WITH_ORIGIN, NAME_HEADER, ORIGIN_HEADER, kernel_label,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, ORIGIN_HEADER, fit_name_and_origin, kernel_label,
     name_cell, origin_cell,
 };
 use crate::ui::term::{
@@ -267,12 +267,8 @@ pub(crate) fn print_groups(
         .max()
         .unwrap_or(MEMBERS_HEADER.len())
         .max(MEMBERS_HEADER.len());
-    let mut origin_col = columns.origin;
-    let mut name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col, origin_col));
-    if origin_col > 0 && name_col < columns.name.min(MIN_NAME_WITH_ORIGIN) {
-        origin_col = 0;
-        name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col, 0));
-    }
+    let (name_col, origin_col) =
+        fit_name_and_origin(columns.name, columns.origin, list_name_space(kernel_col, members_col));
     let origin_header = if origin_col > 0 {
         format!("{}   ", style(format!("{ORIGIN_HEADER:<origin_col$}")).bold())
     } else {
@@ -317,14 +313,12 @@ fn styled_origin(cell: String) -> String {
     format!("{} {}{pad}", style(word).dim(), style(count).green())
 }
 
-fn list_name_col_for_terminal(kernel_col: usize, members_col: usize, origin_col: usize) -> usize {
+fn list_name_space(kernel_col: usize, members_col: usize) -> usize {
     let width = console::Term::stdout().size().1 as usize;
-    let origin = if origin_col > 0 { origin_col + 3 } else { 0 };
-    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3) + origin;
+    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3);
     width
         .saturating_sub(crate::ui::term::CONTENT_INDENT.chars().count())
         .saturating_sub(fixed)
-        .max(NAME_HEADER.len())
 }
 
 pub(crate) fn member_badges(mountpoints: &mut [String]) -> String {

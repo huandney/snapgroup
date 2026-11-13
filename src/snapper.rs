@@ -64,9 +64,9 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
 }
 
 /// Cria um membro de grupo. `auto` grava se o checkpoint saiu com o nome
-/// padrão: decide se ele entra na retenção. A âncora no `pacman.log` deixa o
-/// `snapg log` achar a transação; `trigger` marca quem criou o grupo sem o
-/// usuário pedir (o hook do pacman, que tem fila própria de retenção).
+/// padrão: decide se ele entra na retenção. Só o hook do pacman passa a
+/// âncora no `pacman.log` (o `snapg log` acha a transação por ela) e o
+/// `trigger`, que o põe na fila própria de retenção.
 pub fn create(
     config: &str,
     description: &str,

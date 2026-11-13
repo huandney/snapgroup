@@ -8,7 +8,8 @@ use crate::group::{self, Group, GroupId};
 use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 
 const LOG_PATH: &str = "/var/log/pacman.log";
@@ -66,8 +67,11 @@ pub struct Anchor {
     pub ino: Option<u64>,
 }
 
+/// O log a partir de `base` (o resto não interessa a ninguém que vai ler).
 pub struct Log {
     bytes: Vec<u8>,
+    base: u64,
+    len: u64,
     ino: u64,
 }
 
@@ -86,20 +90,33 @@ pub fn anchor_now() -> Option<Anchor> {
     Some(Anchor { offset: meta.len(), ino: Some(meta.ino()) })
 }
 
-pub fn read_log() -> Result<Log> {
-    let bytes = fs::read(LOG_PATH).with_context(|| format!("ler {LOG_PATH}"))?;
-    let ino = fs::metadata(LOG_PATH).with_context(|| format!("ler {LOG_PATH}"))?.ino();
-    Ok(Log { bytes, ino })
+/// Lê o log uma vez, a partir da âncora mais antiga dos grupos: um log de
+/// anos pode ter dezenas de MB, e só o trecho depois dela é consultado.
+pub fn read_for(groups: &[Group]) -> Result<Log> {
+    let base = groups.iter().filter_map(group::pacman_log_anchor).map(|a| a.offset).min();
+    read_from(base.unwrap_or(0))
+}
+
+fn read_from(base: u64) -> Result<Log> {
+    let mut file = File::open(LOG_PATH).with_context(|| format!("abrir {LOG_PATH}"))?;
+    let meta = file.metadata().with_context(|| format!("ler {LOG_PATH}"))?;
+    let mut bytes = Vec::new();
+    if base < meta.len() {
+        file.seek(SeekFrom::Start(base)).with_context(|| format!("posicionar em {LOG_PATH}"))?;
+        file.read_to_end(&mut bytes).with_context(|| format!("ler {LOG_PATH}"))?;
+    }
+    Ok(Log { bytes, base, len: meta.len(), ino: meta.ino() })
 }
 
 /// A transação do checkpoint: a primeira depois da âncora (o hook roda depois
 /// do `Running` dela e antes do `started`). Para nela, sem ler o resto do log.
 /// `None` se o log foi trocado ou está menor que a âncora.
 pub fn first(log: &Log, anchor: Anchor) -> Option<Transaction> {
-    if anchor.ino.is_some_and(|ino| ino != log.ino) {
+    if anchor.ino.is_some_and(|ino| ino != log.ino) || anchor.offset > log.len {
         return None;
     }
-    let tail = log.bytes.get(usize::try_from(anchor.offset).ok()?..)?;
+    let start = usize::try_from(anchor.offset.checked_sub(log.base)?).ok()?;
+    let tail = log.bytes.get(start..)?;
     let lines = tail.split(|&b| b == b'\n').map(String::from_utf8_lossy);
     parse_lines(lines, 1).into_iter().next()
 }
@@ -110,7 +127,7 @@ pub fn origin_labels(groups: &[Group]) -> HashMap<GroupId, String> {
     if !groups.iter().any(group::is_pacman) {
         return HashMap::new();
     }
-    let log = read_log().ok();
+    let log = read_for(groups).ok();
     groups
         .iter()
         .map(|g| (g.id, origin_label(g, log.as_ref())))
@@ -331,7 +348,7 @@ mod tests {
     }
 
     fn log(text: &str, ino: u64) -> Log {
-        Log { bytes: text.as_bytes().to_vec(), ino }
+        Log { bytes: text.as_bytes().to_vec(), base: 0, len: text.len() as u64, ino }
     }
 
     #[test]
@@ -356,6 +373,15 @@ mod tests {
     }
 
     #[test]
+    fn first_reads_offsets_relative_to_where_the_log_was_read_from() {
+        // Lido a partir do byte 100: a âncora 100 é o começo do trecho.
+        let l = Log { bytes: KERNEL_UPGRADE.as_bytes().to_vec(), base: 100, len: 100 + KERNEL_UPGRADE.len() as u64, ino: 7 };
+        assert_eq!(first(&l, Anchor { offset: 100, ino: Some(7) }).unwrap().changes.len(), 3);
+        // Antes do trecho lido: não dá para responder.
+        assert!(first(&l, Anchor { offset: 99, ino: Some(7) }).is_none());
+    }
+
+    #[test]
     fn boot_packages_match_by_prefix() {
         assert!(super::is_boot_package("linux-cachyos-headers"));
         assert!(super::is_boot_package("systemd-libs"));
@@ -369,7 +395,7 @@ mod tests {
     #[test]
     #[ignore]
     fn real_log_matches_the_transaction_markers() {
-        let raw = super::read_log().unwrap();
+        let raw = super::read_from(0).unwrap();
         let text = String::from_utf8_lossy(&raw.bytes).into_owned();
         let txs = parse(&text);
         let started = text.lines().filter(|l| l.ends_with("] [ALPM] transaction started")).count();

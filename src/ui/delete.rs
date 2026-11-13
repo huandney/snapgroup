@@ -5,7 +5,7 @@
 use crate::group::{self, Group, GroupId};
 use crate::orphan::OrphanBackup;
 use crate::ui::checkpoints::{
-    MIN_NAME_WITH_ORIGIN, ORIGIN_HEADER, ReviewCard, ReviewDecision, kernel_label, origin_cell, origin_width,
+    ORIGIN_HEADER, ReviewCard, ReviewDecision, fit_name_and_origin, kernel_label, origin_cell, origin_width,
     review_cards,
 };
 use crate::ui::term::{AltScreen, CONTENT_INDENT, DISPLAY_VERSION, PAGE_INDENT, short_datetime, title};
@@ -532,17 +532,8 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             .max()
             .unwrap_or(0)
             .clamp("Nome".len(), NAME_MAX);
-        let fit_name = |origin_w: usize| {
-            let origin = if origin_w > 0 { origin_w + 3 } else { 0 };
-            wanted_name.min(width.saturating_sub(fixed + origin).max("Nome".len()))
-        };
-        // A Origem sai antes de o Nome ficar com menos de 10, como na lista.
-        let mut origin_w = origin_width(ctx.origins);
-        let mut name_w = fit_name(origin_w);
-        if origin_w > 0 && name_w < wanted_name.min(MIN_NAME_WITH_ORIGIN) {
-            origin_w = 0;
-            name_w = fit_name(0);
-        }
+        let (name_w, origin_w) =
+            fit_name_and_origin(wanted_name, origin_width(ctx.origins), width.saturating_sub(fixed));
         let origin_header = if origin_w > 0 { format!("{ORIGIN_HEADER:<origin_w$}   ") } else { String::new() };
         lines.push(format!("{PAGE_INDENT}{}", title("▪ Checkpoints")));
         let purge_header = purge_w.map(|w| format!("   {PURGE_HEADER:<w$}")).unwrap_or_default();

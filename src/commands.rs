@@ -100,8 +100,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    let anchor = pacman_log::anchor_now();
-    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, anchor, None))?;
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, None, None))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -157,8 +156,11 @@ pub fn save_pacman() -> Result<()> {
     for cfg in &configs {
         mountpoints.push(snapper::config_subvolume(cfg)?);
     }
-    let targets = pacman::read_targets();
-    let desc = pacman::checkpoint_name(pacman::parent_cmdline().as_deref(), &targets);
+    // Os pacotes vêm no stdin só quando o pacman chamou: rodado à mão (script,
+    // ssh sem tty) um stdin que nunca fecha travaria aqui com o lock pego.
+    let cmdline = pacman::parent_cmdline();
+    let targets = if cmdline.is_some() { pacman::read_targets() } else { Vec::new() };
+    let desc = pacman::checkpoint_name(cmdline.as_deref(), &targets);
     let anchor = pacman_log::anchor_now();
 
     rollback::ensure_single_filesystem(&configs)?;

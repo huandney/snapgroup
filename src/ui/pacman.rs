@@ -41,7 +41,7 @@ const NAME_COL_MAX: usize = 32;
 /// Esc no detalhe volta para a lista; Esc na lista sai.
 pub(crate) fn browse(groups: &[Group]) -> Result<()> {
     let _alt = AltScreen::enter();
-    let log = pacman_log::read_log().ok();
+    let log = pacman_log::read_for(groups).ok();
     let transactions: Vec<Option<Transaction>> = groups
         .iter()
         .map(|g| first_transaction(g, log.as_ref()))
@@ -254,13 +254,22 @@ fn render_preview(group: &Group, kernel: &str, nets: &[NetChange]) {
             .max()
             .unwrap_or(0)
             .min(NAME_COL_MAX);
-        for (label, net) in &grouped {
+        // A seção não empurra o rodapé (as teclas) para fora da tela: o que
+        // não cabe fica para a lista do `d`.
+        let snapg_lines = if snapg.is_some() { 2 } else { 0 };
+        let rows_on_screen = console::Term::stdout().size().0 as usize;
+        let fit = boot_rows_that_fit(rows_on_screen, snapg_lines, grouped.len());
+        for (label, net) in grouped.iter().take(fit) {
             line(format_args!(
                 "  {:<name_col$}   {} → {}",
                 crate::ui::term::ellipsize(label, name_col),
                 style(version(&net.now)).dim(),
                 version(&net.before)
             ));
+        }
+        if fit < grouped.len() {
+            let hidden = count_text(grouped.len() - fit, "linha", "linhas");
+            line(format_args!("  {}", style(format!("+{hidden} de boot na lista do d")).dim()));
         }
         if let Some(net) = snapg {
             line(format_args!(
@@ -283,6 +292,20 @@ fn render_preview(group: &Group, kernel: &str, nets: &[NetChange]) {
         "{}",
         style(format!("d lista os {} · enter continua · esc volta", nets.len())).dim()
     ));
+}
+
+/// Linhas fixas da prévia fora da seção de boot: cabeçalho (2), checkpoint,
+/// nome, branco, título, resumo, branco, "Boot e sistema", branco, rodapé e o
+/// cursor.
+const PREVIEW_FIXED_LINES: usize = 12;
+
+/// Quantas linhas de boot cabem; se nem todas, uma fica para o "+N".
+fn boot_rows_that_fit(rows_on_screen: usize, snapg_lines: usize, boot_rows: usize) -> usize {
+    let room = rows_on_screen.saturating_sub(PREVIEW_FIXED_LINES + snapg_lines).max(2);
+    if boot_rows <= room {
+        return boot_rows;
+    }
+    room - 1
 }
 
 /// "153 pacotes voltam de versão · 2 instalados depois saem".
@@ -486,7 +509,16 @@ fn page_rows(intro: &dyn Fn(), intro_lines: usize, heads: (&str, &str), rows: &[
 
 #[cfg(test)]
 mod tests {
-    use super::shorten_after;
+    use super::{boot_rows_that_fit, shorten_after};
+
+    #[test]
+    fn boot_section_leaves_room_for_the_footer() {
+        // 30 linhas: 12 fixas + 2 do aviso do snapg deixam 16.
+        assert_eq!(boot_rows_that_fit(30, 2, 13), 13);
+        assert_eq!(boot_rows_that_fit(30, 2, 40), 15);
+        // Terminal minúsculo: ainda mostra uma linha e o "+N".
+        assert_eq!(boot_rows_that_fit(10, 0, 5), 1);
+    }
 
     #[test]
     fn repeated_prefixes_are_cut_at_a_hyphen() {

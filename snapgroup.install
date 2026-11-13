@@ -13,6 +13,10 @@ snap_pac_masked() {
 
 # Decide pelo estado, não só pela versão: quem já escolheu o snapg (inclusive
 # num build anterior com o mesmo número de versão) não perde os checkpoints.
+# Limite: sem snap-pac, o `on` não deixa link nenhum para detectar, então um
+# build de pré-release com `on` volta desligado no upgrade para a 0.13.0
+# (rode `snapg pacman on` de novo). Quem vem da 0.12.0 publicada não tinha o
+# hook e não é afetado.
 mask_own_hook() {
     snap_pac_masked && return 0
     mkdir -p /etc/pacman.d/hooks

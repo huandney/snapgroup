@@ -10,7 +10,7 @@ pub(crate) const KERNEL_HEADER: &str = "Kernel";
 pub(crate) const NAME_HEADER: &str = "Nome";
 pub(crate) const ORIGIN_HEADER: &str = "Origem";
 /// Abaixo disso o Nome deixa de dizer algo: a coluna Origem sai antes.
-pub(crate) const MIN_NAME_WITH_ORIGIN: usize = 10;
+const MIN_NAME_WITH_ORIGIN: usize = 10;
 const DATE_HEADER: &str = "Data";
 const MEMBERS_HEADER: &str = "Membros";
 const ID_HEADER: &str = "ID";
@@ -64,23 +64,29 @@ impl CheckpointColumns {
     }
 
     fn fit_name_to_width(&mut self, terminal_width: usize, marker_width: usize) {
-        let mut available = self.available_name(terminal_width, marker_width);
-        if self.origin > 0 && available < self.name.min(MIN_NAME_WITH_ORIGIN) {
-            self.origin = 0;
-            available = self.available_name(terminal_width, marker_width);
-        }
-        self.name = self.name.min(available);
-    }
-
-    fn available_name(&self, terminal_width: usize, marker_width: usize) -> usize {
-        let origin = if self.origin > 0 { self.origin + 3 } else { 0 };
-        let fixed = self.kernel + DATE_WIDTH + 6 + 3 + MEMBERS_WIDTH + 3 + self.id + origin;
-        terminal_width
+        let fixed = self.kernel + DATE_WIDTH + 6 + 3 + MEMBERS_WIDTH + 3 + self.id;
+        let space = terminal_width
             .saturating_sub(CONTENT_INDENT.chars().count())
             .saturating_sub(marker_width)
-            .saturating_sub(fixed)
-            .max(NAME_HEADER.len())
+            .saturating_sub(fixed);
+        (self.name, self.origin) = fit_name_and_origin(self.name, self.origin, space);
     }
+}
+
+/// Larguras de Nome e Origem em `space` colunas (sem contar o separador de 3
+/// depois do Nome, que cada tela já desconta). A Origem sai antes de o Nome
+/// ficar com menos de `MIN_NAME_WITH_ORIGIN`; o Nome nunca fica menor que o
+/// próprio cabeçalho. Mesma regra na lista, nos seletores e no delete.
+pub(crate) fn fit_name_and_origin(wanted_name: usize, origin: usize, space: usize) -> (usize, usize) {
+    let name_in = |origin: usize| {
+        let taken = if origin > 0 { origin + 3 } else { 0 };
+        wanted_name.min(space.saturating_sub(taken).max(NAME_HEADER.len()))
+    };
+    let name = name_in(origin);
+    if origin > 0 && name < wanted_name.min(MIN_NAME_WITH_ORIGIN) {
+        return (name_in(0), 0);
+    }
+    (name, origin)
 }
 
 /// Largura da coluna Origem: o maior rótulo, ou `0` sem grupos do pacman.
@@ -366,6 +372,21 @@ mod tests {
         narrow.fit_name_to_width(80, 2);
         assert_eq!(narrow.origin, 0);
         assert!(!picker_header(&narrow).contains("Origem"));
+    }
+
+    #[test]
+    fn fit_name_and_origin_drops_origin_before_the_name_starves() {
+        use super::fit_name_and_origin;
+        // Cabe tudo.
+        assert_eq!(fit_name_and_origin(20, 10, 40), (20, 10));
+        // Nome encolhe, mas fica com 10 ou mais: a Origem fica.
+        assert_eq!(fit_name_and_origin(20, 10, 25), (12, 10));
+        // Ficaria com 9: a Origem sai e o Nome usa o espaço dela.
+        assert_eq!(fit_name_and_origin(20, 10, 22), (20, 0));
+        // Nome curto (Teste): a Origem só sai se nem ele couber.
+        assert_eq!(fit_name_and_origin(5, 10, 18), (5, 10));
+        // Sem Origem, o Nome nunca fica menor que o cabeçalho.
+        assert_eq!(fit_name_and_origin(20, 0, 2), (4, 0));
     }
 
     #[test]

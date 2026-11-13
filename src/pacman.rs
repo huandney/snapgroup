@@ -8,12 +8,9 @@ use std::io::{self, BufRead};
 /// Pacotes listados no nome antes do `+N`.
 const NAMED_TARGETS: usize = 3;
 
-/// Pacotes da transação, um por linha no stdin. Num terminal (rodado à mão)
-/// não há o que ler, e esperar travaria.
+/// Pacotes da transação, um por linha no stdin (`NeedsTargets`). Só chamar
+/// com o pacman como pai: ele fecha o stdin depois de escrever a lista.
 pub fn read_targets() -> Vec<String> {
-    if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
-        return Vec::new();
-    }
     io::stdin()
         .lock()
         .lines()

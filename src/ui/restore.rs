@@ -125,8 +125,10 @@ pub(crate) fn select_restore_plan(
     toplevel: &Path,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
+    // Uma leitura do pacman.log por restore, não uma por volta ao seletor.
+    let origins = pacman_log::origin_labels(groups);
     loop {
-        match select_restore_action(groups, regret, kernel_labels, regret_kernel)? {
+        match select_restore_action(groups, regret, kernel_labels, &origins, regret_kernel)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
@@ -190,6 +192,7 @@ pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
     kernel_labels: &HashMap<GroupId, String>,
+    origins: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
 ) -> Result<RestoreAction> {
     let mut items: Vec<String> = Vec::new();
@@ -200,11 +203,10 @@ pub(crate) fn select_restore_action(
     clear_screen();
     header("Pontos de restauração");
     let minimum_name = restore_name_min(regret.is_some());
-    let origins = pacman_log::origin_labels(groups);
     let mut columns = CheckpointColumns::new(
         groups,
         kernel_labels,
-        &origins,
+        origins,
         minimum_name,
         RESTORE_NAME_COL_MAX,
         1,
@@ -233,7 +235,7 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
-        let text = picker_row(g, kernel_labels, &origins, &columns);
+        let text = picker_row(g, kernel_labels, origins, &columns);
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
     }
