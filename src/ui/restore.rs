@@ -438,14 +438,14 @@ pub(crate) fn print_cancelled_boot_risk() {
 pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {
     result_section("Restaurado");
     result(format_args!("/ restaurado para o snapshot #{number} (home e /root intactos)"));
-    note(format_args!("root anterior arquivado como {}", done.backup_subvol));
+    result(format_args!("root anterior arquivado como {}", style(&done.backup_subvol).bold()));
 }
 
 pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback::Done]) {
     result_section("Restaurado");
     result(format_args!("rollback completo do grupo {group_id} ({} membros)", done.len()));
     for d in done {
-        note(format_args!("{}: sistema atual arquivado como {}", d.config, d.backup_subvol));
+        result(format_args!("{}: sistema atual arquivado como {}", d.config, style(&d.backup_subvol).bold()));
     }
 }
 
@@ -902,7 +902,7 @@ pub(crate) fn print_partial_failure(group_id: GroupId, rerr: &RollbackError) {
     warn_detail(format_args!("erro: {:#}", rerr.error));
     eprintln!();
     warn(format_args!("nada aplicado ao sistema rodando ainda (rollback é staged)"));
-    warn_detail(format_args!("NÃO REINICIE até decidir."));
+    warn(format_args!("{}", style("NÃO REINICIE até decidir.").for_stderr().bold()));
     eprintln!();
 }
 
@@ -945,7 +945,8 @@ pub(crate) fn confirm_reboot_now() -> Result<bool> {
 }
 
 pub(crate) fn print_manual_reboot() {
-    warn(format_args!("reinicie manualmente para concluir a restauração"));
+    result_section("Restaurado");
+    result(format_args!("{}", style("reinicie manualmente para concluir a restauração").bold()));
 }
 
 fn read_restore_flow() -> Result<RestoreFlow> {

@@ -107,6 +107,7 @@ pub const HINT_BACK: &str = "(esc volta)";
 
 pub fn clear_screen() {
     let _ = console::Term::stdout().clear_screen();
+    set_screen(Screen::Empty);
 }
 
 /// Guard RAII do alternate screen buffer. Entra no buffer alternativo ao criar
@@ -115,6 +116,9 @@ pub fn clear_screen() {
 /// terminal normal. No-op quando stdout não é um terminal.
 pub struct AltScreen {
     active: bool,
+    /// Estado da tela normal, devolvido na saída: o que estava impresso antes
+    /// (ex.: o purge de carona do delete) reaparece quando o buffer volta.
+    saved: Screen,
 }
 
 impl AltScreen {
@@ -124,7 +128,7 @@ impl AltScreen {
         if active {
             let _ = term.write_str("\x1b[?1049h");
         }
-        AltScreen { active }
+        AltScreen { active, saved: screen() }
     }
 }
 
@@ -136,6 +140,7 @@ impl Drop for AltScreen {
         let term = console::Term::stdout();
         let _ = term.write_str("\x1b[?1049l");
         let _ = term.show_cursor();
+        set_screen(self.saved);
     }
 }
 
@@ -161,27 +166,46 @@ pub fn section_header(marker: &str, s: &str) {
 pub fn header(s: &str) {
     app_header();
     section_header("▪", s);
+    set_screen(Screen::Content);
 }
 
 pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
 }
 
-/// Último título de resultado impresso. Ações em sequência (purge, save, …)
-/// caem na mesma seção sem repetir o título; seção nova ganha linha em branco.
-static RESULT_SECTION: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+/// O que está na tela acima do cursor, para a seção de resultado decidir se
+/// repete o título e se pula linha. `clear_screen`, a saída do alternate
+/// screen e `header` atualizam o estado.
+#[derive(Clone, Copy, PartialEq)]
+enum Screen {
+    Empty,
+    Content,
+    Result(&'static str),
+}
+
+static SCREEN: std::sync::Mutex<Screen> = std::sync::Mutex::new(Screen::Empty);
+
+fn screen() -> Screen {
+    *SCREEN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_screen(state: Screen) {
+    *SCREEN.lock().unwrap_or_else(|e| e.into_inner()) = state;
+}
 
 /// Abre (ou continua) a seção que fecha uma ação: `▪ Apagado`, `▪ Salvo`.
+/// Ações seguidas do mesmo tipo caem na mesma seção sem repetir o título;
+/// qualquer coisa já impressa acima ganha uma linha em branco antes.
 pub fn result_section(name: &'static str) {
-    let mut last = RESULT_SECTION.lock().unwrap_or_else(|e| e.into_inner());
-    if *last == Some(name) {
+    let mut screen = SCREEN.lock().unwrap_or_else(|e| e.into_inner());
+    if *screen == Screen::Result(name) {
         return;
     }
-    if last.is_some() {
+    if *screen != Screen::Empty {
         println!();
     }
     section_header("▪", name);
-    *last = Some(name);
+    *screen = Screen::Result(name);
 }
 
 /// Linha de resultado sem símbolo, sob a seção aberta.
@@ -196,12 +220,12 @@ pub fn note(args: fmt::Arguments<'_>) {
 
 /// Aviso no stderr: `!` amarelo, alinhado ao conteúdo.
 pub fn warn(args: fmt::Arguments<'_>) {
-    eprintln!("{CONTENT_INDENT}{} {args}", style("!").yellow().bold());
+    eprintln!("{CONTENT_INDENT}{} {args}", style("!").for_stderr().yellow().bold());
 }
 
 /// Erro no stderr: `✗` vermelho, alinhado ao conteúdo.
 pub fn fail(args: fmt::Arguments<'_>) {
-    eprintln!("{CONTENT_INDENT}{} {args}", style("✗").red().bold());
+    eprintln!("{CONTENT_INDENT}{} {args}", style("✗").for_stderr().red().bold());
 }
 
 /// Continuação de aviso/erro no stderr, sob o texto (depois do símbolo).

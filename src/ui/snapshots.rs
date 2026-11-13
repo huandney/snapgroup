@@ -105,11 +105,12 @@ pub(crate) fn print_space_freed(before: u64, after: u64, predicted: Option<crate
 
 /// "107.4 → 111.2 GiB": com a mesma unidade dos dois lados, ela sai uma vez.
 fn free_range(before: u64, after: u64) -> String {
-    let (before, after) = (crate::ui::delete::human_bytes(before), crate::ui::delete::human_bytes(after));
-    match (before.rsplit_once(' '), after.rsplit_once(' ')) {
-        (Some((number, unit)), Some((_, after_unit))) if unit == after_unit => format!("{number} → {after}"),
-        _ => format!("{before} → {after}"),
+    let human = crate::ui::delete::human_bytes_parts;
+    let ((before, unit), (after, after_unit)) = (human(before), human(after));
+    if unit == after_unit {
+        return format!("{before} → {after} {unit}");
     }
+    format!("{before} {unit} → {after} {after_unit}")
 }
 
 pub(crate) fn print_delete_cancelled() {
@@ -122,7 +123,7 @@ pub(crate) fn print_delete_done(g: &Group) {
 }
 
 pub(crate) fn print_trash_done(n: usize) {
-    result_section("Apagado");
+    result_section("Lixeira");
     result(format_args!(
         "{}",
         count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira")
@@ -307,4 +308,22 @@ pub(crate) fn print_regret_status(creation_time: &str, kernel: &str, saved: bool
         style("snapg restore").dim()
     ));
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::free_range;
+
+    const GIB: u64 = 1 << 30;
+    const MIB: u64 = 1 << 20;
+
+    #[test]
+    fn free_range_prints_shared_unit_once() {
+        assert_eq!(free_range(107 * GIB, 111 * GIB), "107.0 → 111.0 GiB");
+    }
+
+    #[test]
+    fn free_range_keeps_both_units_when_they_differ() {
+        assert_eq!(free_range(900 * MIB, 2 * GIB), "900 MiB → 2.0 GiB");
+    }
 }

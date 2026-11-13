@@ -581,12 +581,18 @@ fn summary_text(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate) -> Str
 }
 
 pub(crate) fn human_bytes(bytes: u64) -> String {
+    let (number, unit) = human_bytes_parts(bytes);
+    format!("{number} {unit}")
+}
+
+/// Número e unidade separados, para quem precisa compor (ex.: "107.4 → 111.2 GiB").
+pub(crate) fn human_bytes_parts(bytes: u64) -> (String, &'static str) {
     const GIB: f64 = (1u64 << 30) as f64;
     const MIB: f64 = (1u64 << 20) as f64;
     if bytes as f64 >= GIB {
-        return format!("{:.1} GiB", bytes as f64 / GIB);
+        return (format!("{:.1}", bytes as f64 / GIB), "GiB");
     }
-    format!("{:.0} MiB", bytes as f64 / MIB)
+    (format!("{:.0}", bytes as f64 / MIB), "MiB")
 }
 
 /// Terminal sem modo canônico, eco e sinais enquanto a lista está aberta: as
