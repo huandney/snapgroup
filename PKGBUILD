@@ -9,6 +9,10 @@ license=('MIT')
 depends=('snapper' 'btrfs-progs' 'util-linux' 'coreutils' 'systemd' 'sudo')
 optdepends=('mkinitcpio: sincronizar /boot FAT32 após um restore')
 makedepends=('cargo')
+# O hook 05-snapgroup-pre substitui o snap-pac. O provides mantém satisfeito
+# quem só depende do nome (ex.: cachyos-snapper-support, que traz um template).
+provides=('snap-pac')
+conflicts=('snap-pac')
 install=snapgroup.install
 backup=('etc/snapgroup.conf')
 # Build local: rode `makepkg -si` na raiz do repo. Sem source remoto por enquanto.
@@ -25,5 +29,7 @@ package() {
     "$pkgdir/usr/lib/systemd/system/snapg-cleanup.service"
   install -Dm644 "$startdir/pacman/00-snapgroup-pending.hook" \
     "$pkgdir/usr/share/libalpm/hooks/00-snapgroup-pending.hook"
+  install -Dm644 "$startdir/pacman/05-snapgroup-pre.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/05-snapgroup-pre.hook"
   install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }

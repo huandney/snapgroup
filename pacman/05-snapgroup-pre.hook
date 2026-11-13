@@ -1,0 +1,17 @@
+# Um checkpoint por transação, com todas as configs do snapper no mesmo grupo
+# (substitui o snap-pac). Roda depois do 00-snapgroup-pending, que aborta
+# transações de kernel/initramfs com uma restauração pendente antes de sobrar
+# um checkpoint órfão. Sem AbortOnFail: se o checkpoint falhar, a transação
+# segue e o erro aparece na saída do pacman.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Criando checkpoint do snapgroup...
+When = PreTransaction
+Exec = /usr/bin/snapg save --pacman
+NeedsTargets

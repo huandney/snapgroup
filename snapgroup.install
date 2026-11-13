@@ -1,10 +1,28 @@
+# Os pre/post que o snap-pac deixou não saem sozinhos: o cleanup `number` do
+# snapper só corta o que passa do NUMBER_LIMIT, e o snapg ignora snapshots sem
+# grupo. Apagar 100+ snapshots é escolha do usuário, então só avisamos.
+note_pacman_hook() {
+    echo "==> O snapgroup agora cria um checkpoint por transação do pacman,"
+    echo "    no lugar do snap-pac (KEEP_PACMAN em /etc/snapgroup.conf)."
+    echo "    Os pre/post antigos do snap-pac continuam no snapper. Para apagá-los:"
+    echo "      for c in \$(snapper --csvout list-configs --columns config | tail -n +2); do"
+    echo "        snapper -c \"\$c\" --csvout list --columns number,type,cleanup |"
+    echo "          awk -F, '\$2 != \"single\" && \$3 == \"number\" {print \$1}' |"
+    echo "          xargs -r snapper -c \"\$c\" delete"
+    echo "      done"
+}
+
 post_install() {
     systemctl daemon-reload
     # Não habilita aqui — o `snapg redo` arma o serviço sob demanda.
+    note_pacman_hook
 }
 
 post_upgrade() {
     systemctl daemon-reload
+    if [ "$(vercmp "$2" 0.13.0)" -lt 0 ]; then
+        note_pacman_hook
+    fi
 }
 
 pre_remove() {
