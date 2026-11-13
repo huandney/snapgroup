@@ -7,6 +7,7 @@ mod doctor;
 mod group;
 mod lock;
 mod orphan;
+mod pacman;
 mod proc;
 mod rename;
 mod rollback;
@@ -29,8 +30,11 @@ fn main() -> Result<()> {
     match cli.command {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
-        cli::Command::Save { description } => {
+        cli::Command::Save { description, pacman } => {
             let _lock = lock::acquire()?;
+            if pacman {
+                return commands::save_pacman();
+            }
             commands::save(description)
         }
         cli::Command::Restore => {

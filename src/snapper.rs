@@ -74,6 +74,22 @@ pub fn create(config: &str, description: &str, group_id: i64, auto: bool) -> Res
     create_with_userdata(config, description, &userdata)
 }
 
+/// Cria um membro de grupo do hook do pacman: automático na fila do
+/// `KEEP_PACMAN`, com a posição do `pacman.log` quando ele existe.
+pub fn create_pacman(
+    config: &str,
+    description: &str,
+    group_id: i64,
+    log_offset: Option<u64>,
+) -> Result<u32> {
+    use crate::group::{AUTO_KEY, PACMAN_LOG_KEY, TRIGGER_KEY, TRIGGER_PACMAN};
+    let mut userdata = format!("snapgroup-id={group_id},{AUTO_KEY}=1,{TRIGGER_KEY}={TRIGGER_PACMAN}");
+    if let Some(offset) = log_offset {
+        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={offset}"));
+    }
+    create_with_userdata(config, description, &userdata)
+}
+
 pub fn create_with_userdata(config: &str, description: &str, userdata: &str) -> Result<u32> {
     let out = Command::new("snapper")
         .args([

@@ -11,6 +11,11 @@ const TRASH_KEY: &str = "snapgroup-trash";
 const ORIGIN_KIND_KEY: &str = "snapgroup-origin";
 const ORIGIN_DATE_KEY: &str = "snapgroup-origin-date";
 pub const AUTO_KEY: &str = "snapgroup-auto";
+/// Quem criou o grupo sem o usuário pedir. Hoje só `pacman` (o hook).
+pub const TRIGGER_KEY: &str = "snapgroup-trigger";
+pub const TRIGGER_PACMAN: &str = "pacman";
+/// Tamanho do `pacman.log` no instante do save: a transação do grupo começa ali.
+pub const PACMAN_LOG_KEY: &str = "snapgroup-pacman-log";
 const DEFAULT_NAME_PREFIX: &str = "Checkpoint ";
 /// Nome padrão antes da 0.8.0: `snapg save <id>`.
 const LEGACY_DEFAULT_NAME_PREFIX: &str = "snapg save ";
@@ -134,14 +139,33 @@ pub fn is_auto(group: &Group) -> bool {
     !group.members.is_empty() && group.members.iter().all(|m| member_is_auto(&m.snapshot))
 }
 
-/// Grupos a mover pra lixeira: entre os automáticos, a cauda além dos `keep`
-/// mais novos. Fixos nunca entram na conta. `keep == 0` (ilimitado) → nada.
-/// `groups` deve vir newest-first, como `list_groups` entrega.
+/// Grupo criado pelo hook do pacman.
+pub fn is_pacman(group: &Group) -> bool {
+    group
+        .members
+        .first()
+        .and_then(|m| userdata_str(&m.snapshot, TRIGGER_KEY))
+        == Some(TRIGGER_PACMAN)
+}
+
+/// Grupos a mover pra lixeira (`KEEP_GROUPS`): entre os automáticos do `save`,
+/// a cauda além dos `keep` mais novos. Fixos e grupos do pacman não entram na
+/// conta. `keep == 0` (ilimitado) → nada. `groups` deve vir newest-first, como
+/// `list_groups` entrega.
 pub fn groups_to_prune(groups: &[Group], keep: usize) -> Vec<&Group> {
     if keep == 0 {
         return Vec::new();
     }
-    groups.iter().filter(|g| is_auto(g)).skip(keep).collect()
+    groups.iter().filter(|g| is_auto(g) && !is_pacman(g)).skip(keep).collect()
+}
+
+/// Mesma regra para a fila do pacman (`KEEP_PACMAN`). Renomear fixa o grupo
+/// (`snapgroup-auto=0`) e o tira desta fila também.
+pub fn pacman_groups_to_prune(groups: &[Group], keep: usize) -> Vec<&Group> {
+    if keep == 0 {
+        return Vec::new();
+    }
+    groups.iter().filter(|g| is_auto(g) && is_pacman(g)).skip(keep).collect()
 }
 
 /// Ids em uso, vivos ou na lixeira.
@@ -215,8 +239,8 @@ pub fn root_member(group: &Group) -> Result<Option<&Member>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Group, GroupId, Member, date, groups_to_prune, is_auto, is_default_name,
-        is_regret_origin, origin_date,
+        Group, GroupId, Member, date, groups_to_prune, is_auto, is_default_name, is_pacman,
+        is_regret_origin, origin_date, pacman_groups_to_prune,
     };
     use crate::snapper::Snapshot;
     use serde_json::{Value, json};
@@ -312,6 +336,34 @@ mod tests {
         // Sem a marca (grupo antigo), decide o nome.
         assert!(is_auto(&named_group(1, "Checkpoint 2026-11-12 10:00", Some(json!({"snapgroup-id": "1"})))));
         assert!(!is_auto(&named_group(1, "Teste restore", Some(json!({"snapgroup-id": "1"})))));
+    }
+
+    fn pacman_group(id: GroupId, auto: &str) -> Group {
+        named_group(
+            id,
+            "pacman -Syu",
+            Some(json!({"snapgroup-id": id.to_string(), "snapgroup-auto": auto, "snapgroup-trigger": "pacman"})),
+        )
+    }
+
+    #[test]
+    fn pacman_and_save_queues_do_not_touch_each_other() {
+        // newest-first: 9..5 do pacman, depois 4..1 automáticos do save.
+        let mut groups: Vec<Group> = (5..=9).rev().map(|id| pacman_group(id, "1")).collect();
+        groups.extend(auto_groups(&[4, 3, 2, 1]));
+        let ids = |v: Vec<&Group>| v.iter().map(|g| g.id).collect::<Vec<_>>();
+        assert_eq!(ids(groups_to_prune(&groups, 2)), vec![2, 1]);
+        assert_eq!(ids(pacman_groups_to_prune(&groups, 2)), vec![7, 6, 5]);
+        assert!(pacman_groups_to_prune(&groups, 0).is_empty());
+    }
+
+    #[test]
+    fn pinned_pacman_group_leaves_the_queue() {
+        let groups = vec![pacman_group(3, "1"), pacman_group(2, "0"), pacman_group(1, "1")];
+        assert!(is_pacman(&groups[1]));
+        let pruned: Vec<_> = pacman_groups_to_prune(&groups, 1).iter().map(|g| g.id).collect();
+        assert_eq!(pruned, vec![1]);
+        assert!(groups_to_prune(&groups, 1).is_empty());
     }
 
     #[test]

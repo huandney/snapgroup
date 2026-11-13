@@ -4,6 +4,7 @@ use crate::config;
 use crate::doctor;
 use crate::group::{self, Group, Member};
 use crate::orphan::{self, OrphanBackup};
+use crate::pacman;
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::space;
@@ -97,20 +98,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    // Um membro que falha desfaz os já criados: grupo pela metade apareceria
-    // no restore como checkpoint e restauraria só parte do sistema.
-    let mut created: Vec<(&String, u32)> = Vec::new();
-    for cfg in &configs {
-        match snapper::create(cfg, &desc, id, auto) {
-            Ok(number) => created.push((cfg, number)),
-            Err(e) => {
-                for (done_cfg, number) in created {
-                    let _ = snapper::delete(done_cfg, number);
-                }
-                return Err(e).with_context(|| format!("criar snapshot em '{cfg}'"));
-            }
-        }
-    }
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -133,6 +121,61 @@ pub fn save(description: Option<String>) -> Result<()> {
     run_cleanup(&cfg);
     if regrets + purged > 0 {
         report_freed(free_before, None, false);
+    }
+    Ok(())
+}
+
+/// Checkpoint do hook do pacman (PreTransaction). Sem prompt, sem a espera do
+/// relatório de espaço e sem descartar o Regret: só o save manual é Highlander.
+/// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
+pub fn save_pacman() -> Result<()> {
+    let cfg = config::load();
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
+    }
+
+    // Com uma restauração pendente o snapper nem lista (o `.snapshots` já foi
+    // movido). O kernel/initramfs já são barrados pelo pending-check; o resto
+    // da transação segue sem checkpoint.
+    if pending_restore_from_live(&configs)?.is_some() {
+        snapshots::print_pacman_skipped_pending();
+        return Ok(());
+    }
+
+    let mut mountpoints = Vec::new();
+    for cfg in &configs {
+        mountpoints.push(snapper::config_subvolume(cfg)?);
+    }
+    let targets = pacman::read_targets();
+    let desc = pacman::checkpoint_name(pacman::parent_cmdline().as_deref(), &targets);
+    let log_offset = pacman::log_offset();
+
+    rollback::ensure_single_filesystem(&configs)?;
+    let id = unique_group_id()?;
+    create_members(&configs, |cfg| snapper::create_pacman(cfg, &desc, id, log_offset))?;
+    snapshots::print_save_created(id, &desc, &mut mountpoints);
+
+    purge_expired_trash(&cfg);
+    run_cleanup(&cfg);
+    Ok(())
+}
+
+/// Cria um membro por config. Um membro que falha desfaz os já criados: grupo
+/// pela metade apareceria no restore como checkpoint e restauraria só parte do
+/// sistema.
+fn create_members(configs: &[String], create: impl Fn(&str) -> Result<u32>) -> Result<()> {
+    let mut created: Vec<(&String, u32)> = Vec::new();
+    for cfg in configs {
+        match create(cfg) {
+            Ok(number) => created.push((cfg, number)),
+            Err(e) => {
+                for (done_cfg, number) in created {
+                    let _ = snapper::delete(done_cfg, number);
+                }
+                return Err(e).with_context(|| format!("criar snapshot em '{cfg}'"));
+            }
+        }
     }
     Ok(())
 }
@@ -170,18 +213,20 @@ fn trash_group(g: &Group, trash_epoch: i64, reason: TrashReason) -> usize {
 }
 
 fn run_cleanup(cfg: &config::Config) {
-    if cfg.keep_groups == 0 {
+    if cfg.keep_groups == 0 && cfg.keep_pacman == 0 {
         return; // ilimitado
     }
-    if let Err(e) = try_cleanup(cfg.keep_groups) {
+    if let Err(e) = try_cleanup(cfg) {
         snapshots::print_cleanup_failed(&e);
     }
 }
 
-fn try_cleanup(keep: usize) -> Result<()> {
+fn try_cleanup(cfg: &config::Config) -> Result<()> {
     let groups = group::list_groups()?; // visíveis, newest-first
-    // Só automáticos contam e saem; fixos ficam até um `delete`.
-    let prune = group::groups_to_prune(&groups, keep);
+    // Só automáticos contam e saem; fixos ficam até um `delete`. Os do save e
+    // os do pacman são filas separadas.
+    let mut prune = group::groups_to_prune(&groups, cfg.keep_groups);
+    prune.extend(group::pacman_groups_to_prune(&groups, cfg.keep_pacman));
     if prune.is_empty() {
         return Ok(());
     }

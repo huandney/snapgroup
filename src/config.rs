@@ -14,6 +14,10 @@ pub struct Config {
     /// Quantos grupos automáticos (nome padrão) manter vivos; fixos não contam.
     /// `0` = ilimitado (comportamento legado).
     pub keep_groups: usize,
+    /// Quantos grupos do hook do pacman manter vivos, numa fila própria: um
+    /// dia de muitas transações não empurra os automáticos do `save` para a
+    /// lixeira. `0` = ilimitado.
+    pub keep_pacman: usize,
     /// Dias que um grupo fica na lixeira antes do purge apagar de vez.
     /// `u64`: dias negativos não existem, e um valor negativo poria o cutoff
     /// no futuro e purgaria a lixeira inteira na hora.
@@ -24,6 +28,9 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             keep_groups: 0,
+            // Diferente de 0 de propósito: o hook cria grupos sozinhos, e sem
+            // teto eles cresceriam para sempre (o snap-pac parava em 50).
+            keep_pacman: 20,
             trash_prune_days: 15,
         }
     }
@@ -56,6 +63,11 @@ fn parse(content: &str) -> Config {
                     cfg.keep_groups = n;
                 }
             }
+            "KEEP_PACMAN" => {
+                if let Ok(n) = val.parse() {
+                    cfg.keep_pacman = n;
+                }
+            }
             "TRASH_PRUNE_DAYS" => {
                 // Valor grande sinaliza "reter muito" → clampa no teto seguro,
                 // em vez de cair no default e encolher a janela em silêncio.
@@ -77,7 +89,15 @@ mod tests {
     fn empty_content_yields_defaults() {
         let cfg = parse("");
         assert_eq!(cfg.keep_groups, 0);
+        assert_eq!(cfg.keep_pacman, 20);
         assert_eq!(cfg.trash_prune_days, 15);
+    }
+
+    #[test]
+    fn reads_keep_pacman() {
+        assert_eq!(parse("KEEP_PACMAN=5\n").keep_pacman, 5);
+        assert_eq!(parse("KEEP_PACMAN=0\n").keep_pacman, 0);
+        assert_eq!(parse("KEEP_PACMAN=-3\n").keep_pacman, 20);
     }
 
     #[test]

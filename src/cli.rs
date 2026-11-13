@@ -18,6 +18,9 @@ pub enum Command {
     Save {
         /// Descrição opcional do snapshot
         description: Option<String>,
+        /// Uso interno: checkpoint do hook do pacman (pacotes no stdin).
+        #[arg(long, hide = true, conflicts_with = "description")]
+        pacman: bool,
     },
     /// Restauração interativa: seleciona checkpoint ou regret via TUI
     Restore,
