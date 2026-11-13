@@ -8,6 +8,7 @@ mod group;
 mod lock;
 mod orphan;
 mod pacman;
+mod pacman_log;
 mod proc;
 mod rename;
 mod rollback;
