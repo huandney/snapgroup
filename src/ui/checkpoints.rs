@@ -167,9 +167,28 @@ pub(crate) enum ReviewDecision {
     Cancel,
 }
 
+/// Cartão da revisão irreversível: uma linha de título e uma de detalhe.
+pub(crate) struct ReviewCard {
+    pub(crate) title: String,
+    pub(crate) detail: String,
+}
+
 pub(crate) fn review_irreversible(
     targets: &[&Group],
     kernel_labels: &HashMap<GroupId, String>,
+    title: &str,
+    prompt: &str,
+    hint: &str,
+) -> Result<ReviewDecision> {
+    let cards: Vec<ReviewCard> = targets
+        .iter()
+        .map(|group| group_card(group, kernel_label(kernel_labels, group.id)))
+        .collect();
+    review_cards(&cards, title, prompt, hint)
+}
+
+pub(crate) fn review_cards(
+    cards: &[ReviewCard],
     title: &str,
     prompt: &str,
     hint: &str,
@@ -178,18 +197,10 @@ pub(crate) fn review_irreversible(
     let mut page = 0usize;
     loop {
         let page_size = review_page_size();
-        let pages = targets.len().div_ceil(page_size).max(1);
+        let pages = cards.len().div_ceil(page_size).max(1);
         page = page.min(pages - 1);
 
-        render_review(
-            targets,
-            kernel_labels,
-            title,
-            prompt,
-            hint,
-            yes,
-            (page, page_size, pages),
-        );
+        render_review(cards, title, prompt, hint, yes, (page, page_size, pages));
         match console::Term::stdout()
             .read_key()
             .context("aguardar confirmação")?
@@ -211,8 +222,7 @@ pub(crate) fn review_irreversible(
 }
 
 fn render_review(
-    targets: &[&Group],
-    kernel_labels: &HashMap<GroupId, String>,
+    cards: &[ReviewCard],
     title: &str,
     prompt: &str,
     hint: &str,
@@ -229,9 +239,9 @@ fn render_review(
     println!();
 
     let start = page * page_size;
-    let end = (start + page_size).min(targets.len());
-    for group in &targets[start..end] {
-        print_review_card(group, kernel_label(kernel_labels, group.id));
+    let end = (start + page_size).min(cards.len());
+    for card in &cards[start..end] {
+        print_review_card(card);
     }
     if pages > 1 {
         line(format_args!(
@@ -246,27 +256,29 @@ fn review_page_size() -> usize {
     rows.saturating_sub(8).max(3) / 3
 }
 
-fn print_review_card(group: &Group, kernel: &str) {
+fn group_card(group: &Group, kernel: &str) -> ReviewCard {
     let description = group::description(group).trim();
-    let description = if description.is_empty() {
+    let title = if description.is_empty() {
         format!("#{}", group.id)
     } else {
         description.to_string()
     };
-    let description = truncate_chars(&description, content_width().min(80));
-    println!("{CONTENT_INDENT}{description}");
-    println!(
-        "{}{}",
-        CONTENT_INDENT,
-        style(format!(
-            "└─ {}  ·  kernel {}  ·  {} membros  ·  #{}",
+    ReviewCard {
+        title,
+        detail: format!(
+            "{}  ·  kernel {}  ·  {} membros  ·  #{}",
             short_datetime(group::date(group)),
             kernel,
             group.members.len(),
             group.id
-        ))
-        .dim()
-    );
+        ),
+    }
+}
+
+fn print_review_card(card: &ReviewCard) {
+    let title = truncate_chars(&card.title, content_width().min(80));
+    println!("{CONTENT_INDENT}{title}");
+    println!("{}{}", CONTENT_INDENT, style(format!("└─ {}", card.detail)).dim());
 }
 
 fn truncate_chars(value: &str, maximum: usize) -> String {

@@ -1,8 +1,10 @@
 use crate::group::{self, Group, GroupId};
+use crate::orphan::OrphanBackup;
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, kernel_label,
-    name_cell, picker_header, picker_prompt, picker_row, review_irreversible,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewCard, ReviewDecision,
+    kernel_label, name_cell, picker_header, picker_prompt, picker_row, review_cards,
+    review_irreversible,
 };
 use crate::ui::term::{
     AltScreen, HINT_MULTI, THEME, app_header, clear_screen, ellipsize, header, input_line, line,
@@ -64,25 +66,47 @@ pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]
     );
 }
 
+/// O que o wizard do `delete` decidiu apagar: índices em `groups` ou em
+/// `orphans`. Um tipo por vez: lixeira e deleção imediata têm revisões
+/// diferentes.
+pub(crate) enum DeletePlan {
+    Groups(Vec<usize>),
+    Orphans(Vec<usize>),
+}
+
+#[derive(Clone, Copy)]
+enum DeleteAction {
+    Select,
+    All,
+    Orphans,
+}
+
 /// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
-/// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
-/// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
+/// e devolve o plano, ou `None` se cancelado. Esc na confirmação volta pra
+/// seleção (um passo). A exclusão em si roda fora, no terminal normal.
 pub(crate) fn select_delete_plan(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
+    orphans: &[OrphanBackup],
     purge: bool,
-) -> Result<Option<Vec<usize>>> {
+) -> Result<Option<DeletePlan>> {
     let _alt = AltScreen::enter();
     // Uma tela de revisão para qualquer caminho (seleção ou "todos"): mostra o
     // que será afetado e confirma. Trash ou purge só muda o texto. Esc na
     // revisão volta pra seleção (um passo).
     loop {
-        let Some(indices) = select_delete_targets(groups, kernel_labels)? else {
+        let Some(plan) = select_delete_targets(groups, kernel_labels, orphans)? else {
             return Ok(None);
         };
-        let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-        match confirm_delete_targets(&targets, kernel_labels, purge)? {
-            ReviewDecision::Proceed => return Ok(Some(indices)),
+        let decision = match &plan {
+            DeletePlan::Groups(indices) => {
+                let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
+                confirm_delete_targets(&targets, kernel_labels, purge)?
+            }
+            DeletePlan::Orphans(indices) => confirm_orphan_targets(orphans, indices)?,
+        };
+        match decision {
+            ReviewDecision::Proceed => return Ok(Some(plan)),
             ReviewDecision::Back => continue,
             ReviewDecision::Cancel => return Ok(None),
         }
@@ -92,29 +116,143 @@ pub(crate) fn select_delete_plan(
 fn select_delete_targets(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
-) -> Result<Option<Vec<usize>>> {
+    orphans: &[OrphanBackup],
+) -> Result<Option<DeletePlan>> {
+    let mut labels: Vec<String> = Vec::new();
+    let mut actions: Vec<DeleteAction> = Vec::new();
+    if !groups.is_empty() {
+        labels.push("Selecionar".to_string());
+        actions.push(DeleteAction::Select);
+        labels.push("Apagar todos".to_string());
+        actions.push(DeleteAction::All);
+    }
+    if !orphans.is_empty() {
+        labels.push(format!("Backups órfãos ({})", orphans.len()));
+        actions.push(DeleteAction::Orphans);
+    }
     loop {
         clear_screen();
         header("Apagar checkpoints");
-        let action = dialoguer::Select::with_theme(&THEME)
-            .items(&["Selecionar", "Apagar todos"])
+        let choice = dialoguer::Select::with_theme(&THEME)
+            .items(&labels)
             .default(0)
             .clear(true)
             .report(false)
             .interact_opt()
             .context("seleção cancelada")?;
+        let Some(action) = choice.map(|i| actions[i]) else {
+            return Ok(None);
+        };
 
         match action {
-            Some(0) => match select_delete_targets_manually(groups, kernel_labels)? {
-                Some(targets) => return Ok(Some(targets)),
-                None => continue,
-            },
+            DeleteAction::Select => {
+                if let Some(targets) = select_delete_targets_manually(groups, kernel_labels)? {
+                    return Ok(Some(DeletePlan::Groups(targets)));
+                }
+            }
             // "Apagar todos" só seleciona; a revisão única em select_delete_plan
             // já cobre a confirmação — sem segunda pergunta redundante.
-            Some(1) => return Ok(Some((0..groups.len()).collect())),
-            _ => return Ok(None),
+            DeleteAction::All => return Ok(Some(DeletePlan::Groups((0..groups.len()).collect()))),
+            DeleteAction::Orphans => {
+                if let Some(targets) = select_orphan_targets(orphans)? {
+                    return Ok(Some(DeletePlan::Orphans(targets)));
+                }
+            }
         }
     }
+}
+
+const ORPHAN_DATE_HEADER: &str = "Criado";
+const ORPHAN_BASES_HEADER: &str = "Membros";
+const ORPHAN_LABEL_HEADER: &str = "Rótulo";
+const ORPHAN_DATE_WIDTH: usize = 16;
+
+fn select_orphan_targets(orphans: &[OrphanBackup]) -> Result<Option<Vec<usize>>> {
+    let bases_width = orphans
+        .iter()
+        .map(|o| o.bases.join(" ").chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(ORPHAN_BASES_HEADER.len());
+    let row = |date: &str, bases: &str, label: &str| {
+        format!("{date:<ORPHAN_DATE_WIDTH$}   {bases:<bases_width$}   {label}")
+    };
+    let items: Vec<String> = orphans
+        .iter()
+        .map(|o| {
+            let text = row(&short_datetime(&o.created), &o.bases.join(" "), &o.label);
+            truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER)
+        })
+        .collect();
+    let columns_header = row(ORPHAN_DATE_HEADER, ORPHAN_BASES_HEADER, ORPHAN_LABEL_HEADER);
+    let prompt = picker_prompt(
+        &prompt_hint("Selecione os backups órfãos para apagar", HINT_MULTI),
+        &columns_header,
+        crate::ui::term::MULTI_MARKER,
+    );
+
+    clear_screen();
+    header("Apagar backups órfãos");
+    line(format_args!(
+        "{}",
+        style("restos de restores fora do Snapper; apagados na hora, sem lixeira").dim()
+    ));
+    println!();
+    let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
+        .with_prompt(prompt)
+        .items(&items)
+        .max_length(crate::ui::term::picker_page_len(6))
+        .clear(true)
+        .report(false)
+        .interact_opt()
+        .context("seleção cancelada")?
+    else {
+        return Ok(None);
+    };
+    if selections.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(selections))
+}
+
+fn confirm_orphan_targets(orphans: &[OrphanBackup], indices: &[usize]) -> Result<ReviewDecision> {
+    let cards: Vec<ReviewCard> = indices
+        .iter()
+        .map(|&i| {
+            let o = &orphans[i];
+            ReviewCard {
+                title: format!("{}  ·  {}", short_datetime(&o.created), o.bases.join(" ")),
+                detail: o.subvols.join("  "),
+            }
+        })
+        .collect();
+    review_cards(
+        &cards,
+        "Apagar backups órfãos",
+        "Apagar permanentemente?",
+        "sem lixeira",
+    )
+}
+
+pub(crate) fn print_orphan_deleted(orphan: &OrphanBackup) {
+    println!(
+        "{} backup órfão {} apagado  {}  {}",
+        style("✓").green().bold(),
+        short_datetime(&orphan.created),
+        style("·").dim(),
+        style(orphan.subvols.join(" ")).dim()
+    );
+}
+
+pub(crate) fn print_orphan_delete_failed(name: &str, e: &anyhow::Error) {
+    eprintln!("{} falha ao apagar {name}: {e:#}", style("!").yellow().bold());
+}
+
+pub(crate) fn print_orphan_scan_failed(e: &anyhow::Error) {
+    eprintln!(
+        "{} backups órfãos não listados: {e:#}",
+        style("!").yellow().bold()
+    );
 }
 
 fn select_delete_targets_manually(

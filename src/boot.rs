@@ -1215,7 +1215,7 @@ fn critical_boot_files(boot: &Path, groups: &[KernelGroup]) -> Vec<PathBuf> {
 /// prestes a recusar a entrada. Lista afirmativa, na ordem de busca; sem
 /// nenhum, devolve o caminho da raiz (inexistente → callers tratam como "sem
 /// limine").
-fn limine_conf_path(boot: &Path) -> PathBuf {
+pub fn limine_conf_path(boot: &Path) -> PathBuf {
     const CANDIDATES: [&str; 6] = [
         "limine.conf",
         "limine/limine.conf",

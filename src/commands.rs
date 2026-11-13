@@ -3,13 +3,14 @@ use crate::btrfs;
 use crate::config;
 use crate::doctor;
 use crate::group::{self, Group, Member};
+use crate::orphan::{self, OrphanBackup};
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::ui::restore::{
     Fat32BootAction, PendingAction, PendingPromptInfo, PendingSyncAction, PostRestoreAction,
     RegretEntry, RegretInfo, RestorePlan, select_restore_plan,
 };
-use crate::ui::snapshots;
+use crate::ui::snapshots::{self, DeletePlan};
 use crate::ui::term::{clear_screen, confirm, header};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
@@ -1341,30 +1342,95 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
     purge_expired_trash(&cfg);
 
     let groups = group::list_groups()?;
-    if groups.is_empty() {
-        snapshots::print_no_groups();
-        return Ok(());
-    }
 
     // -y: opera no mais recente sem TUI (scripting / emergência com --purge).
+    // Só checkpoints: backups órfãos sempre passam pela revisão.
     if yes {
-        return apply_delete(&[&groups[0]], purge);
+        let Some(newest) = groups.first() else {
+            snapshots::print_no_groups();
+            return Ok(());
+        };
+        return apply_delete(&[newest], purge);
     }
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-    let kernel_labels = group::kernel_labels(&groups, &mount_path);
+    let result = delete_interactive(&configs, &groups, &mount_path, purge);
+    let _ = btrfs::umount_toplevel(&mount_path);
+    result
+}
+
+/// Parte do `delete` que precisa do top-level montado: rótulos de kernel,
+/// descoberta dos órfãos e a deleção deles, que acontece no próprio top-level.
+fn delete_interactive(
+    configs: &[String],
+    groups: &[Group],
+    mount_path: &Path,
+    purge: bool,
+) -> Result<()> {
+    let kernel_labels = group::kernel_labels(groups, mount_path);
+    // Falha ao listar órfãos não pode bloquear o delete de checkpoints.
+    let orphans = config_base_subvols(configs)
+        .and_then(|bases| orphan::find(mount_path, &bases))
+        .unwrap_or_else(|e| {
+            snapshots::print_orphan_scan_failed(&e);
+            Vec::new()
+        });
+    if groups.is_empty() && orphans.is_empty() {
+        snapshots::print_no_groups();
+        return Ok(());
+    }
 
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
-    let plan = snapshots::select_delete_plan(&groups, &kernel_labels, purge);
-    let _ = btrfs::umount_toplevel(&mount_path);
-    let Some(target_indices) = plan? else {
+    let Some(plan) = snapshots::select_delete_plan(groups, &kernel_labels, &orphans, purge)? else {
         snapshots::print_delete_cancelled();
         return Ok(());
     };
-    let targets: Vec<&Group> = target_indices.iter().map(|&i| &groups[i]).collect();
-    apply_delete(&targets, purge)
+    match plan {
+        DeletePlan::Groups(indices) => {
+            let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
+            apply_delete(&targets, purge)
+        }
+        DeletePlan::Orphans(indices) => {
+            let targets: Vec<&OrphanBackup> = indices.iter().map(|&i| &orphans[i]).collect();
+            delete_orphans(&targets, mount_path)
+        }
+    }
+}
+
+fn config_base_subvols(configs: &[String]) -> Result<Vec<String>> {
+    let mut bases = Vec::new();
+    for cfg in configs {
+        if let Some(base) = config_snapshot_subvol(cfg)? {
+            bases.push(base);
+        }
+    }
+    Ok(bases)
+}
+
+/// Apaga cada backup escolhido. Um subvolume que falha é reportado e o resto
+/// segue: cada backup é independente, e o erro diz qual ficou.
+fn delete_orphans(targets: &[&OrphanBackup], toplevel: &Path) -> Result<()> {
+    let mut failed = 0;
+    for orphan in targets {
+        let mut ok = true;
+        for name in &orphan.subvols {
+            if let Err(e) = btrfs::delete_subvolume_tree(toplevel, name) {
+                snapshots::print_orphan_delete_failed(name, &e);
+                ok = false;
+            }
+        }
+        if ok {
+            snapshots::print_orphan_deleted(orphan);
+            continue;
+        }
+        failed += 1;
+    }
+    if failed > 0 {
+        bail!("{failed} backup(s) órfão(s) não apagado(s) por inteiro");
+    }
+    Ok(())
 }
 
 /// Purge = deleção permanente imediata (irreversível). Senão move pra lixeira,
