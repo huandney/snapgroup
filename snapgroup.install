@@ -3,7 +3,18 @@
 # pacman. `snapg pacman on` troca o snap-pac pelo snapg; `off` desfaz.
 OWN_HOOK_MASK=/etc/pacman.d/hooks/05-snapgroup-pre.hook
 
+# Já rodou `snapg pacman on`: algum hook do snap-pac está desligado.
+snap_pac_masked() {
+    for hook in /etc/pacman.d/hooks/*snap-pac*.hook; do
+        [ -L "$hook" ] && [ "$(readlink "$hook")" = /dev/null ] && return 0
+    done
+    return 1
+}
+
+# Decide pelo estado, não só pela versão: quem já escolheu o snapg (inclusive
+# num build anterior com o mesmo número de versão) não perde os checkpoints.
 mask_own_hook() {
+    snap_pac_masked && return 0
     mkdir -p /etc/pacman.d/hooks
     [ -e "$OWN_HOOK_MASK" ] || [ -L "$OWN_HOOK_MASK" ] || ln -s /dev/null "$OWN_HOOK_MASK"
 }
@@ -22,7 +33,7 @@ post_install() {
 
 post_upgrade() {
     systemctl daemon-reload
-    if [ "$(vercmp "$2" 0.13.0)" -lt 0 ]; then
+    if [ "$(vercmp "$2" 0.13.0)" -lt 0 ] && ! snap_pac_masked; then
         mask_own_hook
         note_pacman_hook
     fi

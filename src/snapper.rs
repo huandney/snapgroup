@@ -64,35 +64,27 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
 }
 
 /// Cria um membro de grupo. `auto` grava se o checkpoint saiu com o nome
-/// padrão: decide se ele entra na retenção (`KEEP_GROUPS`). A posição do
-/// `pacman.log` deixa o restore mostrar o que mudou nos pacotes desde então.
+/// padrão: decide se ele entra na retenção. A âncora no `pacman.log` deixa o
+/// `snapg log` achar a transação; `trigger` marca quem criou o grupo sem o
+/// usuário pedir (o hook do pacman, que tem fila própria de retenção).
 pub fn create(
     config: &str,
     description: &str,
     group_id: i64,
     auto: bool,
-    log_offset: Option<u64>,
+    anchor: Option<crate::pacman_log::Anchor>,
+    trigger: Option<&str>,
 ) -> Result<u32> {
-    use crate::group::{AUTO_KEY, PACMAN_LOG_KEY};
+    use crate::group::{AUTO_KEY, PACMAN_LOG_INO_KEY, PACMAN_LOG_KEY, TRIGGER_KEY};
     let mut userdata = format!("snapgroup-id={group_id},{AUTO_KEY}={}", u8::from(auto));
-    if let Some(offset) = log_offset {
-        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={offset}"));
+    if let Some(trigger) = trigger {
+        userdata.push_str(&format!(",{TRIGGER_KEY}={trigger}"));
     }
-    create_with_userdata(config, description, &userdata)
-}
-
-/// Cria um membro de grupo do hook do pacman: automático na fila do
-/// `KEEP_PACMAN`, com a posição do `pacman.log` quando ele existe.
-pub fn create_pacman(
-    config: &str,
-    description: &str,
-    group_id: i64,
-    log_offset: Option<u64>,
-) -> Result<u32> {
-    use crate::group::{AUTO_KEY, PACMAN_LOG_KEY, TRIGGER_KEY, TRIGGER_PACMAN};
-    let mut userdata = format!("snapgroup-id={group_id},{AUTO_KEY}=1,{TRIGGER_KEY}={TRIGGER_PACMAN}");
-    if let Some(offset) = log_offset {
-        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={offset}"));
+    if let Some(anchor) = anchor {
+        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={}", anchor.offset));
+        if let Some(ino) = anchor.ino {
+            userdata.push_str(&format!(",{PACMAN_LOG_INO_KEY}={ino}"));
+        }
     }
     create_with_userdata(config, description, &userdata)
 }

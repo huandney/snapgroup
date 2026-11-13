@@ -120,12 +120,32 @@ pub fn enable(dirs: &Dirs, status: &Status) -> Result<()> {
 }
 
 /// `snapg pacman off`: religa os hooks do snap-pac e desliga o do snapg.
+/// Também some com links de um `on` antigo que o snap-pac de agora não lista
+/// (desinstalado, ou hook renomeado): senão eles desligariam o snap-pac
+/// quando ele voltasse.
 pub fn disable(dirs: &Dirs, status: &Status) -> Result<()> {
     refuse_replaced(dirs, &[OWN_HOOK])?;
     for (name, _) in &status.snap_pac {
         unmask(dirs, name)?;
     }
+    for name in stale_snap_pac_masks(dirs) {
+        unmask(dirs, &name)?;
+    }
     mask(dirs, OWN_HOOK)
+}
+
+/// Links para `/dev/null` com `snap-pac` no nome, o mesmo critério do
+/// `pre_remove` do pacote.
+fn stale_snap_pac_masks(dirs: &Dirs) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(&dirs.overrides) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("snap-pac") && name.ends_with(".hook"))
+        .filter(|name| is_null_link(&dirs.overrides.join(name)))
+        .collect()
 }
 
 /// Um hook trocado pelo usuário em `/etc` não é sobrescrito. Checa todos antes
@@ -209,6 +229,21 @@ mod tests {
         let off = status(&d);
         assert!(off.snap_pac_runs() && !off.snapg_runs());
         assert!(fs::symlink_metadata(d.overrides.join(PRE)).is_err());
+        let _ = fs::remove_dir_all(d.system.parent().unwrap());
+    }
+
+    #[test]
+    fn off_clears_masks_left_by_an_older_snap_pac() {
+        let d = dirs("stale");
+        enable(&d, &status(&d)).unwrap();
+        // O snap-pac sai (ou renomeia os hooks) depois do `on`.
+        fs::remove_file(d.system.join(PRE)).unwrap();
+        fs::remove_file(d.system.join(POST)).unwrap();
+        let gone = Status { snapg: state(&d, OWN_HOOK), snap_pac: Vec::new() };
+        disable(&d, &gone).unwrap();
+        assert!(fs::symlink_metadata(d.overrides.join(PRE)).is_err());
+        assert!(fs::symlink_metadata(d.overrides.join(POST)).is_err());
+        assert_eq!(state(&d, OWN_HOOK), HookState::Masked);
         let _ = fs::remove_dir_all(d.system.parent().unwrap());
     }
 

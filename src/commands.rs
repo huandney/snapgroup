@@ -100,8 +100,8 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    let log_offset = pacman_log::offset_now();
-    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, log_offset))?;
+    let anchor = pacman_log::anchor_now();
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, anchor, None))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -159,11 +159,13 @@ pub fn save_pacman() -> Result<()> {
     }
     let targets = pacman::read_targets();
     let desc = pacman::checkpoint_name(pacman::parent_cmdline().as_deref(), &targets);
-    let log_offset = pacman_log::offset_now();
+    let anchor = pacman_log::anchor_now();
 
     rollback::ensure_single_filesystem(&configs)?;
     let id = unique_group_id()?;
-    create_members(&configs, |cfg| snapper::create_pacman(cfg, &desc, id, log_offset))?;
+    create_members(&configs, |cfg| {
+        snapper::create(cfg, &desc, id, true, anchor, Some(group::TRIGGER_PACMAN))
+    })?;
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
     purge_expired_trash(&cfg);
@@ -757,6 +759,7 @@ fn restore_inner(
             regret.as_ref(),
             &kernel_labels,
             regret_kernel.as_deref(),
+            mount_path,
         )? {
             None => {
                 crate::ui::restore::print_cancelled();

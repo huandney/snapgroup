@@ -8,6 +8,7 @@ mod group;
 mod lock;
 mod orphan;
 mod pacman;
+mod pacman_db;
 mod pacman_hooks;
 mod pacman_log;
 mod proc;
@@ -32,11 +33,12 @@ fn main() -> Result<()> {
     match cli.command {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
-        cli::Command::Save { description, pacman } => {
+        cli::Command::Save { description: _, pacman: true } => {
+            let _lock = lock::acquire_waiting(std::time::Duration::from_secs(10))?;
+            commands::save_pacman()
+        }
+        cli::Command::Save { description, pacman: false } => {
             let _lock = lock::acquire()?;
-            if pacman {
-                return commands::save_pacman();
-            }
             commands::save(description)
         }
         cli::Command::Restore => {

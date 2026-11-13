@@ -1,9 +1,12 @@
-//! Telas do que o pacman fez: o detalhe de uma transação (`snapg log`) e a
-//! prévia do restore, que soma tudo o que mudou nos pacotes desde o ponto.
+//! Telas do que o pacman fez: o detalhe de uma transação (`snapg log`, pelo
+//! pacman.log) e a prévia do restore (pelos bancos de pacotes do snapshot e
+//! do sistema atual).
 
 use crate::group::{self, Group};
-use crate::pacman_log::{self, Change, NetChange, Op, State, Transaction};
-use crate::snapper;
+use crate::pacman_db::{self, NetChange};
+use crate::pacman_log::{self, Change, Log, Op, State, Transaction};
+use crate::{rollback, snapper};
+use std::path::Path;
 use crate::ui::checkpoints::picker_prompt;
 use crate::ui::snapshots::{count_text, member_badges};
 use crate::pacman_hooks::Status;
@@ -41,7 +44,7 @@ pub(crate) fn browse(groups: &[Group]) -> Result<()> {
     let log = pacman_log::read_log().ok();
     let transactions: Vec<Option<Transaction>> = groups
         .iter()
-        .map(|g| first_transaction(g, log.as_deref()))
+        .map(|g| first_transaction(g, log.as_ref()))
         .collect();
 
     let name_col = groups
@@ -83,9 +86,8 @@ pub(crate) fn browse(groups: &[Group]) -> Result<()> {
     }
 }
 
-fn first_transaction(group: &Group, log: Option<&[u8]>) -> Option<Transaction> {
-    let offset = group::pacman_log_offset(group)?;
-    pacman_log::since(log?, offset)?.into_iter().next()
+fn first_transaction(group: &Group, log: Option<&Log>) -> Option<Transaction> {
+    pacman_log::first(log?, group::pacman_log_anchor(group)?)
 }
 
 /// `snapg pacman`: quem faz os checkpoints agora.
@@ -181,26 +183,29 @@ fn show_transaction(group: &Group, tx: Option<&Transaction>) -> Result<()> {
     page_rows(&intro, intro_lines, ("Antes", "Depois"), &rows)
 }
 
-/// Prévia 3A, entre o seletor e a escolha de membros. Sem posição no log, ou
-/// sem pacote diferente desde então, não há o que mostrar e o fluxo segue.
-pub(crate) fn review_package_restore(group: &Group, kernel: &str) -> Result<PreviewFlow> {
-    if group::root_member(group)?.is_none() {
-        return Ok(PreviewFlow::Continue);
-    }
-    let Some(transactions) = pacman_log::since_group(group) else {
+/// Prévia 3A, entre o seletor e a escolha de membros: compara o banco de
+/// pacotes do snapshot do root com o do sistema atual. Vale para qualquer
+/// checkpoint com o root, inclusive os anteriores ao hook. Sem o root, sem
+/// banco legível ou sem diferença, não há o que mostrar e o fluxo segue.
+pub(crate) fn review_package_restore(group: &Group, kernel: &str, toplevel: &Path) -> Result<PreviewFlow> {
+    let Some(root) = group::root_member(group)? else {
         return Ok(PreviewFlow::Continue);
     };
-    let nets = pacman_log::net_changes(&transactions);
+    let Ok(snapshot) = rollback::member_snapshot_path(root, toplevel) else {
+        return Ok(PreviewFlow::Continue);
+    };
+    let Ok(nets) = pacman_db::changes_since(&snapshot) else {
+        return Ok(PreviewFlow::Continue);
+    };
     if nets.is_empty() {
         return Ok(PreviewFlow::Continue);
     }
-    let started = pacman_log::started_count(&transactions);
     loop {
-        render_preview(group, kernel, started, &nets);
+        render_preview(group, kernel, &nets);
         match console::Term::stdout().read_key().context("aguardar tecla")? {
             Key::Char('d') => {
                 let intro = || {
-                    header("Pacotes que o restore desfaz");
+                    header("Pacotes que o restore troca");
                     line(format_args!(
                         "{}",
                         style(format!("checkpoint {} · {}", group.id, short_datetime(group::date(group)))).dim()
@@ -216,7 +221,7 @@ pub(crate) fn review_package_restore(group: &Group, kernel: &str) -> Result<Prev
     }
 }
 
-fn render_preview(group: &Group, kernel: &str, started: usize, nets: &[NetChange]) {
+fn render_preview(group: &Group, kernel: &str, nets: &[NetChange]) {
     clear_screen();
     header("Restaurar checkpoint");
     line(format_args!(
@@ -229,8 +234,8 @@ fn render_preview(group: &Group, kernel: &str, started: usize, nets: &[NetChange
         style(format!(" · kernel {kernel}")).dim()
     ));
     println!();
-    let done = if started == 1 { "transação feita" } else { "transações feitas" };
-    line(format_args!("{}", style(format!("Restaurar o / desfaz {started} {done} desde então")).bold()));
+    let changed = count_text(nets.len(), "pacote", "pacotes");
+    line(format_args!("{}", style(format!("Restaurar o / muda {changed} em relação ao sistema atual")).bold()));
     line(format_args!("{}", style(net_summary(nets)).dim()));
 
     let boot: Vec<&NetChange> = nets
@@ -328,13 +333,20 @@ fn group_by_versions<'a>(nets: &[&'a NetChange]) -> Vec<(String, &'a NetChange)>
         .collect()
 }
 
-/// `linux-cachyos-headers` depois de `linux-cachyos` vira `-headers`.
+/// O que `name` repete de `first` até um hífen sai: `linux-cachyos-headers`
+/// depois de `linux-cachyos` vira `-headers`; `nvidia-580xx-utils` depois de
+/// `nvidia-580xx-dkms`, `-utils`.
 fn shorten_after(first: &str, name: &str) -> String {
-    match name.strip_prefix(first) {
-        Some(rest) if rest.starts_with('-') => rest.to_string(),
+    let common = first.bytes().zip(name.bytes()).take_while(|(a, b)| a == b).count();
+    if common == first.len() && name[common..].starts_with('-') {
+        return name[common..].to_string();
+    }
+    match name[..common].rfind('-') {
+        Some(cut) if cut > 0 => name[cut..].to_string(),
         _ => name.to_string(),
     }
 }
+
 
 fn counts_line(changes: &[Change]) -> String {
     let count = |op: Op| changes.iter().filter(|c| c.op == op).count();
@@ -469,5 +481,19 @@ fn page_rows(intro: &dyn Fn(), intro_lines: usize, heads: (&str, &str), rows: &[
             Key::Escape | Key::Enter => return Ok(()),
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_after;
+
+    #[test]
+    fn repeated_prefixes_are_cut_at_a_hyphen() {
+        assert_eq!(shorten_after("linux-cachyos", "linux-cachyos-headers"), "-headers");
+        assert_eq!(shorten_after("systemd", "systemd-libs"), "-libs");
+        assert_eq!(shorten_after("nvidia-580xx-dkms", "nvidia-580xx-utils"), "-utils");
+        assert_eq!(shorten_after("dkms", "glibc"), "glibc");
+        assert_eq!(shorten_after("lib32-a", "lib32-b"), "-b");
     }
 }

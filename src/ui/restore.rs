@@ -122,6 +122,7 @@ pub(crate) fn select_restore_plan(
     regret: Option<&RegretInfo>,
     kernel_labels: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
+    toplevel: &Path,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
     loop {
@@ -130,7 +131,7 @@ pub(crate) fn select_restore_plan(
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
                 if matches!(
-                    crate::ui::pacman::review_package_restore(group, kernel)?,
+                    crate::ui::pacman::review_package_restore(group, kernel, toplevel)?,
                     crate::ui::pacman::PreviewFlow::Back
                 ) {
                     continue;

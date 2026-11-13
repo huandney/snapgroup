@@ -16,6 +16,8 @@ pub const TRIGGER_KEY: &str = "snapgroup-trigger";
 pub const TRIGGER_PACMAN: &str = "pacman";
 /// Tamanho do `pacman.log` no instante do save: a transação do grupo começa ali.
 pub const PACMAN_LOG_KEY: &str = "snapgroup-pacman-log";
+/// Inode do `pacman.log` no save: um log trocado por outro não vale a posição.
+pub const PACMAN_LOG_INO_KEY: &str = "snapgroup-pacman-log-ino";
 const DEFAULT_NAME_PREFIX: &str = "Checkpoint ";
 /// Nome padrão antes da 0.8.0: `snapg save <id>`.
 const LEGACY_DEFAULT_NAME_PREFIX: &str = "snapg save ";
@@ -139,9 +141,13 @@ pub fn is_auto(group: &Group) -> bool {
     !group.members.is_empty() && group.members.iter().all(|m| member_is_auto(&m.snapshot))
 }
 
-/// Posição do `pacman.log` gravada no save (`None` em grupos anteriores a ela).
-pub fn pacman_log_offset(group: &Group) -> Option<u64> {
-    userdata_str(&group.members.first()?.snapshot, PACMAN_LOG_KEY)?.parse().ok()
+/// Âncora no `pacman.log` gravada no save (`None` em grupos anteriores a ela).
+pub fn pacman_log_anchor(group: &Group) -> Option<crate::pacman_log::Anchor> {
+    let snapshot = &group.members.first()?.snapshot;
+    Some(crate::pacman_log::Anchor {
+        offset: userdata_str(snapshot, PACMAN_LOG_KEY)?.parse().ok()?,
+        ino: userdata_str(snapshot, PACMAN_LOG_INO_KEY).and_then(|v| v.parse().ok()),
+    })
 }
 
 /// Grupo criado pelo hook do pacman.
