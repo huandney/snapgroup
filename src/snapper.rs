@@ -64,13 +64,20 @@ pub fn list(config: &str) -> Result<Vec<Snapshot>> {
 }
 
 /// Cria um membro de grupo. `auto` grava se o checkpoint saiu com o nome
-/// padrão: decide se ele entra na retenção (`KEEP_GROUPS`).
-pub fn create(config: &str, description: &str, group_id: i64, auto: bool) -> Result<u32> {
-    let userdata = format!(
-        "snapgroup-id={group_id},{}={}",
-        crate::group::AUTO_KEY,
-        u8::from(auto)
-    );
+/// padrão: decide se ele entra na retenção (`KEEP_GROUPS`). A posição do
+/// `pacman.log` deixa o restore mostrar o que mudou nos pacotes desde então.
+pub fn create(
+    config: &str,
+    description: &str,
+    group_id: i64,
+    auto: bool,
+    log_offset: Option<u64>,
+) -> Result<u32> {
+    use crate::group::{AUTO_KEY, PACMAN_LOG_KEY};
+    let mut userdata = format!("snapgroup-id={group_id},{AUTO_KEY}={}", u8::from(auto));
+    if let Some(offset) = log_offset {
+        userdata.push_str(&format!(",{PACMAN_LOG_KEY}={offset}"));
+    }
     create_with_userdata(config, description, &userdata)
 }
 

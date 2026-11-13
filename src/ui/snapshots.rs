@@ -1,7 +1,10 @@
 use crate::group::{self, Group, GroupId};
 use crate::orphan::OrphanBackup;
 use crate::snapper;
-use crate::ui::checkpoints::{CheckpointColumns, KERNEL_HEADER, NAME_HEADER, kernel_label, name_cell};
+use crate::ui::checkpoints::{
+    CheckpointColumns, KERNEL_HEADER, MIN_NAME_WITH_ORIGIN, NAME_HEADER, ORIGIN_HEADER, kernel_label,
+    name_cell, origin_cell,
+};
 use crate::ui::term::{
     AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, note, note_apart,
     result, result_section, section_header, short_datetime, warn,
@@ -208,7 +211,7 @@ pub(crate) fn print_untrash_done(n: usize) {
     ));
 }
 
-fn count_text(n: usize, singular: &str, plural: &str) -> String {
+pub(crate) fn count_text(n: usize, singular: &str, plural: &str) -> String {
     let word = if n == 1 { singular } else { plural };
     format!("{n} {word}")
 }
@@ -248,9 +251,11 @@ pub(crate) fn print_groups(
         rows.push((g, member_badges(&mut mountpoints)));
     }
 
+    let origins = crate::pacman_log::origin_labels(groups);
     let columns = CheckpointColumns::new(
         groups,
         kernel_labels,
+        &origins,
         NAME_HEADER.len(),
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
@@ -262,10 +267,20 @@ pub(crate) fn print_groups(
         .max()
         .unwrap_or(MEMBERS_HEADER.len())
         .max(MEMBERS_HEADER.len());
-    let name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col));
+    let mut origin_col = columns.origin;
+    let mut name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col, origin_col));
+    if origin_col > 0 && name_col < columns.name.min(MIN_NAME_WITH_ORIGIN) {
+        origin_col = 0;
+        name_col = columns.name.min(list_name_col_for_terminal(kernel_col, members_col, 0));
+    }
+    let origin_header = if origin_col > 0 {
+        format!("{}   ", style(format!("{ORIGIN_HEADER:<origin_col$}")).bold())
+    } else {
+        String::new()
+    };
 
     line(format_args!(
-        "{}   {}   {}   {}   {}",
+        "{}   {}   {origin_header}{}   {}   {}",
         style(format!("{:<ID_COL$}", "ID")).bold(),
         style(format!("{:<name_col$}", NAME_HEADER)).bold(),
         style(format!("{:<kernel_col$}", KERNEL_HEADER)).bold(),
@@ -276,8 +291,9 @@ pub(crate) fn print_groups(
     for (g, members) in rows {
         let desc_cell = name_cell(g, name_col);
         let kernel = kernel_label(kernel_labels, g.id);
+        let origin = styled_origin(origin_cell(&origins, g.id, origin_col));
         line(format_args!(
-            "{}   {}   {:<kernel_col$}   {:<DATE_COL$}   {}",
+            "{}   {}   {origin}{:<kernel_col$}   {:<DATE_COL$}   {}",
             style(format!("{:>ID_COL$}", g.id)).dim(),
             desc_cell,
             style(kernel).dim(),
@@ -288,16 +304,30 @@ pub(crate) fn print_groups(
     Ok(())
 }
 
-fn list_name_col_for_terminal(kernel_col: usize, members_col: usize) -> usize {
+/// Na lista, a contagem de pacotes em verde e o resto apagado.
+fn styled_origin(cell: String) -> String {
+    let Some((word, rest)) = cell.split_once(' ') else {
+        return style(cell).dim().to_string();
+    };
+    if word != "pacman" || rest.trim().is_empty() {
+        return style(cell).dim().to_string();
+    }
+    let count = rest.trim_end();
+    let pad = &rest[count.len()..];
+    format!("{} {}{pad}", style(word).dim(), style(count).green())
+}
+
+fn list_name_col_for_terminal(kernel_col: usize, members_col: usize, origin_col: usize) -> usize {
     let width = console::Term::stdout().size().1 as usize;
-    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3);
+    let origin = if origin_col > 0 { origin_col + 3 } else { 0 };
+    let fixed = ID_COL + kernel_col + DATE_COL + members_col + (4 * 3) + origin;
     width
         .saturating_sub(crate::ui::term::CONTENT_INDENT.chars().count())
         .saturating_sub(fixed)
         .max(NAME_HEADER.len())
 }
 
-fn member_badges(mountpoints: &mut [String]) -> String {
+pub(crate) fn member_badges(mountpoints: &mut [String]) -> String {
     mountpoints.sort_by(|a, b| match (a.as_str(), b.as_str()) {
         ("/", "/") => std::cmp::Ordering::Equal,
         ("/", _) => std::cmp::Ordering::Less,

@@ -139,6 +139,11 @@ pub fn is_auto(group: &Group) -> bool {
     !group.members.is_empty() && group.members.iter().all(|m| member_is_auto(&m.snapshot))
 }
 
+/// Posição do `pacman.log` gravada no save (`None` em grupos anteriores a ela).
+pub fn pacman_log_offset(group: &Group) -> Option<u64> {
+    userdata_str(&group.members.first()?.snapshot, PACMAN_LOG_KEY)?.parse().ok()
+}
+
 /// Grupo criado pelo hook do pacman.
 pub fn is_pacman(group: &Group) -> bool {
     group

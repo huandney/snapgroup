@@ -5,6 +5,7 @@ use crate::doctor;
 use crate::group::{self, Group, Member};
 use crate::orphan::{self, OrphanBackup};
 use crate::pacman;
+use crate::pacman_log;
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::space;
@@ -98,7 +99,8 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto))?;
+    let log_offset = pacman_log::offset_now();
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, log_offset))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -149,7 +151,7 @@ pub fn save_pacman() -> Result<()> {
     }
     let targets = pacman::read_targets();
     let desc = pacman::checkpoint_name(pacman::parent_cmdline().as_deref(), &targets);
-    let log_offset = pacman::log_offset();
+    let log_offset = pacman_log::offset_now();
 
     rollback::ensure_single_filesystem(&configs)?;
     let id = unique_group_id()?;
@@ -159,6 +161,16 @@ pub fn save_pacman() -> Result<()> {
     purge_expired_trash(&cfg);
     run_cleanup(&cfg);
     Ok(())
+}
+
+/// `snapg log`: só leitura, como o `list`.
+pub fn log() -> Result<()> {
+    let groups: Vec<Group> = group::list_groups()?.into_iter().filter(group::is_pacman).collect();
+    if groups.is_empty() {
+        crate::ui::pacman::print_no_pacman_groups();
+        return Ok(());
+    }
+    crate::ui::pacman::browse(&groups)
 }
 
 /// Cria um membro por config. Um membro que falha desfaz os já criados: grupo

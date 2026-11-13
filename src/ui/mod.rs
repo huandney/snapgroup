@@ -3,6 +3,7 @@ pub(crate) mod boot_sync;
 pub(crate) mod checkpoints;
 pub(crate) mod delete;
 pub(crate) mod doctor;
+pub(crate) mod pacman;
 pub(crate) mod rename;
 pub(crate) mod restore;
 pub(crate) mod rollback;

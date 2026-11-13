@@ -55,6 +55,7 @@ fn main() -> Result<()> {
             rename::run(id, description)
         }
         cli::Command::List => commands::list(),
+        cli::Command::Log => commands::log(),
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
         cli::Command::PendingCheck => commands::pending_check(),
         cli::Command::SpaceProbe => commands::space_probe(),

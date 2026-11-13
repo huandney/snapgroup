@@ -1,11 +1,9 @@
-//! Entrada do hook do pacman: de onde sai o nome do checkpoint e a âncora no
-//! `pacman.log`. O hook roda com `NeedsTargets` (pacotes no stdin) e tem o
+//! Entrada do hook do pacman: de onde sai o nome do checkpoint. O hook roda com `NeedsTargets` (pacotes no stdin) e tem o
 //! pacman como processo pai, então a linha de comando dele diz a operação.
 
 use std::fs;
 use std::io::{self, BufRead};
 
-const LOG_PATH: &str = "/var/log/pacman.log";
 /// Pacotes listados no nome antes do `+N`.
 const NAMED_TARGETS: usize = 3;
 
@@ -34,12 +32,6 @@ pub fn parent_cmdline() -> Option<Vec<String>> {
         .collect();
     let program = args.first()?.rsplit('/').next()?;
     (program == "pacman").then_some(args)
-}
-
-/// Tamanho do log agora: a transação que este checkpoint precede é escrita a
-/// partir daqui.
-pub fn log_offset() -> Option<u64> {
-    fs::metadata(LOG_PATH).ok().map(|m| m.len())
 }
 
 /// Nome do checkpoint: `pacman -Syu`, `pacman -U openai-codex-bin`,

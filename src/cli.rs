@@ -26,6 +26,8 @@ pub enum Command {
     Restore,
     /// Lista grupos existentes
     List,
+    /// Mostra o que cada checkpoint do pacman instalou, atualizou ou removeu
+    Log,
     /// Renomeia a descrição de um checkpoint snapg
     Rename {
         /// ID do checkpoint. Sem ID, abre seleção interativa.

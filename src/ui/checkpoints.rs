@@ -8,6 +8,9 @@ use std::collections::HashMap;
 
 pub(crate) const KERNEL_HEADER: &str = "Kernel";
 pub(crate) const NAME_HEADER: &str = "Nome";
+pub(crate) const ORIGIN_HEADER: &str = "Origem";
+/// Abaixo disso o Nome deixa de dizer algo: a coluna Origem sai antes.
+pub(crate) const MIN_NAME_WITH_ORIGIN: usize = 10;
 const DATE_HEADER: &str = "Data";
 const MEMBERS_HEADER: &str = "Membros";
 const ID_HEADER: &str = "ID";
@@ -16,6 +19,8 @@ const MEMBERS_WIDTH: usize = 7;
 
 pub(crate) struct CheckpointColumns {
     pub(crate) name: usize,
+    /// Largura da Origem; `0` = coluna escondida.
+    pub(crate) origin: usize,
     pub(crate) kernel: usize,
     id: usize,
 }
@@ -24,6 +29,7 @@ impl CheckpointColumns {
     pub(crate) fn new(
         groups: &[Group],
         kernel_labels: &HashMap<GroupId, String>,
+        origins: &HashMap<GroupId, String>,
         minimum_name: usize,
         maximum_name: usize,
         minimum_kernel: usize,
@@ -48,7 +54,7 @@ impl CheckpointColumns {
             .max()
             .unwrap_or(ID_HEADER.len())
             .max(ID_HEADER.len());
-        Self { name, kernel, id }
+        Self { name, origin: origin_width(origins), kernel, id }
     }
 
     pub(crate) fn fit_to_terminal(mut self, marker_width: usize) -> Self {
@@ -58,14 +64,40 @@ impl CheckpointColumns {
     }
 
     fn fit_name_to_width(&mut self, terminal_width: usize, marker_width: usize) {
-        let fixed = self.kernel + DATE_WIDTH + 6 + 3 + MEMBERS_WIDTH + 3 + self.id;
-        let available = terminal_width
+        let mut available = self.available_name(terminal_width, marker_width);
+        if self.origin > 0 && available < self.name.min(MIN_NAME_WITH_ORIGIN) {
+            self.origin = 0;
+            available = self.available_name(terminal_width, marker_width);
+        }
+        self.name = self.name.min(available);
+    }
+
+    fn available_name(&self, terminal_width: usize, marker_width: usize) -> usize {
+        let origin = if self.origin > 0 { self.origin + 3 } else { 0 };
+        let fixed = self.kernel + DATE_WIDTH + 6 + 3 + MEMBERS_WIDTH + 3 + self.id + origin;
+        terminal_width
             .saturating_sub(CONTENT_INDENT.chars().count())
             .saturating_sub(marker_width)
             .saturating_sub(fixed)
-            .max(NAME_HEADER.len());
-        self.name = self.name.min(available);
+            .max(NAME_HEADER.len())
     }
+}
+
+/// Largura da coluna Origem: o maior rótulo, ou `0` sem grupos do pacman.
+pub(crate) fn origin_width(origins: &HashMap<GroupId, String>) -> usize {
+    let Some(widest) = origins.values().map(|label| label.chars().count()).max() else {
+        return 0;
+    };
+    widest.max(ORIGIN_HEADER.len())
+}
+
+/// Célula de Origem com o separador da coluna seguinte, ou vazio se escondida.
+pub(crate) fn origin_cell(origins: &HashMap<GroupId, String>, id: GroupId, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let label = origins.get(&id).map(String::as_str).unwrap_or("");
+    format!("{label:<width$}   ")
 }
 
 pub(crate) fn kernel_label(
@@ -87,12 +119,14 @@ pub(crate) fn name_cell(group: &Group, width: usize) -> String {
 pub(crate) fn picker_row(
     group: &Group,
     kernel_labels: &HashMap<GroupId, String>,
+    origins: &HashMap<GroupId, String>,
     columns: &CheckpointColumns,
 ) -> String {
     let name = name_cell(group, columns.name);
+    let origin = origin_cell(origins, group.id, columns.origin);
     let kernel = kernel_label(kernel_labels, group.id);
     format!(
-        "{name}   {kernel:<kernel_col$}   {:<DATE_WIDTH$}   {:<MEMBERS_WIDTH$}   {:<id_col$}",
+        "{name}   {origin}{kernel:<kernel_col$}   {:<DATE_WIDTH$}   {:<MEMBERS_WIDTH$}   {:<id_col$}",
         short_datetime(group::date(group)),
         group.members.len(),
         format!("#{}", group.id),
@@ -102,8 +136,13 @@ pub(crate) fn picker_row(
 }
 
 pub(crate) fn picker_header(columns: &CheckpointColumns) -> String {
+    let origin = if columns.origin > 0 {
+        format!("{ORIGIN_HEADER:<width$}   ", width = columns.origin)
+    } else {
+        String::new()
+    };
     format!(
-        "{NAME_HEADER:<name_col$}   {KERNEL_HEADER:<kernel_col$}   {DATE_HEADER:<DATE_WIDTH$}   \
+        "{NAME_HEADER:<name_col$}   {origin}{KERNEL_HEADER:<kernel_col$}   {DATE_HEADER:<DATE_WIDTH$}   \
          {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER:<id_col$}",
         name_col = columns.name,
         kernel_col = columns.kernel,
@@ -250,7 +289,7 @@ mod tests {
     fn columns_respect_limits_and_kernel_width() {
         let groups = vec![group(7, "nome muito comprido")];
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
-        let columns = CheckpointColumns::new(&groups, &labels, 4, 10, 6);
+        let columns = CheckpointColumns::new(&groups, &labels, &HashMap::new(), 4, 10, 6);
 
         assert_eq!(columns.name, 10);
         assert_eq!(columns.kernel, 16);
@@ -262,10 +301,10 @@ mod tests {
         let group = group(7, "Teste");
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
         let columns =
-            CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
+            CheckpointColumns::new(std::slice::from_ref(&group), &labels, &HashMap::new(), 4, 36, 6);
 
         assert_eq!(
-            picker_row(&group, &labels, &columns),
+            picker_row(&group, &labels, &HashMap::new(), &columns),
             "Teste   7.0.12-1-cachyos   2026-07-10 20:50   1         #7"
         );
     }
@@ -275,9 +314,9 @@ mod tests {
         let group = group(7, "Teste");
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
         let columns =
-            CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
+            CheckpointColumns::new(std::slice::from_ref(&group), &labels, &HashMap::new(), 4, 36, 6);
         let header = picker_header(&columns);
-        let row = picker_row(&group, &labels, &columns);
+        let row = picker_row(&group, &labels, &HashMap::new(), &columns);
 
         assert_eq!(header.find("Kernel"), row.find("7.0.12-1-cachyos"));
         assert_eq!(header.find("Data"), row.find("2026-07-10 20:50"));
@@ -291,17 +330,48 @@ mod tests {
         let groups = vec![group(7, "um nome de checkpoint deliberadamente muito comprido")];
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
 
-        let mut narrow = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        let mut narrow = CheckpointColumns::new(&groups, &labels, &HashMap::new(), 4, 36, 6);
         narrow.fit_name_to_width(80, 6);
         assert_eq!(narrow.name, 18);
         assert_eq!(picker_header(&narrow).len() + 9, 80);
 
-        let mut medium = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        let mut medium = CheckpointColumns::new(&groups, &labels, &HashMap::new(), 4, 36, 6);
         medium.fit_name_to_width(100, 6);
         assert_eq!(medium.name, 36);
 
-        let mut wide = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
+        let mut wide = CheckpointColumns::new(&groups, &labels, &HashMap::new(), 4, 36, 6);
         wide.fit_name_to_width(120, 6);
         assert_eq!(wide.name, 36);
+    }
+
+    #[test]
+    fn origin_column_sits_after_the_name_and_hides_when_the_name_would_starve() {
+        let group = group(7, "pacman -Syu");
+        let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
+        let origins = HashMap::from([(7, "pacman ↑14".to_string())]);
+
+        let mut wide = CheckpointColumns::new(std::slice::from_ref(&group), &labels, &origins, 4, 36, 6);
+        wide.fit_name_to_width(120, 2);
+        assert_eq!(wide.origin, "pacman ↑14".chars().count());
+        let header = picker_header(&wide);
+        let row = picker_row(&group, &labels, &origins, &wide);
+        assert_eq!(header.find("Origem"), row.find("pacman ↑14"));
+        assert_eq!(
+            header.chars().position(|c| c == 'K'),
+            row.chars().position(|c| c == '7')
+        );
+
+        // Em 80 colunas o Nome ficaria com menos de 10: a Origem sai.
+        let mut narrow = CheckpointColumns::new(std::slice::from_ref(&group), &labels, &origins, 4, 36, 6);
+        narrow.fit_name_to_width(80, 2);
+        assert_eq!(narrow.origin, 0);
+        assert!(!picker_header(&narrow).contains("Origem"));
+    }
+
+    #[test]
+    fn origin_column_needs_a_pacman_group() {
+        let groups = vec![group(7, "Teste")];
+        let columns = CheckpointColumns::new(&groups, &HashMap::new(), &HashMap::new(), 4, 36, 6);
+        assert_eq!(columns.origin, 0);
     }
 }

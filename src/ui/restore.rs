@@ -1,5 +1,6 @@
 use crate::btrfs;
 use crate::group::{self, Group, GroupId};
+use crate::pacman_log;
 use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
@@ -127,6 +128,13 @@ pub(crate) fn select_restore_plan(
         match select_restore_action(groups, regret, kernel_labels, regret_kernel)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
+                let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
+                if matches!(
+                    crate::ui::pacman::review_package_restore(group, kernel)?,
+                    crate::ui::pacman::PreviewFlow::Back
+                ) {
+                    continue;
+                }
                 loop {
                     let Some(selected) = select_checkpoint_members(group)? else {
                         break;
@@ -191,9 +199,11 @@ pub(crate) fn select_restore_action(
     clear_screen();
     header("Pontos de restauração");
     let minimum_name = restore_name_min(regret.is_some());
+    let origins = pacman_log::origin_labels(groups);
     let mut columns = CheckpointColumns::new(
         groups,
         kernel_labels,
+        &origins,
         minimum_name,
         RESTORE_NAME_COL_MAX,
         1,
@@ -206,8 +216,9 @@ pub(crate) fn select_restore_action(
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
         let title = if r.saved { "↺ Regret guardado" } else { "↺ Regret" };
+        let origin = " ".repeat(if columns.origin > 0 { columns.origin + 3 } else { 0 });
         let text = format!(
-            "{:<name_col$}   {:<kernel_col$}   {}   {:<members_col$}",
+            "{:<name_col$}   {origin}{:<kernel_col$}   {}   {:<members_col$}",
             title,
             kernel,
             short_datetime(&r.creation_time),
@@ -221,7 +232,7 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
-        let text = picker_row(g, kernel_labels, &columns);
+        let text = picker_row(g, kernel_labels, &origins, &columns);
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
     }

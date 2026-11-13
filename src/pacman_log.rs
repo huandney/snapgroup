@@ -1,15 +1,20 @@
 //! Leitura do `/var/log/pacman.log` a partir da posição que o checkpoint do
 //! pacman gravou. O log fica no subvolume `@log`, fora do root: sobrevive aos
 //! restores e guarda inclusive as transações que um restore desfez.
-// Consumido pelas telas de detalhe e de prévia do restore (próximo passo).
-#![allow(dead_code)]
 
-use anyhow::{Context, Result, bail};
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use crate::group::{self, Group, GroupId};
+use anyhow::{Context, Result};
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
 
 const LOG_PATH: &str = "/var/log/pacman.log";
+/// Pacotes que mexem no boot ou no próprio mecanismo de restore: aparecem
+/// primeiro e destacados. Prefixos (`linux` cobre `linux-cachyos-headers`,
+/// `systemd` cobre `systemd-libs`).
+const BOOT_PREFIXES: &[&str] = &[
+    "linux", "nvidia", "dkms", "mkinitcpio", "limine", "systemd", "glibc", "intel-ucode",
+    "amd-ucode", "cryptsetup", "btrfs-progs", "snapper", "snapgroup",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Op {
@@ -64,19 +69,59 @@ enum Event {
     ConfigFile(String),
 }
 
-/// Transações do log a partir de `offset` até o fim. A primeira é a do
-/// checkpoint: o hook roda depois do `Running` dela e antes do `started`.
+/// Tamanho do log agora: a transação seguinte é escrita a partir daqui.
+pub fn offset_now() -> Option<u64> {
+    fs::metadata(LOG_PATH).ok().map(|m| m.len())
+}
+
+pub fn read_log() -> Result<Vec<u8>> {
+    fs::read(LOG_PATH).with_context(|| format!("ler {LOG_PATH}"))
+}
+
+/// Transações do log a partir de `offset` até o fim. Num checkpoint do pacman
+/// a primeira é a dele: o hook roda depois do `Running` e antes do `started`.
 /// Log menor que `offset` foi truncado ou trocado: não dá para ancorar.
-pub fn read_since(offset: u64) -> Result<Vec<Transaction>> {
-    let mut file = File::open(LOG_PATH).with_context(|| format!("abrir {LOG_PATH}"))?;
-    let len = file.metadata().with_context(|| format!("ler {LOG_PATH}"))?.len();
-    if len < offset {
-        bail!("{LOG_PATH} tem {len} bytes, menos que a posição gravada ({offset}): o log foi truncado");
+pub fn since(log: &[u8], offset: u64) -> Option<Vec<Transaction>> {
+    let tail = log.get(usize::try_from(offset).ok()?..)?;
+    Some(parse(&String::from_utf8_lossy(tail)))
+}
+
+/// Transações feitas a partir do checkpoint, se ele gravou a posição no log.
+pub fn since_group(group: &Group) -> Option<Vec<Transaction>> {
+    let offset = group::pacman_log_offset(group)?;
+    since(&read_log().ok()?, offset)
+}
+
+/// Rótulo da coluna Origem: `pacman ↑14` (pacotes da transação do grupo) ou
+/// `manual`. Vazio quando nenhum grupo veio do pacman: a coluna não aparece.
+pub fn origin_labels(groups: &[Group]) -> HashMap<GroupId, String> {
+    if !groups.iter().any(group::is_pacman) {
+        return HashMap::new();
     }
-    file.seek(SeekFrom::Start(offset)).with_context(|| format!("posicionar em {LOG_PATH}"))?;
-    let mut raw = Vec::new();
-    file.read_to_end(&mut raw).with_context(|| format!("ler {LOG_PATH}"))?;
-    Ok(parse(&String::from_utf8_lossy(&raw)))
+    let log = read_log().ok();
+    groups
+        .iter()
+        .map(|g| (g.id, origin_label(g, log.as_deref())))
+        .collect()
+}
+
+fn origin_label(group: &Group, log: Option<&[u8]>) -> String {
+    if !group::is_pacman(group) {
+        return "manual".to_string();
+    }
+    let count = group::pacman_log_offset(group)
+        .zip(log)
+        .and_then(|(offset, log)| since(log, offset))
+        .and_then(|txs| txs.into_iter().next())
+        .map(|tx| tx.changes.len());
+    match count {
+        Some(n) => format!("pacman ↑{n}"),
+        None => "pacman".to_string(),
+    }
+}
+
+pub fn is_boot_package(name: &str) -> bool {
+    BOOT_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 pub fn parse(text: &str) -> Vec<Transaction> {
@@ -319,12 +364,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn since_rejects_an_anchor_past_the_end() {
+        let log = KERNEL_UPGRADE.as_bytes();
+        assert!(super::since(log, log.len() as u64 + 1).is_none());
+        assert_eq!(super::since(log, log.len() as u64).unwrap(), Vec::new());
+        assert_eq!(super::since(log, 0).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn boot_packages_match_by_prefix() {
+        assert!(super::is_boot_package("linux-cachyos-headers"));
+        assert!(super::is_boot_package("systemd-libs"));
+        assert!(super::is_boot_package("snapgroup"));
+        assert!(!super::is_boot_package("lib32-systemd"));
+        assert!(!super::is_boot_package("clang"));
+    }
+
     /// Lê o log real da máquina inteiro: toda transação começada tem de virar
     /// uma `Transaction` começada, e toda concluída, uma concluída.
     #[test]
     #[ignore]
     fn real_log_matches_the_transaction_markers() {
-        let text = String::from_utf8_lossy(&std::fs::read(super::LOG_PATH).unwrap()).into_owned();
+        let raw = super::read_log().unwrap();
+        let text = String::from_utf8_lossy(&raw).into_owned();
         let txs = parse(&text);
         let started = text.lines().filter(|l| l.ends_with("] [ALPM] transaction started")).count();
         let completed = text.lines().filter(|l| l.ends_with("] [ALPM] transaction completed")).count();
@@ -337,7 +400,7 @@ mod tests {
         let Ok(offset) = std::env::var("SNAPG_LOG_OFFSET") else {
             return;
         };
-        let txs = super::read_since(offset.parse().unwrap()).unwrap();
+        let txs = super::since(&raw, offset.parse().unwrap()).unwrap();
         println!(
             "desde {offset}: 1ª {:?} com {} pacotes · {} começadas · {} pacotes líquidos",
             txs[0].state,
