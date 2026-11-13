@@ -1396,11 +1396,9 @@ fn delete_interactive(
     };
     let chosen_groups: BTreeSet<usize> = plan.groups.iter().copied().collect();
     let chosen_orphans: BTreeSet<usize> = plan.orphans.iter().copied().collect();
-    let predicted = match space.estimate(&chosen_groups, &chosen_orphans) {
-        Estimate::Ready { orphans, auto, fixed, .. } if purge => Some(orphans + auto + fixed),
-        Estimate::Ready { orphans, .. } => Some(orphans),
-        _ => None,
-    };
+    // Sem purge, os checkpoints vão para a lixeira: agora só os backups saem.
+    let none = BTreeSet::new();
+    let predicted = space.freed(if purge { &chosen_groups } else { &none }, &chosen_orphans);
 
     let free_before = free_bytes(Path::new("/"));
     let targets: Vec<&OrphanBackup> = plan.orphans.iter().map(|&i| &orphans[i]).collect();
@@ -1417,7 +1415,7 @@ fn delete_interactive(
 
 /// Espera o btrfs terminar de liberar os blocos (o delete de subvolume é
 /// assíncrono) e mostra o espaço livre antes e depois.
-fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<u64>) {
+fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<space::Freed>) {
     let pb = crate::ui::term::spinner("aguardando o btrfs liberar o espaço…".to_string());
     let synced = std::process::Command::new("btrfs")
         .args(["subvolume", "sync"])
@@ -1492,19 +1490,37 @@ impl SpaceEstimator {
             Some(Ok(map)) => map,
         };
         // Cada tipo entra sobre os anteriores: o que ele acrescenta é a parte
-        // dele. Assim as três partes somam o total da seleção.
+        // dele. Assim as três partes somam o total da seleção. Só dados: é o
+        // que volta ao livre do `df`.
         let mut ids: Vec<u64> = orphans.iter().flat_map(|&i| self.orphan_ids[i].iter().copied()).collect();
-        let orphans_freed = map.freed(&ids).total();
+        let orphans_freed = map.freed(&ids).data;
         ids.extend(groups.iter().filter(|&&i| self.auto[i]).flat_map(|&i| self.group_ids[i].iter().copied()));
-        let with_auto = map.freed(&ids).total();
+        let with_auto = map.freed(&ids).data;
         ids.extend(groups.iter().filter(|&&i| !self.auto[i]).flat_map(|&i| self.group_ids[i].iter().copied()));
-        let all = map.freed(&ids).total();
+        let all = map.freed(&ids);
         Estimate::Ready {
             orphans: orphans_freed,
             auto: with_auto.saturating_sub(orphans_freed),
-            fixed: all.saturating_sub(with_auto),
-            scanned: map.stats.data_bytes + map.stats.metadata_bytes,
+            fixed: all.data.saturating_sub(with_auto),
+            metadata: all.metadata,
+            scanned: map.stats.data_bytes,
         }
+    }
+
+    /// Dados e metadados que saem com a seleção, se a leitura terminou.
+    fn freed(&mut self, groups: &BTreeSet<usize>, orphans: &BTreeSet<usize>) -> Option<space::Freed> {
+        let Estimate::Ready { .. } = self.estimate(groups, orphans) else {
+            return None;
+        };
+        let Some(Ok(map)) = &self.map else {
+            return None;
+        };
+        let ids: Vec<u64> = orphans
+            .iter()
+            .flat_map(|&i| self.orphan_ids[i].iter().copied())
+            .chain(groups.iter().flat_map(|&i| self.group_ids[i].iter().copied()))
+            .collect();
+        Some(map.freed(&ids))
     }
 }
 

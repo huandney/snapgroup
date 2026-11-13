@@ -84,11 +84,20 @@ pub(crate) fn print_orphan_scan_failed(e: &anyhow::Error) {
 }
 
 /// Espaço livre antes e depois do delete, ao lado do previsto pela tela.
-pub(crate) fn print_space_freed(before: u64, after: u64, predicted: Option<u64>, synced: bool) {
+/// `liberados` vem do statvfs, que só enxerga dados: compara com a parte de
+/// dados da previsão; o metadado sai junto, mas fica reservado no btrfs.
+pub(crate) fn print_space_freed(before: u64, after: u64, predicted: Option<crate::space::Freed>, synced: bool) {
     let freed = after.saturating_sub(before);
-    let predicted = predicted
-        .map(|p| format!("  ·  previsto {}", crate::ui::delete::human_bytes(p)))
-        .unwrap_or_default();
+    let human = crate::ui::delete::human_bytes;
+    let predicted = match predicted {
+        Some(p) if p.metadata > 0 => format!(
+            "  ·  previsto {} + {} de metadados (ficam reservados)",
+            human(p.data),
+            human(p.metadata)
+        ),
+        Some(p) => format!("  ·  previsto {}", human(p.data)),
+        None => String::new(),
+    };
     println!(
         "{} liberados {}  {}",
         style("✓").green().bold(),

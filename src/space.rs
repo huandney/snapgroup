@@ -98,12 +98,6 @@ pub struct Freed {
     pub metadata: u64,
 }
 
-impl Freed {
-    pub fn total(self) -> u64 {
-        self.data + self.metadata
-    }
-}
-
 impl SpaceMap {
     /// Bytes que saem do disco se todos os `tree_ids` forem apagados. Ids
     /// desconhecidos são ignorados.
@@ -771,6 +765,17 @@ mod tests {
             let used = line.split("Used:").nth(1).unwrap().split_whitespace().next().unwrap();
             used.trim_end_matches(',').parse::<u64>().unwrap()
         };
+        // O que o `df` mostra: só a parte de dados aparece aqui; o metadado
+        // liberado fica reservado nos chunks de metadados.
+        let free = || {
+            run(&["btrfs", "filesystem", "sync", "."]);
+            let c_path = std::ffi::CString::new(top.to_str().unwrap()).unwrap();
+            let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            // SAFETY: caminho C válido; statvfs preenche a struct quando devolve 0.
+            assert_eq!(unsafe { libc::statvfs(c_path.as_ptr(), st.as_mut_ptr()) }, 0);
+            let st = unsafe { st.assume_init() };
+            st.f_bavail * st.f_frsize
+        };
         let id = |name: &str| crate::btrfs::subvol_id(&top.join(name)).unwrap();
 
         run(&["btrfs", "subvolume", "create", "sp_live"]);
@@ -785,6 +790,7 @@ mod tests {
         let (s1, s2) = (id("sp_s1"), id("sp_s2"));
 
         let before = data_used();
+        let free_before = free();
         let device = crate::btrfs::fs_device(top.to_str().unwrap()).unwrap();
         let map = super::scan(Path::new(&device)).unwrap();
         let only_s1 = map.freed(&[s1]);
@@ -796,9 +802,11 @@ mod tests {
         run(&["btrfs", "subvolume", "sync", "."]);
         let after_s1 = data_used();
         assert_eq!(before - after_s1, only_s1.data);
+        assert_eq!(free() - free_before, only_s1.data, "o livre sobe só a parte de dados");
         run(&["btrfs", "subvolume", "delete", "sp_s2"]);
         run(&["btrfs", "subvolume", "sync", "."]);
         assert_eq!(before - data_used(), both.data);
+        assert_eq!(free() - free_before, both.data);
 
         run(&["btrfs", "subvolume", "delete", "sp_live"]);
     }

@@ -23,7 +23,9 @@ pub(crate) struct DeletePlan {
 pub(crate) enum Estimate {
     Pending,
     Unavailable(String),
-    Ready { orphans: u64, auto: u64, fixed: u64, scanned: u64 },
+    /// Partes em bytes de dados, os que voltam ao livre do `df`. `metadata` é o
+    /// da seleção inteira: sai das árvores, mas fica reservado no btrfs.
+    Ready { orphans: u64, auto: u64, fixed: u64, metadata: u64, scanned: u64 },
 }
 
 /// Rosa dos checkpoints fixos: longe do amarelo ("agora") e do azul-claro
@@ -280,9 +282,9 @@ fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: 
             style("░".repeat(cells)).dim().to_string(),
             style(format!("espaço indisponível: {reason}")).dim().to_string(),
         ),
-        Estimate::Ready { orphans, auto, fixed, scanned } => (
+        Estimate::Ready { orphans, auto, fixed, metadata, scanned } => (
             space_bar(&[(*orphans, Paint::Now), (*auto, Paint::Purge), (*fixed, Paint::Fixed)], *scanned, cells),
-            freed_text(ctx, sel, *orphans, *auto, *fixed),
+            freed_text(ctx, sel, *orphans, *auto, *fixed) + &metadata_note(sel, *metadata),
         ),
     };
     vec![
@@ -291,6 +293,14 @@ fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: 
         format!("{CONTENT_INDENT}{text}"),
         format!("{CONTENT_INDENT}{}", style(counts_text(ctx, sel)).dim()),
     ]
+}
+
+/// " · +248 MiB de metadados ficam reservados", apagado: não entra no `df`.
+fn metadata_note(sel: &Selection, metadata: u64) -> String {
+    if sel.is_empty() || metadata == 0 {
+        return String::new();
+    }
+    style(format!(" · +{} de metadados ficam reservados", human_bytes(metadata))).dim().to_string()
 }
 
 #[derive(Clone, Copy)]
