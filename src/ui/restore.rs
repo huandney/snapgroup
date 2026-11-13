@@ -8,7 +8,7 @@ use crate::ui::checkpoints::{
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, fail, header, input_line, line, note,
+    THEME, branch, clear_screen, confirm, content_width, fail, header, input_line, line, note, note_apart,
     picker_page_len, result, result_section, warn, warn_detail,
     prompt_bold,
     prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
@@ -398,7 +398,7 @@ pub(crate) fn print_no_root_snapshots() {
 }
 
 pub(crate) fn print_cancelled() {
-    note(format_args!("cancelado"));
+    note_apart(format_args!("cancelado"));
 }
 
 pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
@@ -431,7 +431,7 @@ pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
 }
 
 pub(crate) fn print_cancelled_boot_risk() {
-    note(format_args!("restauração cancelada"));
+    note_apart(format_args!("restauração cancelada"));
     note(format_args!("/boot não foi alterado"));
 }
 
@@ -919,7 +919,6 @@ pub(crate) fn print_auto_revert_failed(error: &anyhow::Error, mount_path: &Path)
 }
 
 pub(crate) fn print_partial_reverted() {
-    println!();
     result_section("Revertido");
     result(format_args!("rollback parcial revertido — sistema voltou ao estado pré-restore"));
 }
@@ -946,7 +945,11 @@ pub(crate) fn confirm_reboot_now() -> Result<bool> {
 
 pub(crate) fn print_manual_reboot() {
     result_section("Restaurado");
-    result(format_args!("{}", style("reinicie manualmente para concluir a restauração").bold()));
+    result(format_args!(
+        "{} {}",
+        style("!").yellow().bold(),
+        style("reinicie manualmente para concluir a restauração").bold()
+    ));
 }
 
 fn read_restore_flow() -> Result<RestoreFlow> {
