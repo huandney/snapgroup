@@ -1,11 +1,12 @@
 use crate::btrfs;
 use crate::group::{self, Group, GroupId};
 use crate::pacman_log;
+use crate::ui::filter_picker;
 use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, picker_header, picker_prompt, picker_row,
+    CheckpointColumns, picker_header, picker_row,
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
@@ -195,13 +196,11 @@ pub(crate) fn select_restore_action(
     origins: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
 ) -> Result<RestoreAction> {
-    let mut items: Vec<String> = Vec::new();
+    let mut items: Vec<filter_picker::Item> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
 
     let prefix_len = SELECT_MARKER;
 
-    clear_screen();
-    header("Pontos de restauração");
     let minimum_name = restore_name_min(regret.is_some());
     let mut columns = CheckpointColumns::new(
         groups,
@@ -230,27 +229,26 @@ pub(crate) fn select_restore_action(
             kernel_col = columns.kernel,
             members_col = "Membros".len(),
         );
-        items.push(truncate_for_terminal(&text, prefix_len));
+        items.push(filter_picker::Item { text: truncate_for_terminal(&text, prefix_len), pacman: false });
         actions.push(RestoreAction::Regret);
     }
 
     for g in groups {
         let text = picker_row(g, kernel_labels, origins, &columns);
-        items.push(truncate_for_terminal(&text, prefix_len));
+        items.push(filter_picker::Item {
+            text: truncate_for_terminal(&text, prefix_len),
+            pacman: group::is_pacman(g),
+        });
         actions.push(RestoreAction::Checkpoint(g.id));
     }
-    let columns_header = picker_header(&columns);
-    let prompt = picker_prompt("Escolha o ponto de restauração", &columns_header, SELECT_MARKER);
-
-    let Some(selection) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt)
-        .items(&items)
-        .max_length(picker_page_len(4))
-        .default(0)
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
+    let columns_header = truncate_for_terminal(&picker_header(&columns), prefix_len);
+    let Some(selection) = filter_picker::pick(
+        "Pontos de restauração",
+        "Escolha o ponto de restauração",
+        &columns_header,
+        &items,
+        crate::config::load().restore_filter,
+    )?
     else {
         return Ok(RestoreAction::Abort);
     };
