@@ -399,8 +399,8 @@ const FIX_WIDTH: usize = 4;
 fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usize) -> (Vec<String>, usize) {
     let mut lines = Vec::new();
     let mut cursor_line = 0;
-    // "› [x] " antes de cada item.
-    let prefix = CONTENT_INDENT.len() + 6;
+    // "› ■ " antes de cada item.
+    let prefix = CONTENT_INDENT.len() + 4;
 
     if !ctx.groups.is_empty() {
         let kernel_w = ctx
@@ -437,13 +437,14 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             }
             let fix = if group::is_auto(g) { "" } else { "fixo" };
             let name = fit(group::description(g), name_w);
-            let text = format!(
-                "{name}   {:<kernel_w$}   {}",
+            let rest = format!(
+                "   {:<kernel_w$}   {}",
                 kernel_label(ctx.kernel_labels, g.id),
                 short_datetime(group::date(g))
             );
             let kind = if fix.is_empty() { Paint::Purge } else { Paint::Fixed };
-            lines.push(item_line(at_cursor, sel.has(row), kind, &format!("{fix:<FIX_WIDTH$}  "), &text));
+            let fix = format!("{fix:<FIX_WIDTH$}  ");
+            lines.push(item_line(at_cursor, sel.has(row), kind, &fix, &name, &rest));
         }
     }
 
@@ -478,29 +479,25 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             if at_cursor {
                 cursor_line = lines.len();
             }
-            let text = format!(
-                "{:<DATE_WIDTH$}   {:<members_w$}   {}",
-                short_datetime(&o.created),
-                members_text(o),
-                style(origin(o)).dim()
-            );
-            lines.push(item_line(at_cursor, sel.has(row), Paint::Now, &" ".repeat(FIX_WIDTH + 2), &text));
+            let name = format!("{:<DATE_WIDTH$}", short_datetime(&o.created));
+            let rest = format!("   {:<members_w$}   {}", members_text(o), style(origin(o)).dim());
+            lines.push(item_line(at_cursor, sel.has(row), Paint::Now, &" ".repeat(FIX_WIDTH + 2), &name, &rest));
         }
     }
     (lines, cursor_line)
 }
 
-/// Só o `x` leva a cor do tipo (a mesma da barra); marcado, o texto vai a
-/// negrito. O rótulo "fixo" diz o tipo, sempre apagado.
-fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, text: &str) -> String {
+/// Marcado: `■` e o nome na cor do tipo (a mesma da barra), o resto da linha
+/// em negrito. O rótulo "fixo" diz o tipo, sempre apagado.
+fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, name: &str, rest: &str) -> String {
     let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
     let fix = style(fix).dim();
     if !marked {
-        return format!("{CONTENT_INDENT}{cursor} {} {fix}{text}", style("[ ]").dim());
+        return format!("{CONTENT_INDENT}{cursor} {} {fix}{name}{rest}", style("□").dim());
     }
-    let x = style(paint("x".to_string(), kind)).bold();
-    let (open, close) = (style("[").dim(), style("]").dim());
-    format!("{CONTENT_INDENT}{cursor} {open}{x}{close} {fix}{}", style(text).bold())
+    let mark = paint("■".to_string(), kind);
+    let name = style(paint(name.to_string(), kind)).bold();
+    format!("{CONTENT_INDENT}{cursor} {mark} {fix}{name}{}", style(rest).bold())
 }
 
 /// `@ @home @root`, com a contagem quando uma base aparece mais de uma vez.
