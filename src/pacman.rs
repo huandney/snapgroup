@@ -46,8 +46,8 @@ fn cmdline_of(pid: u32) -> Option<Vec<String>> {
     )
 }
 
-/// Um ajudante acima do pacman. `session` (PID e início do processo) identifica
-/// a execução: um PID reaproveitado depois tem outro início.
+/// Um ajudante acima do pacman. `session` (`paru:<pid>-<início>`) identifica a
+/// execução: um PID reaproveitado depois tem outro início.
 pub struct Helper {
     pub name: String,
     /// Argumentos depois do programa (`-S google-chrome`).
@@ -86,7 +86,7 @@ fn helper(pid: u32, stat: &Stat) -> Helper {
     Helper {
         name: stat.comm.clone(),
         args: argv.into_iter().skip(program + 1).collect(),
-        session: format!("{pid}-{}", stat.start),
+        session: format!("{}:{pid}-{}", stat.comm, stat.start),
         workdir,
     }
 }

@@ -4,7 +4,7 @@
 
 use crate::group::{self, Group};
 use crate::pacman_db::{self, NetChange};
-use crate::pacman_log::{self, Change, Log, Op, State, Transaction};
+use crate::pacman_log::{self, Change, Op, State, Transaction};
 use crate::{rollback, snapper};
 use std::path::Path;
 use crate::ui::checkpoints::picker_prompt;
@@ -42,9 +42,9 @@ const NAME_COL_MAX: usize = 32;
 pub(crate) fn browse(groups: &[Group]) -> Result<()> {
     let _alt = AltScreen::enter();
     let log = pacman_log::read_for(groups).ok();
-    let transactions: Vec<Option<Transaction>> = groups
+    let transactions: Vec<Option<Vec<Transaction>>> = groups
         .iter()
-        .map(|g| first_transaction(g, log.as_ref()))
+        .map(|g| log.as_ref().and_then(|log| pacman_log::of_group(log, g)))
         .collect();
 
     let name_col = groups
@@ -58,7 +58,10 @@ pub(crate) fn browse(groups: &[Group]) -> Result<()> {
         .iter()
         .zip(&transactions)
         .map(|(g, tx)| {
-            let count = tx.as_ref().map(|t| format!("↑{}", t.changes.len())).unwrap_or("?".into());
+            let count = tx
+                .as_ref()
+                .map(|txs| format!("↑{}", txs.iter().map(|t| t.changes.len()).sum::<usize>()))
+                .unwrap_or("?".into());
             let name = crate::ui::term::ellipsize(group::description(g), name_col);
             let text = format!("{name:<name_col$}   {count:<7}   {}", short_datetime(group::date(g)));
             truncate_for_terminal(&text, SELECT_MARKER)
@@ -82,12 +85,8 @@ pub(crate) fn browse(groups: &[Group]) -> Result<()> {
             return Ok(());
         };
         selected = choice;
-        show_transaction(&groups[choice], transactions[choice].as_ref())?;
+        show_transaction(&groups[choice], transactions[choice].as_deref())?;
     }
-}
-
-fn first_transaction(group: &Group, log: Option<&Log>) -> Option<Transaction> {
-    pacman_log::first(log?, group::pacman_log_anchor(group)?)
 }
 
 /// `snapg pacman`: quem faz os checkpoints agora.
@@ -165,14 +164,18 @@ pub(crate) fn print_no_pacman_groups() {
     note(format_args!("nenhum checkpoint do pacman: eles aparecem a partir da próxima transação"));
 }
 
-/// Detalhe 2B: uma linha por pacote, com Antes e Depois; boot primeiro.
-fn show_transaction(group: &Group, tx: Option<&Transaction>) -> Result<()> {
+/// Detalhe de um checkpoint do pacman: as transações que ele cobre (uma, ou
+/// as de uma execução do paru), em blocos por fonte. O que vem pronto do
+/// repositório fica separado do que foi compilado (o `-U` de um arquivo).
+fn show_transaction(group: &Group, transactions: Option<&[Transaction]>) -> Result<()> {
     let members = members_of(group)?;
-    let config_files = tx.map(|t| t.config_files.len()).unwrap_or(0);
-    let state_lines = usize::from(tx.is_some_and(|t| t.state != State::Completed));
-    let intro_lines = DETAIL_INTRO_LINES + state_lines + config_files;
+    let txs = transactions.unwrap_or_default();
+    let notes = txs.iter().filter(|t| t.state != State::Completed).count();
+    let config_files: Vec<&String> = txs.iter().flat_map(|t| &t.config_files).collect();
+    let intro_lines = DETAIL_INTRO_LINES + notes + config_files.len();
+    let title_text = if txs.len() > 1 { "Atualização" } else { "Transação do pacman" };
     let intro = || {
-        header("Transação do pacman");
+        header(title_text);
         line(format_args!("{}", style(group::description(group)).bold()));
         line(format_args!(
             "{}{}",
@@ -180,30 +183,73 @@ fn show_transaction(group: &Group, tx: Option<&Transaction>) -> Result<()> {
             path(&members)
         ));
         println!();
-        let Some(tx) = tx else {
+        if transactions.is_none() {
             line(format_args!("{}", style("transação não encontrada no pacman.log").dim()));
             println!();
             return;
-        };
-        line(format_args!("{}", counts_line(&tx.changes)));
-        match tx.state {
-            State::Completed => {}
-            State::Interrupted => line(format_args!(
-                "{}",
-                style("transação interrompida: o log não registra o fim").yellow()
-            )),
-            State::NotStarted => line(format_args!(
-                "{}",
-                style("a transação abortou antes de mexer em pacotes").dim()
-            )),
         }
-        for file in &tx.config_files {
+        let changes: Vec<Change> = txs.iter().flat_map(|t| t.changes.clone()).collect();
+        let runs = if txs.len() > 1 { format!(" · {} transações", txs.len()) } else { String::new() };
+        line(format_args!("{}{}", counts_line(&changes), style(runs).dim()));
+        for tx in txs {
+            match tx.state {
+                State::Completed => {}
+                State::Interrupted => line(format_args!(
+                    "{}",
+                    style("transação interrompida: o log não registra o fim").yellow()
+                )),
+                State::NotStarted => line(format_args!(
+                    "{}",
+                    style("transação abortada antes de mexer em pacotes").dim()
+                )),
+            }
+        }
+        for file in &config_files {
             line(format_args!("{} {}", style("arquivo novo").dim(), path(file)));
         }
         println!();
     };
-    let rows = tx.map(|t| change_rows(&t.changes)).unwrap_or_default();
-    page_rows(&intro, intro_lines, ("Antes", "Depois"), &rows)
+    let body = source_sections(group, txs);
+    page_lines(&intro, intro_lines, &body)
+}
+
+/// Blocos "Repositório" e "Compilados", cada um com título e as linhas dos
+/// pacotes, com as colunas alinhadas entre os dois.
+fn source_sections(group: &Group, txs: &[Transaction]) -> Vec<String> {
+    let (local, repo): (Vec<&Transaction>, Vec<&Transaction>) = txs.iter().partition(|t| t.op == Some("-U"));
+    let compiled = match group::pacman_helper(group) {
+        Some("makepkg") => "Compilados (makepkg)",
+        Some(_) => "Compilados (AUR)",
+        None => "Instalados de arquivo",
+    };
+    let sections = [("Repositório", repo), (compiled, local)];
+    let rows: Vec<(usize, Vec<Row>)> = sections
+        .iter()
+        .enumerate()
+        .map(|(i, (_, txs))| (i, change_rows(&txs.iter().flat_map(|t| t.changes.clone()).collect::<Vec<_>>())))
+        .collect();
+    let widths = column_widths(rows.iter().flat_map(|(_, r)| r), "Antes");
+    let mut body = vec![head_line(widths, ("Antes", "Depois"))];
+    for (i, section_rows) in &rows {
+        let (name, section_txs) = &sections[*i];
+        if section_txs.is_empty() {
+            continue;
+        }
+        if body.len() > 1 {
+            body.push(String::new());
+        }
+        let packages = count_text(section_rows.len(), "pacote", "pacotes");
+        let summary = match section_txs.as_slice() {
+            [only] => match only.op {
+                Some(op) => format!("pacman {op} · {packages}"),
+                None => packages,
+            },
+            many => format!("{} transações · {packages}", many.len()),
+        };
+        body.push(format!("{}{}", title(name), style(format!("  {summary}")).dim()));
+        body.extend(section_rows.iter().map(|row| row_line(row, widths)));
+    }
+    body
 }
 
 /// Prévia 3A, entre o seletor e a escolha de membros: compara o banco de
@@ -235,7 +281,11 @@ pub(crate) fn review_package_restore(group: &Group, kernel: &str, toplevel: &Pat
                     ));
                     println!();
                 };
-                page_rows(&intro, 4, ("Agora", "Depois do restore"), &net_rows(&nets))?;
+                let rows = net_rows(&nets);
+                let widths = column_widths(rows.iter(), "Agora");
+                let mut body = vec![head_line(widths, ("Agora", "Depois do restore"))];
+                body.extend(rows.iter().map(|row| row_line(row, widths)));
+                page_lines(&intro, 4, &body)?;
             }
             Key::Enter => return Ok(PreviewFlow::Continue),
             Key::Escape => return Ok(PreviewFlow::Back),
@@ -472,45 +522,52 @@ fn members_of(group: &Group) -> Result<String> {
     Ok(member_badges(&mut mountpoints))
 }
 
-/// Lista paginada com ←/→; Esc ou Enter volta.
-fn page_rows(intro: &dyn Fn(), intro_lines: usize, heads: (&str, &str), rows: &[Row]) -> Result<()> {
-    let name_col = rows
-        .iter()
+/// Larguras das colunas Pacote e da versão da esquerda.
+fn column_widths<'a>(rows: impl Iterator<Item = &'a Row> + Clone, left_head: &str) -> (usize, usize) {
+    let name = rows
+        .clone()
         .map(|r| r.name.chars().count())
         .max()
         .unwrap_or(0)
         .clamp("Pacote".len(), NAME_COL_MAX);
-    let left_col = rows
-        .iter()
-        .map(|r| r.left.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(heads.0.len());
+    let left = rows.map(|r| r.left.chars().count()).max().unwrap_or(0).max(left_head.len());
+    (name, left)
+}
+
+fn head_line((name_col, left_col): (usize, usize), heads: (&str, &str)) -> String {
+    style(format!("  {:<name_col$}   {:<left_col$}   {}", "Pacote", heads.0, heads.1)).bold().to_string()
+}
+
+/// Versão da esquerda apagada: o olho vai para a que fica.
+fn row_line(row: &Row, (name_col, left_col): (usize, usize)) -> String {
+    let name = crate::ui::term::ellipsize(&row.name, name_col);
+    format!(
+        "{} {name:<name_col$}   {}   {}",
+        row.marker,
+        style(format!("{:<left_col$}", row.left)).dim(),
+        row.right
+    )
+}
+
+/// Lista paginada com ←/→; Esc ou Enter volta. A primeira linha do corpo é o
+/// cabeçalho das colunas e se repete em toda página.
+fn page_lines(intro: &dyn Fn(), intro_lines: usize, body: &[String]) -> Result<()> {
+    let (head, rest) = body.split_first().map(|(h, r)| (h.as_str(), r)).unwrap_or(("", &[]));
     let mut page = 0usize;
     loop {
         let rows_on_screen = console::Term::stdout().size().0 as usize;
         let page_size = rows_on_screen.saturating_sub(intro_lines + LIST_CHROME_LINES).max(3);
-        let pages = rows.len().div_ceil(page_size).max(1);
+        let pages = rest.len().div_ceil(page_size).max(1);
         page = page.min(pages - 1);
 
         clear_screen();
         intro();
-        line(format_args!(
-            "{}",
-            style(format!("  {:<name_col$}   {:<left_col$}   {}", "Pacote", heads.0, heads.1)).bold()
-        ));
-        if rows.is_empty() {
+        line(format_args!("{head}"));
+        if rest.is_empty() {
             line(format_args!("{}", style("  nenhum pacote").dim()));
         }
-        for row in rows.iter().skip(page * page_size).take(page_size) {
-            let name = crate::ui::term::ellipsize(&row.name, name_col);
-            // Versão da esquerda apagada: o olho vai para a que fica.
-            line(format_args!(
-                "{} {name:<name_col$}   {}   {}",
-                row.marker,
-                style(format!("{:<left_col$}", row.left)).dim(),
-                row.right
-            ));
+        for text in rest.iter().skip(page * page_size).take(page_size) {
+            line(format_args!("{text}"));
         }
         println!();
         let back = "esc volta";

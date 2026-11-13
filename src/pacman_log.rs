@@ -52,6 +52,9 @@ pub enum State {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Transaction {
     pub state: State,
+    /// `-Syu`, `-S`, `-U`, `-R`, da linha `Running`: o `-U` de um arquivo é o
+    /// que foi compilado (AUR, makepkg).
+    pub op: Option<&'static str>,
     pub changes: Vec<Change>,
     /// `.pacnew`/`.pacsave` que a transação deixou.
     pub config_files: Vec<String>,
@@ -76,7 +79,7 @@ pub struct Log {
 }
 
 enum Event {
-    Running,
+    Running(String),
     Started,
     Completed,
     Change(Change),
@@ -108,17 +111,39 @@ fn read_from(base: u64) -> Result<Log> {
     Ok(Log { bytes, base, len: meta.len(), ino: meta.ino() })
 }
 
-/// A transação do checkpoint: a primeira depois da âncora (o hook roda depois
-/// do `Running` dela e antes do `started`). Para nela, sem ler o resto do log.
-/// `None` se o log foi trocado ou está menor que a âncora.
-pub fn first(log: &Log, anchor: Anchor) -> Option<Transaction> {
+/// As transações do checkpoint: as `count` primeiras depois da âncora (o hook
+/// roda depois do `Running` da primeira e antes do `started`). Para nelas, sem
+/// ler o resto do log. `None` se o log foi trocado ou está menor que a âncora.
+fn run(log: &Log, anchor: Anchor, count: usize) -> Option<Vec<Transaction>> {
     if anchor.ino.is_some_and(|ino| ino != log.ino) || anchor.offset > log.len {
         return None;
     }
     let start = usize::try_from(anchor.offset.checked_sub(log.base)?).ok()?;
     let tail = log.bytes.get(start..)?;
     let lines = tail.split(|&b| b == b'\n').map(String::from_utf8_lossy);
-    parse_lines(lines, 1).into_iter().next()
+    Some(parse_lines(lines, count))
+}
+
+/// As transações que o checkpoint do pacman cobre: uma, ou as da execução do
+/// paru/makepkg. A operação da primeira vem do userdata (o `Running` dela fica
+/// antes da âncora).
+pub fn of_group(log: &Log, group: &Group) -> Option<Vec<Transaction>> {
+    let mut transactions = run(log, group::pacman_log_anchor(group)?, group::pacman_transactions(group))?;
+    if let Some(first) = transactions.first_mut()
+        && first.op.is_none()
+    {
+        first.op = group::pacman_op(group).and_then(known_op);
+    }
+    Some(transactions)
+}
+
+fn known_op(op: &str) -> Option<&'static str> {
+    ["-Syu", "-S", "-U", "-R"].into_iter().find(|known| *known == op)
+}
+
+#[cfg(test)]
+fn first(log: &Log, anchor: Anchor) -> Option<Transaction> {
+    run(log, anchor, 1)?.into_iter().next()
 }
 
 /// Rótulo da coluna Origem: `pacman ↑14` (pacotes da transação do grupo) ou
@@ -138,10 +163,9 @@ fn origin_label(group: &Group, log: Option<&Log>) -> String {
     if !group::is_pacman(group) {
         return "manual".to_string();
     }
-    let count = group::pacman_log_anchor(group)
-        .zip(log)
-        .and_then(|(anchor, log)| first(log, anchor))
-        .map(|tx| tx.changes.len());
+    let count = log
+        .and_then(|log| of_group(log, group))
+        .map(|txs| txs.iter().map(|tx| tx.changes.len()).sum::<usize>());
     match count {
         Some(n) => format!("pacman ↑{n}"),
         None => "pacman".to_string(),
@@ -170,7 +194,7 @@ fn parse_lines<'a>(lines: impl Iterator<Item = Cow<'a, str>>, limit: usize) -> V
             continue;
         };
         match event {
-            Event::Running => {
+            Event::Running(command) => {
                 // A primeira entra mesmo vazia: é a do checkpoint, e vazia
                 // quer dizer que abortou antes de começar. As outras vazias
                 // são comandos sem transação (`pacman -Sy`).
@@ -178,6 +202,7 @@ fn parse_lines<'a>(lines: impl Iterator<Item = Cow<'a, str>>, limit: usize) -> V
                     out.push(close(current, started));
                 }
                 current = empty_transaction();
+                current.op = operation_of(&command);
                 started = false;
             }
             Event::Started => started = true,
@@ -199,7 +224,13 @@ fn parse_lines<'a>(lines: impl Iterator<Item = Cow<'a, str>>, limit: usize) -> V
 }
 
 fn empty_transaction() -> Transaction {
-    Transaction { state: State::NotStarted, changes: Vec::new(), config_files: Vec::new() }
+    Transaction { state: State::NotStarted, op: None, changes: Vec::new(), config_files: Vec::new() }
+}
+
+/// `pacman --upgrade --color=always --noconfirm -- /…/x.pkg.tar.zst` → `-U`.
+fn operation_of(command: &str) -> Option<&'static str> {
+    let args: Vec<String> = command.split_whitespace().map(str::to_string).collect();
+    crate::pacman::operation(&args)
 }
 
 /// Fecha uma transação sem `completed`.
@@ -215,8 +246,8 @@ fn close(mut transaction: Transaction, started: bool) -> Transaction {
 /// scriptlets (`[ALPM-SCRIPTLET]`) pode conter qualquer texto.
 fn parse_line(line: &str) -> Option<Event> {
     let (_, rest) = line.split_once("] ")?;
-    if rest.starts_with("[PACMAN] Running ") {
-        return Some(Event::Running);
+    if let Some(command) = rest.strip_prefix("[PACMAN] Running ") {
+        return Some(Event::Running(command.trim_matches('\'').to_string()));
     }
     let message = rest.strip_prefix("[ALPM] ")?;
     match message {
@@ -357,6 +388,29 @@ mod tests {
         let tx = first(&log(&text, 7), Anchor { offset: 0, ino: Some(7) }).unwrap();
         assert_eq!(tx.changes.len(), 3);
         assert_eq!(tx.changes[2].name, "linux-cachyos");
+    }
+
+    #[test]
+    fn a_paru_run_reads_its_transactions_with_their_source() {
+        let text = format!(
+            "{KERNEL_UPGRADE}\
+[t] [PACMAN] Running 'pacman --sync --color=always -y -u --'
+[t] [PACMAN] Running 'pacman --upgrade --color=always --noconfirm -- /home/u/.cache/paru/clone/x/x-1-1-x86_64.pkg.tar.zst'
+[t] [ALPM] transaction started
+[t] [ALPM] upgraded x (1-1 -> 2-1)
+[t] [ALPM] transaction completed
+[t] [PACMAN] Running 'pacman -S other'
+[t] [ALPM] transaction started
+[t] [ALPM] installed other (1-1)
+[t] [ALPM] transaction completed
+"
+        );
+        let txs = super::run(&log(&text, 7), Anchor { offset: 0, ino: Some(7) }, 2).unwrap();
+        assert_eq!(txs.len(), 2);
+        // A primeira não tem `Running` depois da âncora; a do AUR tem.
+        assert_eq!(txs[0].op, None);
+        assert_eq!(txs[1].op, Some("-U"));
+        assert_eq!(txs[1].changes[0].name, "x");
     }
 
     #[test]

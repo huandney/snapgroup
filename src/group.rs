@@ -20,7 +20,7 @@ pub const PACMAN_LOG_KEY: &str = "snapgroup-pacman-log";
 pub const PACMAN_LOG_INO_KEY: &str = "snapgroup-pacman-log-ino";
 /// Operação da primeira transação do checkpoint (`-Syu`, `-U`).
 pub const PACMAN_OP_KEY: &str = "snapgroup-pacman-op";
-/// Execução do ajudante (paru, makepkg) que o checkpoint cobre: `<pid>-<início>`.
+/// Execução do ajudante (paru, makepkg) que o checkpoint cobre: `paru:<pid>-<início>`.
 pub const SESSION_KEY: &str = "snapgroup-session";
 /// Quantas transações a execução já fez (sem a chave: 1).
 pub const SESSION_TX_KEY: &str = "snapgroup-session-tx";
@@ -162,6 +162,15 @@ fn first_userdata<'a>(group: &'a Group, key: &str) -> Option<&'a str> {
 
 pub fn pacman_session(group: &Group) -> Option<&str> {
     first_userdata(group, SESSION_KEY)
+}
+
+pub fn pacman_op(group: &Group) -> Option<&str> {
+    first_userdata(group, PACMAN_OP_KEY)
+}
+
+/// O ajudante da execução (`paru`, `makepkg`), do começo da sessão.
+pub fn pacman_helper(group: &Group) -> Option<&str> {
+    pacman_session(group)?.split_once(':').map(|(name, _)| name)
 }
 
 /// Transações que o checkpoint cobre: as de uma execução do paru, ou 1.
