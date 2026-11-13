@@ -1424,11 +1424,20 @@ fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<spa
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
+    // O subvolume sync só espera o subvolume sumir; os blocos que ele soltou
+    // voltam ao livre quando a transação seguinte é gravada.
+    let committed = std::process::Command::new("btrfs")
+        .args(["filesystem", "sync"])
+        .arg(toplevel)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
     pb.finish_and_clear();
     let (Some(before), Some(after)) = (free_before, free_bytes(Path::new("/"))) else {
         return;
     };
-    snapshots::print_space_freed(before, after, predicted, synced);
+    snapshots::print_space_freed(before, after, predicted, synced && committed);
 }
 
 /// Espaço livre para o usuário em `path` (statvfs), se legível.
