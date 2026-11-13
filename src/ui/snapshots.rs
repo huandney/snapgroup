@@ -76,13 +76,22 @@ pub(crate) fn print_orphan_scan_failed(e: &anyhow::Error) {
     warn(format_args!("backups órfãos não listados: {e:#}"));
 }
 
-/// Espaço livre antes e depois do delete, ao lado do previsto pela tela.
+/// Espaço livre antes e depois do comando, ao lado do previsto pela tela.
 /// `liberados` vem do statvfs, que só enxerga dados: compara com a parte de
 /// dados da previsão; o metadado sai junto, mas fica reservado no btrfs.
-pub(crate) fn print_space_freed(before: u64, after: u64, predicted: Option<crate::space::Freed>, synced: bool) {
+/// `partial`: o comando também apagou o que a previsão não cobre (purga da
+/// lixeira), então ela vale só para a seleção.
+pub(crate) fn print_space_freed(
+    before: u64,
+    after: u64,
+    predicted: Option<crate::space::Freed>,
+    partial: bool,
+    synced: bool,
+) {
     let human = crate::ui::delete::human_bytes;
+    let scope = if partial { " só da seleção" } else { "" };
     let predicted_data = predicted
-        .map(|p| format!("   {}", style(format!("previsto {}", human(p.data))).dim()))
+        .map(|p| format!("   {}", style(format!("previsto {}{scope}", human(p.data))).dim()))
         .unwrap_or_default();
     result_section("Espaço");
     result(format_args!(
@@ -127,6 +136,21 @@ pub(crate) fn print_trash_done(n: usize) {
     result(format_args!(
         "{}",
         count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira")
+    ));
+}
+
+/// O que a lixeira devolve quando o purge levar estes checkpoints: estimativa
+/// da tela do delete, só dados (o que volta ao livre).
+pub(crate) fn print_trash_space(n: usize, bytes: u64, prune_days: u64) {
+    let when = match prune_days {
+        0 => "no próximo save ou delete".to_string(),
+        1 => "em 1 dia".to_string(),
+        n => format!("em {n} dias"),
+    };
+    let (verb, leave) = if n == 1 { ("libera", "sair") } else { ("liberam", "saírem") };
+    note(format_args!(
+        "{verb} ~{} quando {leave} da lixeira, {when}",
+        crate::ui::delete::human_bytes(bytes)
     ));
 }
 
