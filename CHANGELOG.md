@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+> Commits: `d543f5f`, `6a15c67`, `786aff2`, `4226311`, `82f5ff9`, `3e2df3a`, `43b200b`, `e04cd20`, `9b75447`, `cb83cf1`, `52a8176`, `20e9fa3`, `c9a0558`, `2b61ede`
+
+### Retention
+- **Feature**: `KEEP_GROUPS` counts and trashes only automatic checkpoints (saved with the default name). Checkpoints with a typed name, renamed ones and kept Regrets are pinned and never leave on their own.
+
+### Delete / Trash
+- **Feature**: `snapg delete` lists and deletes orphan backup subvolumes (`<base>_backup_<label>`, mostly left by `limine-snapper-restore`), grouped per restore, alongside checkpoints in one screen.
+- **Feature**: The delete screen shows the exact space the selection frees, read from btrfs metadata and split by kind (backups now, automatic and pinned checkpoints at purge), with `o`/`a`/`f`/`t` selection shortcuts.
+- **Feature**: Every permanent deletion ends with one "Espaço" report measured with statvfs after btrfs commits: expired-trash purge, the Regret dropped by `save`, orphans, `--purge`, `-y` and trash "Apagar de vez". The wait is capped at 20 s and skipped without a terminal.
+- **Feature**: Trash lists reuse the delete screen: live space estimate for "Apagar de vez" (hidden Regret copies included), `a`/`f`/`v`/`t` shortcuts and the Purga column. Moving checkpoints to the trash notes what they free when purged.
+- **Fix**: The freed space is compared with the data part of the prediction (metadata stays reserved by btrfs) and read only after the transaction commits.
+
+### TUI
+- **Refine**: Results close each action with a section title (Salvo, Apagado, Lixeira, Espaço, Retenção, Restaurado, …) aligned with the spinner; warnings and errors keep `!`/`✗` on stderr with stderr's color detection.
+- **Fix**: The "NÃO REINICIE" warning, the manual-reboot instruction and the archived subvolume names stay prominent, and restore results print after the FAT32 boot-sync panel so it no longer wipes them.
+
 ## [0.11.0-beta] - 2026-11-12
 > Commits: `11b6699`, `d10bff5`, `c7a7794`, `25f0430`, `61fc2ae`, `eab7e29`, `1afb9d1`, `1126ca5`, `fc51d69`, `4e6ecfe`, `e148f73`, `c69c03e`, `0d26dd2`, `82f95eb`, `cf02b09`
 

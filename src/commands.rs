@@ -198,21 +198,24 @@ fn try_cleanup(keep: usize) -> Result<()> {
     Ok(())
 }
 
-/// Grupos apagados de vez (vencidos e Regrets duplicados), para o chamador
-/// saber se há espaço liberado a mostrar.
+/// Grupos que o purge tentou apagar de vez (vencidos e Regrets duplicados),
+/// para o chamador saber se há espaço a medir. Conta a tentativa, não o
+/// sucesso: um grupo que falhou no meio já pode ter soltado membros, e a
+/// medida do statvfs diz o que de fato voltou.
 fn purge_expired_trash(cfg: &config::Config) -> usize {
-    try_purge_expired_trash(cfg).unwrap_or_else(|e| {
+    let mut attempted = 0;
+    if let Err(e) = try_purge_expired_trash(cfg, &mut attempted) {
         snapshots::print_purge_failed(&e);
-        0
-    })
+    }
+    attempted
 }
 
-fn try_purge_expired_trash(cfg: &config::Config) -> Result<usize> {
+fn try_purge_expired_trash(cfg: &config::Config, attempted: &mut usize) -> Result<()> {
     let trashed = group::list_trashed_groups()?;
     if trashed.is_empty() {
-        return Ok(0);
+        return Ok(());
     }
-    let duplicates = purge_duplicate_regrets_in_groups(&trashed);
+    *attempted += purge_duplicate_regrets_in_groups(&trashed);
 
     let trashed = group::list_trashed_groups()?;
     // O parser limita trash_prune_days a MAX_PRUNE_DAYS, então o cast e a
@@ -226,6 +229,7 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<usize> {
         if marked_at > cutoff {
             continue; // ainda na carência
         }
+        *attempted += 1;
         match delete_group_members(g) {
             Ok(()) => purged += 1,
             Err(e) => snapshots::print_purge_member_failed(g.id, &e),
@@ -234,7 +238,7 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<usize> {
     if purged > 0 {
         snapshots::print_purge_done(purged);
     }
-    Ok(purged + duplicates)
+    Ok(())
 }
 
 /// Monta toplevel, varre regrets existentes e deleta. Idempotente.
@@ -1166,20 +1170,26 @@ fn trashed_regret_checkpoint(origin_date: &str) -> Result<Option<Group>> {
         .find(|g| regret_identity(g) == Some(origin_date)))
 }
 
-fn purge_duplicate_regrets_in_trash(keep_id: i64, origin_date: &str) {
+/// Apaga as cópias do Regret `origin_date` na lixeira, menos `keep_id`, e
+/// devolve quantas tentou apagar.
+fn purge_duplicate_regrets_in_trash(keep_id: i64, origin_date: &str) -> usize {
     let Ok(groups) = group::list_trashed_groups() else {
-        return;
+        return 0;
     };
-    for group in duplicate_regrets_matching(&groups, keep_id, origin_date) {
+    let duplicates = duplicate_regrets_matching(&groups, keep_id, origin_date);
+    for group in &duplicates {
         let _ = delete_group_members(group);
     }
+    duplicates.len()
 }
 
+/// Como acima, para todos os Regrets duplicados de `groups`.
 fn purge_duplicate_regrets_in_groups(groups: &[Group]) -> usize {
-    duplicate_regret_groups(groups)
-        .into_iter()
-        .filter(|group| delete_group_members(group).is_ok())
-        .count()
+    let duplicates = duplicate_regret_groups(groups);
+    for group in &duplicates {
+        let _ = delete_group_members(group);
+    }
+    duplicates.len()
 }
 
 fn duplicate_regrets_matching<'a>(
@@ -1384,10 +1394,11 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
             return Ok(());
         };
         let result = apply_delete(&[newest], purge);
-        if purged || purge {
+        // Uma falha no -y --purge pode não ter apagado nada: sem "liberados 0".
+        if purged || (purge && result.is_ok()) {
             report_freed(free_before, None, false);
         }
-        return result;
+        return result.map(|_| ());
     }
 
     let uuid = btrfs::fs_uuid("/")?;
@@ -1454,38 +1465,52 @@ fn delete_interactive(
     let predicted = space
         .freed(if purge { &chosen_groups } else { &none }, &chosen_orphans)
         .filter(|_| deletes_selection);
-    let trash_estimate = space.freed(&chosen_groups, &none).filter(|_| to_trash);
+    // O que os checkpoints liberam no purge, depois que os órfãos marcados
+    // já saíram: o que eles dividem com os órfãos também passa a ser só deles.
+    let trash_estimate = match (space.freed(&chosen_groups, &chosen_orphans), space.freed(&none, &chosen_orphans)) {
+        (Some(all), Some(orphans_only)) if to_trash => Some(all.data.saturating_sub(orphans_only.data)),
+        _ => None,
+    };
 
+    // Sem purga de carona, o livre é lido agora: o tempo com a tela aberta
+    // (downloads, pacman) não entra na medida. Com ela, vale o do início,
+    // que a inclui.
+    let free_before = if base.purged { base.free_before } else { free_bytes(Path::new("/")) };
     let targets: Vec<&OrphanBackup> = plan.orphans.iter().map(|&i| &orphans[i]).collect();
     let orphan_result = delete_orphans(&targets, mount_path);
     let groups_chosen: Vec<&Group> = plan.groups.iter().map(|&i| &groups[i]).collect();
-    let group_result = if groups_chosen.is_empty() { Ok(()) } else { apply_delete(&groups_chosen, purge) };
-    if let (Some(estimate), Ok(())) = (trash_estimate, &group_result) {
-        snapshots::print_trash_space(groups_chosen.len(), estimate.data, trash_days);
+    let group_result = if groups_chosen.is_empty() { Ok(0) } else { apply_delete(&groups_chosen, purge) };
+    // Só com todos movidos: a estimativa é da seleção inteira.
+    if let (Some(bytes), Ok(done)) = (trash_estimate, &group_result)
+        && *done == groups_chosen.len()
+    {
+        snapshots::print_trash_space(groups_chosen.len(), bytes, trash_days);
     }
 
     // Só o que foi apagado de vez libera espaço agora; a lixeira, no purge.
     // Com a purga de carona junto, a previsão cobre só a seleção.
     if base.purged || deletes_selection {
-        report_freed(base.free_before, predicted, base.purged);
+        report_freed(free_before, predicted, base.purged);
     }
-    orphan_result.and(group_result)
+    orphan_result.and(group_result.map(|_| ()))
 }
 
+/// Quanto o relatório espera o btrfs soltar os subvolumes. Um Regret é um
+/// root inteiro e pode levar minutos; depois disso mostra o que já voltou.
+const FREED_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Espera o btrfs terminar de liberar os blocos (o delete de subvolume é
-/// assíncrono) e mostra o espaço livre antes e depois. Os dois `sync` valem
-/// para o filesystem inteiro, então `/` serve sem montar o top-level.
+/// assíncrono), até `FREED_WAIT`, e mostra o espaço livre antes e depois. Os
+/// dois `sync` valem para o filesystem inteiro, então `/` serve sem montar o
+/// top-level. Sem terminal (script, cron) não espera nem mostra: ninguém lê.
 /// `partial`: o comando apagou mais do que a previsão cobre.
 fn report_freed(free_before: Option<u64>, predicted: Option<space::Freed>, partial: bool) {
+    if !crate::ui::term::stdout_is_tty() {
+        return;
+    }
     let toplevel = Path::new("/");
     let pb = crate::ui::term::spinner("aguardando o btrfs liberar o espaço…".to_string());
-    let synced = std::process::Command::new("btrfs")
-        .args(["subvolume", "sync"])
-        .arg(toplevel)
-        .stdout(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let synced = wait_subvolume_sync(toplevel, FREED_WAIT);
     // O subvolume sync só espera o subvolume sumir; os blocos que ele soltou
     // voltam ao livre quando a transação seguinte é gravada.
     let committed = std::process::Command::new("btrfs")
@@ -1500,6 +1525,33 @@ fn report_freed(free_before: Option<u64>, predicted: Option<space::Freed>, parti
         return;
     };
     snapshots::print_space_freed(before, after, predicted, partial, synced && committed);
+}
+
+/// `btrfs subvolume sync` com prazo: `true` se terminou bem a tempo. No
+/// prazo, mata o processo e devolve `false` (a deleção segue no kernel).
+fn wait_subvolume_sync(path: &Path, limit: std::time::Duration) -> bool {
+    let Ok(mut child) = std::process::Command::new("btrfs")
+        .args(["subvolume", "sync"])
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 /// Espaço livre para o usuário em `path` (statvfs), se legível.
@@ -1658,25 +1710,31 @@ fn delete_orphans(targets: &[&OrphanBackup], toplevel: &Path) -> Result<()> {
 }
 
 /// Purge = deleção permanente imediata (irreversível). Senão move pra lixeira,
-/// reversível até o purge automático após `TRASH_PRUNE_DAYS`.
-fn apply_delete(targets: &[&Group], purge: bool) -> Result<()> {
+/// reversível até o purge automático após `TRASH_PRUNE_DAYS`. Devolve quantos
+/// grupos foram por inteiro (todos os membros apagados ou marcados).
+fn apply_delete(targets: &[&Group], purge: bool) -> Result<usize> {
     if purge {
         for g in targets {
             delete_group(g)?;
         }
-        return Ok(());
+        return Ok(targets.len());
     }
     let trash_epoch = epoch_now()?;
     let mut moved = 0;
+    let mut whole = 0;
     for g in targets {
-        if trash_group(g, trash_epoch, TrashReason::Manual) > 0 {
+        let marked = trash_group(g, trash_epoch, TrashReason::Manual);
+        if marked > 0 {
             moved += 1;
+        }
+        if marked == g.members.len() {
+            whole += 1;
         }
     }
     if moved > 0 {
         snapshots::print_trash_done(moved);
     }
-    Ok(())
+    Ok(whole)
 }
 
 fn delete_group(g: &Group) -> Result<()> {
@@ -1698,12 +1756,12 @@ fn delete_group_members(g: &Group) -> Result<()> {
 /// snapshots na lixeira não tocam a máquina de restauração pendente.
 pub fn trash() -> Result<()> {
     let cfg = config::load();
-    let groups = group::list_trashed_groups()?;
-    if groups.is_empty() {
+    let all_trashed = group::list_trashed_groups()?;
+    if all_trashed.is_empty() {
         snapshots::print_trash_empty();
         return Ok(());
     }
-    let groups = dedup_trashed_regret_groups(&groups);
+    let groups = dedup_trashed_regret_groups(&all_trashed);
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
@@ -1711,17 +1769,23 @@ pub fn trash() -> Result<()> {
     let kernel_labels = group::kernel_labels(&groups, &mount_path);
 
     use crate::ui::trash::TrashAction;
-    // Como no delete: a leitura dos metadados roda com a lista na tela, e o
-    // top-level fica montado até ela terminar (a estimativa lê por ele).
-    let mut space = SpaceEstimator::start(&groups, &[], &mount_path);
+    // A leitura dos metadados só começa quando "Apagar de vez" pede a primeira
+    // estimativa: restaurar ou sair não pagam os segundos de I/O. Os ids dos
+    // subvolumes saem do top-level montado; a leitura em si vai direto no
+    // dispositivo e não depende dele. Cada Regret leva junto as cópias
+    // escondidas, que o "Apagar de vez" também apaga.
+    let estimated = with_hidden_duplicates(&groups, &all_trashed);
+    let mut space: Option<SpaceEstimator> = None;
     let selection = crate::ui::trash::select_trash_action(
         &groups,
         &kernel_labels,
         cfg.trash_prune_days,
-        &mut |g, o| space.estimate(g, o),
+        &mut |g, o| space.get_or_insert_with(|| SpaceEstimator::start(&estimated, &[], &mount_path)).estimate(g, o),
     );
-    let predicted = match &selection {
-        Ok(Some(TrashAction::Purge(indices))) => space.freed(&indices.iter().copied().collect(), &BTreeSet::new()),
+    let predicted = match (&selection, space.as_mut()) {
+        (Ok(Some(TrashAction::Purge(indices))), Some(space)) => {
+            space.freed(&indices.iter().copied().collect(), &BTreeSet::new())
+        }
         _ => None,
     };
     drop(space);
@@ -1732,19 +1796,25 @@ pub fn trash() -> Result<()> {
             Ok(())
         }
         Some(TrashAction::Restore(indices)) => {
+            // Restaurar um Regret apaga de vez as cópias dele na lixeira.
+            let free_before = free_bytes(Path::new("/"));
             let mut restored = 0;
+            let mut duplicates = 0;
             for i in indices {
                 let g = &groups[i];
                 let restored_members = untrash_group(g);
                 if restored_members > 0 && restored_members == g.members.len() {
                     restored += 1;
                     if let Some(date) = regret_identity(g) {
-                        purge_duplicate_regrets_in_trash(g.id, date);
+                        duplicates += purge_duplicate_regrets_in_trash(g.id, date);
                     }
                 }
             }
             if restored > 0 {
                 snapshots::print_untrash_done(restored);
+            }
+            if duplicates > 0 {
+                report_freed(free_before, None, false);
             }
             Ok(())
         }
@@ -1770,6 +1840,23 @@ pub fn trash() -> Result<()> {
             result
         }
     }
+}
+
+/// `visible` com os membros das cópias escondidas de cada Regret somados ao
+/// grupo que aparece: para a estimativa, apagar o visível apaga todas.
+fn with_hidden_duplicates(visible: &[Group], all: &[Group]) -> Vec<Group> {
+    visible
+        .iter()
+        .map(|g| {
+            let mut merged = g.clone();
+            if let Some(date) = regret_identity(g) {
+                for dup in duplicate_regrets_matching(all, g.id, date) {
+                    merged.members.extend(dup.members.iter().cloned());
+                }
+            }
+            merged
+        })
+        .collect()
 }
 
 fn dedup_trashed_regret_groups(groups: &[Group]) -> Vec<Group> {
@@ -2204,7 +2291,7 @@ mod tests {
     use super::{
         dedup_trashed_regret_groups, duplicate_regret_groups, duplicate_regrets_matching,
         hide_checkpoint_for_active_regret, pending_current_subvol, snapgroup_id_from_info_xml,
-        snapgroup_userdata_value_from_info_xml, xml_text,
+        snapgroup_userdata_value_from_info_xml, wait_subvolume_sync, with_hidden_duplicates, xml_text,
     };
     use crate::group::{Group, Member};
     use crate::snapper::Snapshot;
@@ -2391,6 +2478,34 @@ mod tests {
         let ids: Vec<_> = duplicates.iter().map(|g| g.id).collect();
 
         assert_eq!(ids, vec![2]);
+    }
+
+    #[test]
+    fn visible_regret_carries_hidden_copies_for_the_estimate() {
+        let all = vec![
+            regret_group(3, "2026-06-17T14:34:12-0400"),
+            regret_group(2, "2026-06-17T14:34:12-0400"),
+            regret_group(1, "2026-06-16T21:15:00-0400"),
+            normal_group(9),
+        ];
+        let visible = dedup_trashed_regret_groups(&all);
+
+        let estimated = with_hidden_duplicates(&visible, &all);
+        let members: Vec<Vec<u32>> =
+            estimated.iter().map(|g| g.members.iter().map(|m| m.snapshot.number).collect()).collect();
+
+        assert_eq!(estimated.iter().map(|g| g.id).collect::<Vec<_>>(), vec![3, 1, 9]);
+        assert_eq!(members[0], vec![3, 2]);
+        assert_eq!(members[1], vec![1]);
+    }
+
+    #[test]
+    fn subvolume_sync_wait_returns_false_when_sync_fails() {
+        // Sem btrfs no caminho (ou sem root), o comando falha rápido: false.
+        let start = std::time::Instant::now();
+        let ok = wait_subvolume_sync(std::path::Path::new("/nonexistent"), std::time::Duration::from_secs(5));
+        assert!(!ok);
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
