@@ -1,6 +1,9 @@
 # Proposta: espaço e retenção no `snapg delete`
 
-- **Status:** proposta, não implementada.
+- **Status:** §2, §3 e §4 implementadas em `develop` (merges `3593054`,
+  `c6a6338`, `6f25ec7`, `5d30698`); §5 (purge de backups) e §6 (`doctor`)
+  pendentes. Onde a implementação divergiu do plano, o texto abaixo descreve
+  o que foi feito.
 - **Data:** 2026-11-12.
 - **Relacionado:** `docs/architecture/restore-highlander.md` §5.2 (naming
   `_backup_`), backlog local de retenção (`TODO.md` §2–§3), que esta proposta
@@ -55,11 +58,14 @@ lixeira os alcançam. E não há como saber quanto espaço qualquer item prende.
    `@home`, `@root`), pelo resolvedor do restore.
 3. Candidato: entrada direta do top-level `<base>_backup_<label>` com `<base>`
    conhecida. Prefixos desconhecidos ficam de fora.
-4. Data: a de criação gravada pelo btrfs (`btrfs::subvol_creation_time`). O
-   label só serve para exibição e agrupamento; não é preciso interpretar dois
-   formatos de data, um deles em UTC.
-5. Agrupamento: o mesmo `<label>` em várias bases (o mesmo restore) vira uma
-   linha. Labels diferentes por milissegundos ficam separados, sem heurística.
+4. Data: a do label. ISO UTC (`…T12:28:04.367Z`, restore do Limine) ou hora
+   local `YYYY-MM-DD_HH:MM:SS` (snapg antigo, btrfs-assistant). Label que não
+   é data cai na hora de criação gravada pelo btrfs. *Mudou do plano:* o
+   restore do Limine grava cada base com segundos de diferença, e a data de
+   criação do btrfs não juntava os membros de um mesmo restore.
+5. Agrupamento: backups cujas datas ficam a até 60 s uma da outra
+   (`SAME_RESTORE_SECS`) viram uma linha, com as bases em ordem alfabética.
+   Na máquina, 60 subvolumes viraram 22 linhas.
 
 ### 2.2. Proteções
 
@@ -74,54 +80,66 @@ O candidato não aparece (motivo em `--verbose`) se:
 Com restore pendente, `delete` já recusa (gate existente). Tudo sob o lock
 global.
 
-## 3. Espaço no picker (tela A+B)
+## 3. Espaço no `delete`
 
 ### 3.1. Tela
 
 ```
- SnapGroup 0.12.0-beta
+ ▪ Espaço
+   ██▉░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+   libera 17.4 GiB agora · +4.8 GiB de metadados ficam reservados
+   0 de 64 checkpoints → lixeira (15 dias) · 21 de 21 backups → agora (57 subvolumes)
 
- ▪ Recuperável  ≥ 31.4 GiB em checkpoints e backups
-   ███████████▊█████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-   ■ agora ≥ 12.8 GiB   ■ no purge ≥ 5.6 GiB   disco 412/931 GiB
+ ▪ Checkpoints
+         Nome                                   Kernel             Data
+   › □       Checkpoint 2026-11-12 00:06        7.3.3-1-cachyos    2026-11-12 00:06
+     ■ fixo  Antes do Estudo para enem          7.3.3-1-cachyos    2026-11-09 16:12
 
- ▪ Checkpoints  vão para a lixeira, liberam no purge (15 dias)
-       Nome                            Kernel Data                Exclusivo
-   [ ] 📌 Teste restore                 7.3.3  2026-11-11 17:47     ≥ 410 MiB  █▌
-   [x]    Checkpoint 2026-11-06 07:30   7.3.1  2026-11-06 07:30     ≥ 3.2 GiB  ████▋
-   [ ]    Checkpoint 2026-11-04 15:34   7.3.1  2026-11-04 15:34     ≥ 922 MiB  █▎   sai em 3d
+ ▪ Backups órfãos restos de restores fora do Snapper, sem lixeira
+         Criado             Subvolumes      Origem
+     ■       2026-05-09 08:28   @ @home @root   restore do Limine
 
- ▪ Backups órfãos  apagados na hora, sem lixeira
-       Data              Membros                              Exclusivo
-   [x] 2026-04-26 20:58  @ @home @root                       ≥ 8.2 GiB  ████████████
-   [ ] 2026-11-08 03:03  @home                               ≥ 307 MiB  ▍
-
-   espaço marca · a marca órfãos · enter revisa · q sai
+   espaço marca · o órfãos · a automáticos · f fixos · t tudo · enter revisa · esc sai
 ```
 
-- **Barra do topo:** escala = total recuperável (soma dos exclusivos de tudo
-  listado), não o disco. Num disco de 931 GiB, 30 GiB de snapshots seriam
-  invisíveis. O disco aparece só como números.
-- **Duas cores:** laranja = sai agora (backups), azul = sai no purge da
-  lixeira (checkpoints). Sem isso a barra promete espaço que não aparece já.
-- **Barra por linha:** escala = maior item listado. Mostra qual item pesa.
-  Abaixo de 80 colunas as barras das linhas somem; a do topo fica, encolhida.
-- **Fixos e automáticos:** 📌 marca checkpoint fixo (§4); automático perto de
-  sair mostra `sai em Nd`.
+- **Uma lista só** com checkpoints e backups, em seções. Atalhos marcam um
+  tipo inteiro (`o`, `a`, `f`) ou tudo (`t`).
+- **Barra:** escala = dados de todos os snapshots lidos. Três partes, cada uma
+  sobre as anteriores (somam o total da seleção): amarelo = backups, sai agora;
+  azul-claro = checkpoints automáticos, saem no purge da lixeira; rosa (cor
+  211) = fixos, também no purge. Com `--purge`, tudo sai agora.
+- **Linhas:** `□` desmarcado; marcado, `■` e o nome na cor da sua parte da
+  barra, resto da linha em negrito. O fixo é dito pelo rótulo `fixo`, sempre
+  apagado. *Mudou do plano:* sem barra por linha (poluía a lista), sem 📌
+  (largura incerta, §8.3) e sem `[x]`. Os outros pickers (lixeira, restore,
+  Regret) usam o mesmo `■`/`□`, sem cor.
 
 ### 3.2. Medição
 
-- Exclusivo por item via `btrfs filesystem du -s --raw` no caminho do
-  top-level, numa thread de fundo ao abrir o picker. A lista aparece na hora;
-  linha não medida mostra `medindo` e o total cresce até `medindo N/M` sumir.
-- Marcar/desmarcar só soma números já medidos: atualização instantânea, sem
-  I/O na thread da UI.
-- **Todo número é mínimo (`≥`).** Blocos compartilhados só entre itens marcados
-  (checkpoints vizinhos) também são liberados, mas o btrfs não os atribui sem
-  qgroups, e ligar quota deixa deleção em lote e commits lentos. Checkpoints
-  consecutivos podem liberar bem mais que a soma.
-- Depois de apagar: `btrfs subvolume sync` e espaço livre antes/depois via
-  `btrfs filesystem usage`, como confirmação real.
+*Mudou do plano:* `btrfs filesystem du` só dá o exclusivo de cada item e
+sub-conta seleções (blocos compartilhados só entre itens marcados). A medição
+lê os metadados do btrfs direto do dispositivo, só leitura (`src/space.rs`):
+
+- superbloco, chunk tree, root tree e as fs trees, cada bloco uma vez,
+  validando checksum, fsid, bytenr, geração e nível; leitura velha por escrita
+  concorrente repete até 3 vezes.
+- Para cada extent de dados e bloco de metadados, o conjunto de árvores que o
+  referencia. `freed(ids)` soma o que só as árvores escolhidas referenciam:
+  número exato para qualquer seleção, sem `≥`.
+- Medido aqui: 6 s com 32 threads, 459 mil blocos, 3.93 M extents.
+- A leitura roda numa thread ao abrir a tela; a barra mostra `calculando…`
+  até ela terminar. Marcar só soma bitsets já prontos.
+- **Só dados contam como liberados.** O statvfs (o `df`) só sobe com dados; o
+  metadado liberado fica reservado nos chunks de metadados até um block group
+  esvaziar ou um balance. Por isso a barra e o "libera" são de dados, e os
+  metadados aparecem à parte.
+- Depois de apagar: `btrfs subvolume sync`, `btrfs filesystem sync` (os
+  extents soltos só voltam ao livre quando a transação é gravada) e statvfs
+  antes/depois: `liberados 3.8 GiB · livre 107.4 → 111.2 GiB · previsto 3.8
+  GiB + 353 MiB de metadados (ficam reservados)`.
+- Verificação: teste `#[ignore]` em btrfs real confere a previsão contra o
+  `Data, Used` e contra o statvfs, byte a byte; na máquina, dois backups
+  apagados bateram com a previsão.
 
 ### 3.3. Revisão
 
@@ -216,5 +234,4 @@ independente; (2) órfãos no `delete` sem espaço; (3) medição e barras;
    uma vez, ou ligar a opção já é a confirmação?
 2. Incluir os `_snapg_*` que sobram de falhas (hoje do `boot-clean` e do
    `doctor`) na seção de órfãos?
-3. Sinal de fixo: 📌 ou texto (`fixo`)? Emoji tem largura incerta em alguns
-   terminais e quebraria o alinhamento das colunas.
+3. ~~Sinal de fixo: 📌 ou texto?~~ Resolvida: texto `fixo`.
