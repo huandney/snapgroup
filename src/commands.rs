@@ -1537,7 +1537,8 @@ fn delete_interactive(
     // na tela; a estimativa aparece quando ela termina.
     let mut space = SpaceEstimator::start(groups, &orphans, mount_path);
     let mode = delete_ui::Mode::Delete { purge, trash_days };
-    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, mode, purge_due: &[] };
+    let origins = pacman_log::origin_labels(groups);
+    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, origins: &origins, orphans: &orphans, mode, purge_due: &[] };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
     let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
         snapshots::print_delete_cancelled();

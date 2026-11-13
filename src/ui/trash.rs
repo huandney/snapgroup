@@ -20,6 +20,7 @@ pub(crate) fn select_trash_action(
     estimate: &mut dyn FnMut(&BTreeSet<usize>, &BTreeSet<usize>) -> Estimate,
 ) -> Result<Option<TrashAction>> {
     let purge_due: Vec<PurgeDue> = groups.iter().map(|g| purge_due(g, prune_days)).collect();
+    let origins = crate::pacman_log::origin_labels(groups);
     let _alt = AltScreen::enter();
     loop {
         clear_screen();
@@ -36,7 +37,7 @@ pub(crate) fn select_trash_action(
             Some(1) => Mode::TrashPurge,
             _ => return Ok(None),
         };
-        let ctx = DeleteContext { groups, kernel_labels, orphans: &[], mode, purge_due: &purge_due };
+        let ctx = DeleteContext { groups, kernel_labels, origins: &origins, orphans: &[], mode, purge_due: &purge_due };
         let Some(sel) = delete_ui::select_trash_groups(&ctx, estimate)? else {
             continue;
         };
