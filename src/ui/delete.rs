@@ -490,21 +490,17 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
     (lines, cursor_line)
 }
 
-/// Caixa na cor do tipo quando marcada (a mesma da barra). Fixo leva o rosa
-/// no rótulo e no nome sempre; marcar só acrescenta negrito.
+/// Só o `x` leva a cor do tipo (a mesma da barra); marcado, o texto vai a
+/// negrito. O rótulo "fixo" diz o tipo, sempre apagado.
 fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, text: &str) -> String {
     let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
-    let boxed = if marked { paint("[x]".to_string(), kind) } else { style("[ ]").dim().to_string() };
-    let (fix, text) = match (marked, kind) {
-        (true, Paint::Fixed) => (
-            style(fix).color256(FIXED_COLOR).bold().to_string(),
-            style(text).color256(FIXED_COLOR).bold().to_string(),
-        ),
-        (true, _) => (style(fix).dim().to_string(), style(text).bold().to_string()),
-        (false, Paint::Fixed) => (paint(fix.to_string(), kind), paint(text.to_string(), kind)),
-        (false, _) => (style(fix).dim().to_string(), text.to_string()),
-    };
-    format!("{CONTENT_INDENT}{cursor} {boxed} {fix}{text}")
+    let fix = style(fix).dim();
+    if !marked {
+        return format!("{CONTENT_INDENT}{cursor} {} {fix}{text}", style("[ ]").dim());
+    }
+    let x = style(paint("x".to_string(), kind)).bold();
+    let (open, close) = (style("[").dim(), style("]").dim());
+    format!("{CONTENT_INDENT}{cursor} {open}{x}{close} {fix}{}", style(text).bold())
 }
 
 /// `@ @home @root`, com a contagem quando uma base aparece mais de uma vez.
