@@ -409,7 +409,7 @@ const FIX_WIDTH: usize = 4;
 fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usize) -> (Vec<String>, usize) {
     let mut lines = Vec::new();
     let mut cursor_line = 0;
-    // "› ■ " antes de cada item.
+    // "> ■ " antes de cada item.
     let prefix = CONTENT_INDENT.len() + 4;
 
     if !ctx.groups.is_empty() {
@@ -500,7 +500,7 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
 /// Marcado: `■` e o nome na cor do tipo (a mesma da barra), o resto da linha
 /// em negrito. O rótulo "fixo" diz o tipo, sempre apagado.
 fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, name: &str, rest: &str) -> String {
-    let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
+    let cursor = if at_cursor { ">" } else { " " };
     let fix = style(fix).dim();
     if !marked {
         return format!("{CONTENT_INDENT}{cursor} {} {fix}{name}{rest}", style("□").dim());
