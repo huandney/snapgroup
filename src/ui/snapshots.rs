@@ -3,8 +3,8 @@ use crate::orphan::OrphanBackup;
 use crate::snapper;
 use crate::ui::checkpoints::{CheckpointColumns, KERNEL_HEADER, NAME_HEADER, kernel_label, name_cell};
 use crate::ui::term::{
-    AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, section_header,
-    short_datetime,
+    AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, note, result,
+    result_section, section_header, short_datetime, warn,
 };
 use anyhow::Result;
 use console::style;
@@ -44,149 +44,138 @@ pub(crate) fn prompt_save_name(
 }
 
 pub(crate) fn print_save_cancelled() {
-    println!("save cancelado");
+    note(format_args!("save cancelado"));
 }
 
-/// Confirmação do save no vocabulário do `list`: nome primeiro, badges de
-/// mountpoint (root primeiro) e ID em dim. Os números por-config do snapper
-/// são detalhe interno — nenhum outro comando os pede.
+/// Confirmação do save no vocabulário do `list`: nome primeiro, membros
+/// (root primeiro) e ID em dim. Os números por-config do snapper são detalhe
+/// interno — nenhum outro comando os pede.
 pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]) {
-    println!(
-        "{} {} salvo  {}  {}  {}  {}",
-        style("✓").green().bold(),
-        ellipsize(desc, NAME_COL_MAX),
-        style("·").dim(),
-        style(member_badges(mountpoints)).dim(),
-        style("·").dim(),
-        style(format!("#{id}")).dim()
-    );
+    result_section("Salvo");
+    result(format_args!(
+        "{}   {}",
+        style(ellipsize(desc, NAME_COL_MAX)).bold(),
+        style(format!("{} · #{id}", member_badges(mountpoints))).dim()
+    ));
 }
 
 pub(crate) fn print_orphan_deleted(orphan: &OrphanBackup) {
-    println!(
-        "{} backup órfão {} apagado  {}  {}",
-        style("✓").green().bold(),
-        short_datetime(&orphan.created),
-        style("·").dim(),
-        style(orphan.subvols.join(" ")).dim()
-    );
+    result_section("Apagado");
+    result(format_args!(
+        "backup órfão {}   {}",
+        style(short_datetime(&orphan.created)).bold(),
+        style(orphan.bases.join(" ")).dim()
+    ));
 }
 
 pub(crate) fn print_orphan_delete_failed(name: &str, e: &anyhow::Error) {
-    eprintln!("{} falha ao apagar {name}: {e:#}", style("!").yellow().bold());
+    warn(format_args!("falha ao apagar {name}: {e:#}"));
 }
 
 pub(crate) fn print_orphan_scan_failed(e: &anyhow::Error) {
-    eprintln!(
-        "{} backups órfãos não listados: {e:#}",
-        style("!").yellow().bold()
-    );
+    warn(format_args!("backups órfãos não listados: {e:#}"));
 }
 
 /// Espaço livre antes e depois do delete, ao lado do previsto pela tela.
 /// `liberados` vem do statvfs, que só enxerga dados: compara com a parte de
 /// dados da previsão; o metadado sai junto, mas fica reservado no btrfs.
 pub(crate) fn print_space_freed(before: u64, after: u64, predicted: Option<crate::space::Freed>, synced: bool) {
-    let freed = after.saturating_sub(before);
     let human = crate::ui::delete::human_bytes;
-    let predicted = match predicted {
-        Some(p) if p.metadata > 0 => format!(
-            "  ·  previsto {} + {} de metadados (ficam reservados)",
-            human(p.data),
-            human(p.metadata)
-        ),
-        Some(p) => format!("  ·  previsto {}", human(p.data)),
-        None => String::new(),
-    };
-    println!(
-        "{} liberados {}  {}",
-        style("✓").green().bold(),
-        crate::ui::delete::human_bytes(freed),
-        style(format!(
-            "livre {} → {}{predicted}",
-            crate::ui::delete::human_bytes(before),
-            crate::ui::delete::human_bytes(after)
-        ))
-        .dim()
-    );
+    let predicted_data = predicted
+        .map(|p| format!("   {}", style(format!("previsto {}", human(p.data))).dim()))
+        .unwrap_or_default();
+    result_section("Espaço");
+    result(format_args!(
+        "{:<10} {}{predicted_data}",
+        "liberados",
+        style(human(after.saturating_sub(before))).bold()
+    ));
+    result(format_args!(
+        "{:<10} {}",
+        "livre",
+        style(free_range(before, after)).bold()
+    ));
+    if let Some(p) = predicted.filter(|p| p.metadata > 0) {
+        note(format_args!("{:<10} {} ficam reservados no btrfs", "metadados", human(p.metadata)));
+    }
     if !synced {
-        println!(
-            "{}",
-            style("  o btrfs ainda está liberando blocos; o livre pode crescer mais").dim()
-        );
+        note(format_args!("o btrfs ainda está liberando blocos; o livre pode crescer mais"));
     }
 }
 
+/// "107.4 → 111.2 GiB": com a mesma unidade dos dois lados, ela sai uma vez.
+fn free_range(before: u64, after: u64) -> String {
+    let human = crate::ui::delete::human_bytes_parts;
+    let ((before, unit), (after, after_unit)) = (human(before), human(after));
+    if unit == after_unit {
+        return format!("{before} → {after} {unit}");
+    }
+    format!("{before} {unit} → {after} {after_unit}")
+}
+
 pub(crate) fn print_delete_cancelled() {
-    println!("cancelado");
+    note(format_args!("cancelado"));
 }
 
 pub(crate) fn print_delete_done(g: &Group) {
-    println!(
-        "{} grupo {} apagado ({} membros)",
-        style("✓").green().bold(),
-        g.id,
-        g.members.len()
-    );
+    result_section("Apagado");
+    result(format_args!("grupo {} apagado ({} membros)", g.id, g.members.len()));
 }
 
 pub(crate) fn print_trash_done(n: usize) {
-    println!(
-        "{} {}",
-        style("✓").green().bold(),
-        count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira"),
-    );
+    result_section("Lixeira");
+    result(format_args!(
+        "{}",
+        count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira")
+    ));
 }
 
 pub(crate) fn print_trash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
-    eprintln!(
-        "{} falha ao marcar {config} #{number} como lixeira: {e:#}",
-        style("!").yellow().bold()
-    );
+    warn(format_args!("falha ao marcar {config} #{number} como lixeira: {e:#}"));
 }
 
 pub(crate) fn print_cleanup_done(n: usize) {
-    println!(
-        "{} cleanup: {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo antigo movido para a lixeira", "grupos antigos movidos para a lixeira"),
-    );
+    result_section("Retenção");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo antigo movido para a lixeira", "grupos antigos movidos para a lixeira")
+    ));
 }
 
 pub(crate) fn print_cleanup_failed(e: &anyhow::Error) {
-    eprintln!("{} cleanup falhou: {e:#}", style("!").yellow().bold());
+    warn(format_args!("cleanup falhou: {e:#}"));
 }
 
 pub(crate) fn print_purge_done(n: usize) {
-    println!(
-        "{} lixeira: {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo expirado apagado", "grupos expirados apagados"),
-    );
+    result_section("Retenção");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo expirado apagado da lixeira", "grupos expirados apagados da lixeira")
+    ));
 }
 
 pub(crate) fn print_purge_failed(e: &anyhow::Error) {
-    eprintln!("{} purge da lixeira falhou: {e:#}", style("!").yellow().bold());
+    warn(format_args!("purge da lixeira falhou: {e:#}"));
 }
 
 pub(crate) fn print_purge_member_failed(id: GroupId, e: &anyhow::Error) {
-    eprintln!("{} falha ao purgar grupo {id}: {e:#}", style("!").yellow().bold());
+    warn(format_args!("falha ao purgar grupo {id}: {e:#}"));
 }
 
 pub(crate) fn print_trash_empty() {
-    println!("lixeira vazia");
+    note(format_args!("lixeira vazia"));
 }
 
 pub(crate) fn print_trash_cancelled() {
-    println!("cancelado");
+    note(format_args!("cancelado"));
 }
 
 pub(crate) fn print_untrash_done(n: usize) {
-    println!(
-        "{} {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo restaurado da lixeira", "grupos restaurados da lixeira"),
-    );
+    result_section("Restaurado");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo restaurado da lixeira", "grupos restaurados da lixeira")
+    ));
 }
 
 fn count_text(n: usize, singular: &str, plural: &str) -> String {
@@ -195,14 +184,11 @@ fn count_text(n: usize, singular: &str, plural: &str) -> String {
 }
 
 pub(crate) fn print_untrash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
-    eprintln!(
-        "{} falha ao restaurar {config} #{number} da lixeira: {e:#}",
-        style("!").yellow().bold()
-    );
+    warn(format_args!("falha ao restaurar {config} #{number} da lixeira: {e:#}"));
 }
 
 pub(crate) fn print_no_groups() {
-    println!("nenhum grupo snapg save encontrado");
+    note(format_args!("nenhum grupo snapg save encontrado"));
 }
 
 const ID_COL: usize = 10;
@@ -290,7 +276,7 @@ fn member_badges(mountpoints: &mut [String]) -> String {
     });
     mountpoints
         .iter()
-        .map(|m| format!("[{m}]"))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -322,4 +308,22 @@ pub(crate) fn print_regret_status(creation_time: &str, kernel: &str, saved: bool
         style("snapg restore").dim()
     ));
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::free_range;
+
+    const GIB: u64 = 1 << 30;
+    const MIB: u64 = 1 << 20;
+
+    #[test]
+    fn free_range_prints_shared_unit_once() {
+        assert_eq!(free_range(107 * GIB, 111 * GIB), "107.0 → 111.0 GiB");
+    }
+
+    #[test]
+    fn free_range_keeps_both_units_when_they_differ() {
+        assert_eq!(free_range(900 * MIB, 2 * GIB), "900 MiB → 2.0 GiB");
+    }
 }

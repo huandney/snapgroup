@@ -8,7 +8,8 @@ use crate::ui::checkpoints::{
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
-    THEME, branch, clear_screen, confirm, content_width, header, input_line, line, picker_page_len,
+    THEME, branch, clear_screen, confirm, content_width, fail, header, input_line, line, note,
+    picker_page_len, result, result_section, warn, warn_detail,
     prompt_bold,
     prompt_bold_hint, prompt_hint, regret_title, short_datetime, tree_branch, tree_stem,
     truncate_for_terminal,
@@ -371,7 +372,7 @@ pub(crate) fn select_root_snapshot(
 }
 
 pub(crate) fn print_no_restore_points() {
-    println!("nenhum checkpoint ou regret encontrado — nada pra restaurar");
+    note(format_args!("nenhum checkpoint ou regret encontrado — nada pra restaurar"));
 }
 
 pub(crate) fn print_no_root_snapshots() {
@@ -397,7 +398,7 @@ pub(crate) fn print_no_root_snapshots() {
 }
 
 pub(crate) fn print_cancelled() {
-    println!("cancelado");
+    note(format_args!("cancelado"));
 }
 
 pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
@@ -430,49 +431,37 @@ pub(crate) fn confirm_fat32_boot() -> Result<Fat32BootAction> {
 }
 
 pub(crate) fn print_cancelled_boot_risk() {
-    println!("restauração cancelada");
-    println!("/boot não foi alterado");
+    note(format_args!("restauração cancelada"));
+    note(format_args!("/boot não foi alterado"));
 }
 
 pub(crate) fn print_root_restore_done(number: u32, done: &rollback::Done) {
-    println!(
-        "{} / restaurado para o snapshot #{} (home e /root intactos)",
-        style("✓").green().bold(),
-        number
-    );
-    println!("    root anterior arquivado como {}", done.backup_subvol);
+    result_section("Restaurado");
+    result(format_args!("/ restaurado para o snapshot #{number} (home e /root intactos)"));
+    result(format_args!("root anterior arquivado como {}", style(&done.backup_subvol).bold()));
 }
 
 pub(crate) fn print_checkpoint_rollback_done(group_id: GroupId, done: &[rollback::Done]) {
-    println!(
-        "{} rollback completo do grupo {} ({} membros)",
-        style("✓").green().bold(),
-        group_id,
-        done.len()
-    );
+    result_section("Restaurado");
+    result(format_args!("rollback completo do grupo {group_id} ({} membros)", done.len()));
     for d in done {
-        println!(
-            "    {}: sistema atual arquivado como {}",
-            d.config, d.backup_subvol
-        );
+        result(format_args!("{}: sistema atual arquivado como {}", d.config, style(&d.backup_subvol).bold()));
     }
 }
 
 pub(crate) fn print_regret_restore_done(done_len: usize) {
-    println!("{} regret restaurado ({} membros)", style("✓").green().bold(), done_len);
-    println!("  subvols atuais preservados como discard (limpos no próximo boot)");
+    result_section("Restaurado");
+    result(format_args!("regret restaurado ({done_len} membros)"));
+    note(format_args!("subvols atuais preservados como discard (limpos no próximo boot)"));
 }
 
 pub(crate) fn print_cleanup_armed() {
-    line(format_args!("cleanup automático armado para o próximo boot"));
+    note(format_args!("cleanup automático armado para o próximo boot"));
 }
 
 pub(crate) fn print_cleanup_arm_failed(error: &anyhow::Error) {
-    eprintln!(
-        "{} não consegui armar cleanup automático: {error:#}\n  \
-         limpe manualmente após reboot: snapg boot-clean",
-        style("⚠").yellow().bold()
-    );
+    warn(format_args!("não consegui armar cleanup automático: {error:#}"));
+    warn_detail(format_args!("limpe manualmente após reboot: snapg boot-clean"));
 }
 
 pub(crate) fn select_post_restore_action() -> Result<PostRestoreAction> {
@@ -690,11 +679,8 @@ fn print_pending_field(last: bool, label: &str, value: &str) {
 }
 
 pub(crate) fn print_restore_undone(done_len: usize) {
-    println!(
-        "{} restauração desfeita sem reboot ({} membros)",
-        style("✓").green().bold(),
-        done_len
-    );
+    result_section("Desfeito");
+    result(format_args!("restauração desfeita sem reboot ({done_len} membros)"));
 }
 
 pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> {
@@ -729,7 +715,7 @@ pub(crate) fn select_checkpoint_members(group: &Group) -> Result<Option<Group>> 
     };
 
     if selections.is_empty() {
-        println!("nenhum membro selecionado");
+        note(format_args!("nenhum membro selecionado"));
         return Ok(None);
     }
 
@@ -799,7 +785,7 @@ pub(crate) fn select_regret_members(regret: &RegretInfo) -> Result<Option<Regret
     };
 
     if selections.is_empty() {
-        println!("nenhum membro selecionado");
+        note(format_args!("nenhum membro selecionado"));
         return Ok(None);
     }
 
@@ -905,18 +891,18 @@ pub(crate) fn review_regret_restore(
 
 pub(crate) fn print_partial_failure(group_id: GroupId, rerr: &RollbackError) {
     eprintln!();
-    eprintln!("{} FALHA PARCIAL no rollback do grupo {}", style("⚠").yellow().bold(), group_id);
+    fail(format_args!("FALHA PARCIAL no rollback do grupo {group_id}"));
     if rerr.done.is_empty() {
-        eprintln!("  nenhum membro foi feito (falhou no primeiro)");
+        warn_detail(format_args!("nenhum membro foi feito (falhou no primeiro)"));
     } else {
         let names: Vec<&str> = rerr.done.iter().map(|d| d.config.as_str()).collect();
-        eprintln!("  já feito ({}): {}", rerr.done.len(), names.join(", "));
+        warn_detail(format_args!("já feito ({}): {}", rerr.done.len(), names.join(", ")));
     }
-    eprintln!("  falhou em: {}", rerr.failed_config);
-    eprintln!("  erro: {:#}", rerr.error);
+    warn_detail(format_args!("falhou em: {}", rerr.failed_config));
+    warn_detail(format_args!("erro: {:#}", rerr.error));
     eprintln!();
-    eprintln!("Estado atual: nada aplicado ao sistema rodando ainda (rollback é staged).");
-    eprintln!("{} NÃO REINICIE até decidir.", style("⚠").yellow().bold());
+    warn(format_args!("nada aplicado ao sistema rodando ainda (rollback é staged)"));
+    warn(format_args!("{}", style("NÃO REINICIE até decidir.").for_stderr().bold()));
     eprintln!();
 }
 
@@ -927,45 +913,31 @@ pub(crate) fn confirm_revert_partial(done_len: usize) -> Result<bool> {
 
 pub(crate) fn print_auto_revert_failed(error: &anyhow::Error, mount_path: &Path) {
     eprintln!();
-    eprintln!("{} revert automático falhou no meio: {error:#}", style("✗").red().bold());
-    eprintln!(
-        "  toplevel ainda montado em {}",
-        mount_path.display()
-    );
-    eprintln!(
-        "  resolva manualmente lá e depois: sudo umount {}",
-        mount_path.display()
-    );
+    fail(format_args!("revert automático falhou no meio: {error:#}"));
+    warn_detail(format_args!("toplevel ainda montado em {}", mount_path.display()));
+    warn_detail(format_args!("resolva manualmente lá e depois: sudo umount {}", mount_path.display()));
 }
 
 pub(crate) fn print_partial_reverted() {
     println!();
-    println!("{} rollback parcial revertido — sistema voltou ao estado pré-restore", style("✓").green().bold());
+    result_section("Revertido");
+    result(format_args!("rollback parcial revertido — sistema voltou ao estado pré-restore"));
 }
 
 pub(crate) fn print_manual_recovery(done: &[rollback::Done], mount_path: &Path) {
     eprintln!();
-    eprintln!(
-        "Pra reverter manualmente os já feitos (toplevel montado em {}):",
+    warn(format_args!(
+        "pra reverter manualmente os já feitos (toplevel montado em {}):",
         mount_path.display()
-    );
+    ));
     for d in done {
         let mp = mount_path.display();
-        eprintln!("  # {} (mountpoint {})", d.config, d.mountpoint);
-        eprintln!(
-            "  sudo mv {mp}/{} {mp}/{}.discard",
-            d.current_subvol, d.current_subvol
-        );
-        eprintln!(
-            "  sudo mv {mp}/{} {mp}/{}",
-            d.backup_subvol, d.current_subvol
-        );
-        eprintln!(
-            "  sudo btrfs subvolume delete {mp}/{}.discard",
-            d.current_subvol
-        );
+        warn_detail(format_args!("# {} (mountpoint {})", d.config, d.mountpoint));
+        warn_detail(format_args!("sudo mv {mp}/{} {mp}/{}.discard", d.current_subvol, d.current_subvol));
+        warn_detail(format_args!("sudo mv {mp}/{} {mp}/{}", d.backup_subvol, d.current_subvol));
+        warn_detail(format_args!("sudo btrfs subvolume delete {mp}/{}.discard", d.current_subvol));
     }
-    eprintln!("  sudo umount {}", mount_path.display());
+    warn_detail(format_args!("sudo umount {}", mount_path.display()));
 }
 
 pub(crate) fn confirm_reboot_now() -> Result<bool> {
@@ -973,7 +945,8 @@ pub(crate) fn confirm_reboot_now() -> Result<bool> {
 }
 
 pub(crate) fn print_manual_reboot() {
-    println!("{} reinicie manualmente para concluir a restauração", style("⚠").yellow().bold());
+    result_section("Restaurado");
+    result(format_args!("{}", style("reinicie manualmente para concluir a restauração").bold()));
 }
 
 fn read_restore_flow() -> Result<RestoreFlow> {

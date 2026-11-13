@@ -53,9 +53,6 @@ pub fn save(description: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
-    purge_expired_trash(&cfg);
-
     let mut mountpoints = Vec::new();
     for cfg in &configs {
         mountpoints.push(snapper::config_subvolume(cfg)?);
@@ -111,6 +108,10 @@ pub fn save(description: Option<String>) -> Result<()> {
     }
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
+
+    // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
+    // Depois do save, para cair na mesma seção de Retenção do cleanup.
+    purge_expired_trash(&cfg);
 
     // Highlander: save mata regret existente — só depois do checkpoint estar
     // no disco. Na ordem inversa, uma falha do snapper levava o Regret embora

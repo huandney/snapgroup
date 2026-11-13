@@ -409,7 +409,7 @@ const FIX_WIDTH: usize = 4;
 fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usize) -> (Vec<String>, usize) {
     let mut lines = Vec::new();
     let mut cursor_line = 0;
-    // "› ■ " antes de cada item.
+    // "> ■ " antes de cada item.
     let prefix = CONTENT_INDENT.len() + 4;
 
     if !ctx.groups.is_empty() {
@@ -500,7 +500,7 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
 /// Marcado: `■` e o nome na cor do tipo (a mesma da barra), o resto da linha
 /// em negrito. O rótulo "fixo" diz o tipo, sempre apagado.
 fn item_line(at_cursor: bool, marked: bool, kind: Paint, fix: &str, name: &str, rest: &str) -> String {
-    let cursor = if at_cursor { style("›").bold().to_string() } else { " ".to_string() };
+    let cursor = if at_cursor { ">" } else { " " };
     let fix = style(fix).dim();
     if !marked {
         return format!("{CONTENT_INDENT}{cursor} {} {fix}{name}{rest}", style("□").dim());
@@ -581,12 +581,18 @@ fn summary_text(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate) -> Str
 }
 
 pub(crate) fn human_bytes(bytes: u64) -> String {
+    let (number, unit) = human_bytes_parts(bytes);
+    format!("{number} {unit}")
+}
+
+/// Número e unidade separados, para quem precisa compor (ex.: "107.4 → 111.2 GiB").
+pub(crate) fn human_bytes_parts(bytes: u64) -> (String, &'static str) {
     const GIB: f64 = (1u64 << 30) as f64;
     const MIB: f64 = (1u64 << 20) as f64;
     if bytes as f64 >= GIB {
-        return format!("{:.1} GiB", bytes as f64 / GIB);
+        return (format!("{:.1}", bytes as f64 / GIB), "GiB");
     }
-    format!("{:.0} MiB", bytes as f64 / MIB)
+    (format!("{:.0}", bytes as f64 / MIB), "MiB")
 }
 
 /// Terminal sem modo canônico, eco e sinais enquanto a lista está aberta: as

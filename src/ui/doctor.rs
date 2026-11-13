@@ -1,8 +1,8 @@
 use crate::boot::{BootDiagnosis, BootHealth, BootIssue, RescueContext};
 use crate::doctor::DoctorTarget;
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, clear_screen, header, line, path, title, tree_branch,
-    tree_stem, truncate_for_terminal,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, fail, header, line, note, path, title,
+    tree_branch, tree_stem, truncate_for_terminal, warn, warn_detail,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -50,15 +50,12 @@ pub(crate) fn wait_done_action() -> Result<UndoDoneAction> {
 
 pub(crate) fn print_boot_sync_failure(error: &anyhow::Error, recovery: &str) {
     eprintln!();
-    eprintln!(
-        "{} sincronização do /boot (FAT32) falhou: {error:#}",
-        style("✗").red().bold()
-    );
-    eprintln!("  O rollback BTRFS foi aplicado, mas o kernel/initramfs em /boot");
-    eprintln!("  NÃO corresponde aos módulos do snapshot restaurado.");
-    eprintln!("  REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado.");
+    fail(format_args!("sincronização do /boot (FAT32) falhou: {error:#}"));
+    warn_detail(format_args!("O rollback BTRFS foi aplicado, mas o kernel/initramfs em /boot"));
+    warn_detail(format_args!("NÃO corresponde aos módulos do snapshot restaurado."));
+    warn_detail(format_args!("REINICIAR AGORA CAI EM EMERGENCY MODE — reboot bloqueado."));
     eprintln!();
-    eprintln!("  Recuperação alternativa: {recovery}");
+    warn_detail(format_args!("Recuperação alternativa: {recovery}"));
     eprintln!();
 }
 
@@ -131,11 +128,8 @@ pub(crate) fn select_rescue_action(
 }
 
 pub(crate) fn print_rescue_mount_failed(error: &anyhow::Error) {
-    eprintln!(
-        "  {} não foi possível montar o root padrão para resolver automaticamente: {error:#}",
-        style("!").yellow().bold()
-    );
-    eprintln!("  seguindo com instrução manual:");
+    warn(format_args!("não foi possível montar o root padrão para resolver automaticamente: {error:#}"));
+    warn_detail(format_args!("seguindo com instrução manual:"));
     println!();
 }
 
@@ -158,19 +152,19 @@ pub(crate) fn print_rescue_boot(ctx: &RescueContext) {
         "risco"
     );
     println!();
-    println!("  monte o root padrão e rode o doctor contra ele:");
-    println!(
-        "    {}",
+    line(format_args!("monte o root padrão e rode o doctor contra ele:"));
+    line(format_args!(
+        "  {}",
         style(format!(
             "mount -o subvol=/{} {} /mnt/at",
             ctx.default_subvol, ctx.device
         ))
         .bold()
-    );
-    println!(
-        "    {}",
+    ));
+    line(format_args!(
+        "  {}",
         style("snapg doctor --root /mnt/at --boot /boot --apply").bold()
-    );
+    ));
 }
 
 /// Resultado: apenda inline (transcrição), nunca limpa o terminal — um clear
@@ -206,7 +200,7 @@ fn print_target(target: &DoctorTarget, diagnosis: &BootDiagnosis) {
 }
 
 pub(crate) fn print_no_action_needed() {
-    line(format_args!("{} nada a fazer", style("✓").green().bold()));
+    note(format_args!("nada a fazer"));
 }
 
 pub(crate) fn print_suggested_sync(target: &DoctorTarget) {
@@ -301,14 +295,11 @@ fn print_unmounted(root: &Path) {
         style("✗").red().bold()
     );
     println!();
-    println!("  monte-o e rode de novo:  {}", style(format!("mount {}", boot.display())).bold());
+    line(format_args!("monte-o e rode de novo:  {}", style(format!("mount {}", boot.display())).bold()));
     println!();
-    println!("  se o kernel atual não montar vfat (emergency shell), use uma Live ISO:");
-    println!("    1. boot pela Live ISO");
-    println!("    2. monte o root BTRFS em /mnt");
-    println!("    3. monte a partição FAT32 em /mnt/boot");
-    println!(
-        "    4. {}",
-        style("snapg doctor --root /mnt --boot /mnt/boot --apply").bold()
-    );
+    line(format_args!("se o kernel atual não montar vfat (emergency shell), use uma Live ISO:"));
+    line(format_args!("  1. boot pela Live ISO"));
+    line(format_args!("  2. monte o root BTRFS em /mnt"));
+    line(format_args!("  3. monte a partição FAT32 em /mnt/boot"));
+    line(format_args!("  4. {}", style("snapg doctor --root /mnt --boot /mnt/boot --apply").bold()));
 }
