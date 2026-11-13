@@ -3,8 +3,8 @@ use crate::orphan::OrphanBackup;
 use crate::snapper;
 use crate::ui::checkpoints::{CheckpointColumns, KERNEL_HEADER, NAME_HEADER, kernel_label, name_cell};
 use crate::ui::term::{
-    AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, note, result,
-    result_section, section_header, short_datetime, warn,
+    AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, note, note_apart,
+    result, result_section, section_header, short_datetime, warn,
 };
 use anyhow::Result;
 use console::style;
@@ -44,7 +44,7 @@ pub(crate) fn prompt_save_name(
 }
 
 pub(crate) fn print_save_cancelled() {
-    note(format_args!("save cancelado"));
+    note_apart(format_args!("save cancelado"));
 }
 
 /// Confirmação do save no vocabulário do `list`: nome primeiro, membros
@@ -63,7 +63,7 @@ pub(crate) fn print_orphan_deleted(orphan: &OrphanBackup) {
     result_section("Apagado");
     result(format_args!(
         "backup órfão {}   {}",
-        style(short_datetime(&orphan.created)).bold(),
+        style(&orphan.created).bold(),
         style(orphan.bases.join(" ")).dim()
     ));
 }
@@ -114,7 +114,7 @@ fn free_range(before: u64, after: u64) -> String {
 }
 
 pub(crate) fn print_delete_cancelled() {
-    note(format_args!("cancelado"));
+    note_apart(format_args!("cancelado"));
 }
 
 pub(crate) fn print_delete_done(g: &Group) {
@@ -167,7 +167,7 @@ pub(crate) fn print_trash_empty() {
 }
 
 pub(crate) fn print_trash_cancelled() {
-    note(format_args!("cancelado"));
+    note_apart(format_args!("cancelado"));
 }
 
 pub(crate) fn print_untrash_done(n: usize) {

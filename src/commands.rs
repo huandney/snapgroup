@@ -75,6 +75,8 @@ pub fn save(description: Option<String>) -> Result<()> {
             )?
             else {
                 snapshots::print_save_cancelled();
+                // Cancelar o nome não cancela a manutenção da lixeira.
+                purge_expired_trash(&cfg);
                 return Ok(());
             };
             d
@@ -109,15 +111,16 @@ pub fn save(description: Option<String>) -> Result<()> {
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
-    // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
-    // Depois do save, para cair na mesma seção de Retenção do cleanup.
-    purge_expired_trash(&cfg);
-
     // Highlander: save mata regret existente — só depois do checkpoint estar
     // no disco. Na ordem inversa, uma falha do snapper levava o Regret embora
     // sem deixar nada no lugar.
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
     kill_regrets(&configs).context("checkpoint criado, mas o Regret anterior não foi removido")?;
+
+    // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
+    // Depois do save e do Regret, para cair na mesma seção de Retenção do
+    // cleanup (a nota do Regret fica sob Salvo).
+    purge_expired_trash(&cfg);
 
     // Cleanup group-aware: o grupo recém-criado é o mais novo, logo protegido
     // pelo "manter os N mais novos". Best-effort — o snapshot já está no disco.
@@ -974,10 +977,11 @@ fn execute_restore_root_to_snapshot(
     let result = rollback::rollback_root_explicit_preserving_regret(toplevel, root_subvol, &src, &label);
     pb.finish_and_clear();
     let done = result.with_context(|| format!("rollback de / para o snapshot #{number}"))?;
-    crate::ui::restore::print_root_restore_done(number, &done);
-
     let restored_root = toplevel.join(root_subvol);
-    if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
+    let synced = boot::sync_fat32_after_restore(&restored_root);
+    // Depois do sync: o painel de boot limpa a tela e levaria o nome arquivado.
+    crate::ui::restore::print_root_restore_done(number, &done);
+    if let Err(e) = synced {
         return abort_reboot_boot_desync(
             &restored_root,
             e,
@@ -1032,21 +1036,26 @@ fn execute_restore_checkpoint(
     pb.finish_and_clear();
     match outcome {
         Ok(done) => {
-            crate::ui::restore::print_checkpoint_rollback_done(group.id, &done);
-
             // Sincroniza kernel/initramfs em /boot (FAT32) com o snapshot restaurado.
             // Em FAT32, falha de sync = /boot descasado do root → reboot bricka o
             // sistema. Bloqueia o reboot em vez de só avisar.
-            if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
-                let restored_root = mount_path.join(&root.current_subvol);
-                if let Err(e) = boot::sync_fat32_after_restore(&restored_root) {
-                    return abort_reboot_boot_desync(
-                        &restored_root,
-                        e,
-                        "rode 'snapg restore' e escolha 'Cancelar a restauração' \
-                         para voltar ao sistema bootável atual antes de qualquer reboot.",
-                    );
+            let synced = match done.iter().find(|d| d.mountpoint == "/") {
+                Some(root) => {
+                    let restored_root = mount_path.join(&root.current_subvol);
+                    boot::sync_fat32_after_restore(&restored_root).map_err(|e| (restored_root, e))
                 }
+                None => Ok(()),
+            };
+            // Depois do sync: o painel de boot limpa a tela, e os nomes
+            // arquivados precisam ficar à vista, sobretudo se o sync falhou.
+            crate::ui::restore::print_checkpoint_rollback_done(group.id, &done);
+            if let Err((restored_root, e)) = synced {
+                return abort_reboot_boot_desync(
+                    &restored_root,
+                    e,
+                    "rode 'snapg restore' e escolha 'Cancelar a restauração' \
+                     para voltar ao sistema bootável atual antes de qualquer reboot.",
+                );
             }
 
             finish_restore_with_undo(&done, mount_path)
@@ -1279,13 +1288,14 @@ fn execute_restore_regret(regret: RegretInfo, mount_path: &Path) -> Result<()> {
     let label = btrfs::now_local_label().context("obter label de tempo")?;
     rollback::revert_regret(&done, mount_path, &label).context("restaurar regret")?;
 
-    crate::ui::restore::print_regret_restore_done(done.len());
-
     // Sincroniza kernel/initramfs em /boot (FAT32) com o regret restaurado.
-    if let Some(root_member) = done.iter().find(|d| d.mountpoint == "/") {
-        let restored_root_path = mount_path.join(&root_member.current_subvol);
-
-        if let Err(e) = boot::sync_fat32_after_restore(&restored_root_path) {
+    // O resultado sai depois do sync: o painel de boot limpa a tela.
+    let root_member = done.iter().find(|d| d.mountpoint == "/");
+    let restored_root = root_member.map(|m| mount_path.join(&m.current_subvol));
+    let synced = restored_root.as_deref().map_or(Ok(()), boot::sync_fat32_after_restore);
+    crate::ui::restore::print_regret_restore_done(done.len());
+    if let Some(restored_root_path) = restored_root {
+        if let Err(e) = synced {
             return abort_reboot_boot_desync(
                 &restored_root_path,
                 e,

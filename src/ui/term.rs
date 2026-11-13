@@ -171,6 +171,7 @@ pub fn header(s: &str) {
 
 pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
+    set_screen(Screen::Content);
 }
 
 /// O que está na tela acima do cursor, para a seção de resultado decidir se
@@ -194,8 +195,10 @@ fn set_screen(state: Screen) {
 }
 
 /// Abre (ou continua) a seção que fecha uma ação: `▪ Apagado`, `▪ Salvo`.
-/// Ações seguidas do mesmo tipo caem na mesma seção sem repetir o título;
-/// qualquer coisa já impressa acima ganha uma linha em branco antes.
+/// Resultados seguidos do mesmo tipo caem na mesma seção sem repetir o título;
+/// qualquer outra linha no meio (nota, aviso, prompt) fecha a seção, e o
+/// próximo resultado reabre o título. Algo já impresso acima ganha uma linha
+/// em branco antes.
 pub fn result_section(name: &'static str) {
     let mut screen = SCREEN.lock().unwrap_or_else(|e| e.into_inner());
     if *screen == Screen::Result(name) {
@@ -208,29 +211,43 @@ pub fn result_section(name: &'static str) {
     *screen = Screen::Result(name);
 }
 
-/// Linha de resultado sem símbolo, sob a seção aberta.
+/// Linha de resultado sem símbolo, sob a seção aberta. A única que mantém a
+/// seção aberta para o próximo resultado do mesmo tipo.
 pub fn result(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
 }
 
-/// Linha neutra (cancelado, nada a fazer), apagada.
+/// Linha neutra (nada a fazer, detalhe), apagada.
 pub fn note(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{}", style(args.to_string()).dim());
+    set_screen(Screen::Content);
+}
+
+/// Linha neutra que fecha o comando sozinha ("cancelado"): separada do que
+/// estiver acima, para não parecer parte da última seção.
+pub fn note_apart(args: fmt::Arguments<'_>) {
+    if screen() != Screen::Empty {
+        println!();
+    }
+    note(args);
 }
 
 /// Aviso no stderr: `!` amarelo, alinhado ao conteúdo.
 pub fn warn(args: fmt::Arguments<'_>) {
     eprintln!("{CONTENT_INDENT}{} {args}", style("!").for_stderr().yellow().bold());
+    set_screen(Screen::Content);
 }
 
 /// Erro no stderr: `✗` vermelho, alinhado ao conteúdo.
 pub fn fail(args: fmt::Arguments<'_>) {
     eprintln!("{CONTENT_INDENT}{} {args}", style("✗").for_stderr().red().bold());
+    set_screen(Screen::Content);
 }
 
 /// Continuação de aviso/erro no stderr, sob o texto (depois do símbolo).
 pub fn warn_detail(args: fmt::Arguments<'_>) {
     eprintln!("{CONTENT_INDENT}  {args}");
+    set_screen(Screen::Content);
 }
 
 /// Itens por página de um Select/MultiSelect que tem `lines_above` linhas

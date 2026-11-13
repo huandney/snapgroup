@@ -4,7 +4,7 @@ use crate::ui::checkpoints::{
     picker_row,
 };
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line, note, result,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line, note, note_apart, result,
     result_section, truncate_for_terminal, warn,
 };
 use anyhow::{Context, Result};
@@ -93,7 +93,7 @@ fn group_picker_items(
 }
 
 pub(crate) fn print_cancelled() {
-    note(format_args!("renomeação cancelada"));
+    note_apart(format_args!("renomeação cancelada"));
 }
 
 pub(crate) fn print_unchanged(group_id: GroupId) {
