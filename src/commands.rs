@@ -1435,7 +1435,8 @@ fn delete_interactive(
     // A leitura dos metadados (alguns segundos) roda enquanto a lista já está
     // na tela; a estimativa aparece quando ela termina.
     let mut space = SpaceEstimator::start(groups, &orphans, mount_path);
-    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, purge, trash_days };
+    let mode = delete_ui::Mode::Delete { purge, trash_days };
+    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, mode, purge_due: &[] };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
     let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
         snapshots::print_delete_cancelled();
@@ -1710,8 +1711,20 @@ pub fn trash() -> Result<()> {
     let kernel_labels = group::kernel_labels(&groups, &mount_path);
 
     use crate::ui::trash::TrashAction;
-    let selection =
-        crate::ui::trash::select_trash_action(&groups, &kernel_labels, cfg.trash_prune_days);
+    // Como no delete: a leitura dos metadados roda com a lista na tela, e o
+    // top-level fica montado até ela terminar (a estimativa lê por ele).
+    let mut space = SpaceEstimator::start(&groups, &[], &mount_path);
+    let selection = crate::ui::trash::select_trash_action(
+        &groups,
+        &kernel_labels,
+        cfg.trash_prune_days,
+        &mut |g, o| space.estimate(g, o),
+    );
+    let predicted = match &selection {
+        Ok(Some(TrashAction::Purge(indices))) => space.freed(&indices.iter().copied().collect(), &BTreeSet::new()),
+        _ => None,
+    };
+    drop(space);
     let _ = btrfs::umount_toplevel(&mount_path);
     match selection? {
         None => {
@@ -1752,7 +1765,7 @@ pub fn trash() -> Result<()> {
                 }
             }
             if deleted > 0 {
-                report_freed(free_before, None, false);
+                report_freed(free_before, predicted, false);
             }
             result
         }

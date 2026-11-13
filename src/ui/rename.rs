@@ -1,6 +1,6 @@
 use crate::group::{self, Group, GroupId};
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, picker_header, picker_prompt,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, picker_header, picker_prompt,
     picker_row,
 };
 use crate::ui::term::{
@@ -77,18 +77,18 @@ fn group_picker_items(
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
     )
-    .fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
+    .fit_to_terminal(SELECT_MARKER);
 
     let items = groups
         .iter()
         .map(|g| {
-            let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
+            let text = picker_row(g, kernel_labels, &columns);
             truncate_for_terminal(&text, SELECT_MARKER)
         })
         .collect();
     (
         items,
-        picker_header(&columns, None, PickerTail::MembersAndId),
+        picker_header(&columns),
     )
 }
 
