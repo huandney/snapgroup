@@ -208,8 +208,15 @@ fn pick(
     let mut drawn: Option<(bool, (u16, u16))> = None;
     let mut dirty = true;
     loop {
-        // Restaurar não libera nada: sem estimativa, a leitura nem começa.
-        let est = if ctx.mode == Mode::TrashRestore { Estimate::Pending } else { estimate(&sel.groups, &sel.orphans) };
+        // Restaurar não libera nada: sem estimativa, a leitura nem começa. O
+        // primeiro quadro também sai sem ela: na lixeira, a primeira chamada
+        // inicia a leitura e lê os ids dos subvolumes, o que leva segundos, e
+        // a tela ficaria em branco nesse tempo.
+        let est = if ctx.mode == Mode::TrashRestore || drawn.is_none() {
+            Estimate::Pending
+        } else {
+            estimate(&sel.groups, &sel.orphans)
+        };
         let pending = matches!(est, Estimate::Pending);
         let size = term.size();
         if dirty || drawn != Some((pending, size)) {

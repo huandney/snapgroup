@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-> Commits: `d543f5f`, `6a15c67`, `786aff2`, `4226311`, `82f5ff9`, `3e2df3a`, `43b200b`, `e04cd20`, `9b75447`, `cb83cf1`, `52a8176`, `20e9fa3`, `c9a0558`, `2b61ede`
+> Commits: `d543f5f`, `6a15c67`, `786aff2`, `4226311`, `82f5ff9`, `3e2df3a`, `43b200b`, `e04cd20`, `9b75447`, `cb83cf1`, `52a8176`, `20e9fa3`, `c9a0558`, `2b61ede`, `ff05b99`
 
 ### Retention
 - **Feature**: `KEEP_GROUPS` counts and trashes only automatic checkpoints (saved with the default name). Checkpoints with a typed name, renamed ones and kept Regrets are pinned and never leave on their own.
