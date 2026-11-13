@@ -97,9 +97,10 @@ pub fn ensure_single_filesystem(configs: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Deleta regrets existentes de todas as configs no toplevel.
-/// Idempotente: se não existir regret, é no-op silencioso.
-pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()> {
+/// Deleta regrets existentes de todas as configs no toplevel e devolve quantos
+/// apagou. Idempotente: se não existir regret, é no-op silencioso.
+pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<usize> {
+    let mut deleted = 0;
     for cfg in configs {
         let mp = snapper::config_subvolume(cfg)?;
         let current = btrfs::subvol_relative_path(Path::new(&mp))
@@ -112,8 +113,9 @@ pub fn delete_existing_regrets(toplevel: &Path, configs: &[String]) -> Result<()
         btrfs::delete_subvolume_tree(toplevel, &rname)
             .with_context(|| format!("deletar regret {rname}"))?;
         crate::ui::rollback::print_deleted_regret(&rname);
+        deleted += 1;
     }
-    Ok(())
+    Ok(deleted)
 }
 
 /// Two-phase rollback de um grupo.

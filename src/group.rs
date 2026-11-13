@@ -10,6 +10,10 @@ const USERDATA_KEY: &str = "snapgroup-id";
 const TRASH_KEY: &str = "snapgroup-trash";
 const ORIGIN_KIND_KEY: &str = "snapgroup-origin";
 const ORIGIN_DATE_KEY: &str = "snapgroup-origin-date";
+pub const AUTO_KEY: &str = "snapgroup-auto";
+const DEFAULT_NAME_PREFIX: &str = "Checkpoint ";
+/// Nome padrão antes da 0.8.0: `snapg save <id>`.
+const LEGACY_DEFAULT_NAME_PREFIX: &str = "snapg save ";
 
 #[derive(Clone)]
 pub struct Member {
@@ -91,14 +95,53 @@ pub fn trash_epoch(group: &Group) -> Option<i64> {
     group.members.iter().filter_map(|m| extract_trash(&m.snapshot)).min()
 }
 
-/// Grupos a mover pra lixeira: a cauda além dos `keep` mais novos. `keep == 0`
-/// (ilimitado) ou grupos a menos que `keep` → nada. `groups` deve vir
-/// newest-first, como `list_groups` entrega.
-pub fn groups_to_prune(groups: &[Group], keep: usize) -> &[Group] {
-    if keep == 0 || groups.len() <= keep {
-        return &[];
+/// Nome que `default_checkpoint_name` gera: `Checkpoint YYYY-MM-DD HH:MM`, ou
+/// `Checkpoint <epoch>` quando o `date` falha; antes da 0.8.0, `snapg save
+/// <id>`. Só decide grupos antigos, sem a marca `snapgroup-auto`; qualquer
+/// outro texto conta como nome escolhido.
+pub fn is_default_name(description: &str) -> bool {
+    if let Some(id) = description.strip_prefix(LEGACY_DEFAULT_NAME_PREFIX) {
+        return !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit());
     }
-    &groups[keep..]
+    let Some(rest) = description.strip_prefix(DEFAULT_NAME_PREFIX) else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    if !bytes.is_empty() && bytes.iter().all(u8::is_ascii_digit) {
+        return true;
+    }
+    const DATE_SHAPE: &[u8] = b"dddd-dd-dd dd:dd";
+    bytes.len() == DATE_SHAPE.len()
+        && bytes.iter().zip(DATE_SHAPE).all(|(b, shape)| match shape {
+            b'd' => b.is_ascii_digit(),
+            _ => b == shape,
+        })
+}
+
+/// Membro automático: salvo com o nome padrão. A marca gravada pelo `save` (e
+/// zerada pelo `rename`) decide; sem ela, grupo anterior à marca, vale o nome.
+fn member_is_auto(s: &Snapshot) -> bool {
+    match userdata_str(s, AUTO_KEY) {
+        Some(value) => value == "1",
+        None => is_default_name(&s.description),
+    }
+}
+
+/// Grupo automático entra na retenção (`KEEP_GROUPS`); o resto é fixo e só sai
+/// pelo `delete`. Exige todos os membros: um rename interrompido deixa o grupo
+/// misto, e na dúvida ele fica fixo.
+pub fn is_auto(group: &Group) -> bool {
+    !group.members.is_empty() && group.members.iter().all(|m| member_is_auto(&m.snapshot))
+}
+
+/// Grupos a mover pra lixeira: entre os automáticos, a cauda além dos `keep`
+/// mais novos. Fixos nunca entram na conta. `keep == 0` (ilimitado) → nada.
+/// `groups` deve vir newest-first, como `list_groups` entrega.
+pub fn groups_to_prune(groups: &[Group], keep: usize) -> Vec<&Group> {
+    if keep == 0 {
+        return Vec::new();
+    }
+    groups.iter().filter(|g| is_auto(g)).skip(keep).collect()
 }
 
 /// Ids em uso, vivos ou na lixeira.
@@ -172,14 +215,37 @@ pub fn root_member(group: &Group) -> Result<Option<&Member>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Group, GroupId, Member, date, groups_to_prune, is_regret_origin, origin_date,
+        Group, GroupId, Member, date, groups_to_prune, is_auto, is_default_name,
+        is_regret_origin, origin_date,
     };
     use crate::snapper::Snapshot;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
-    fn groups(ids: &[GroupId]) -> Vec<Group> {
+    fn snapshot(description: &str, userdata: Option<Value>) -> Snapshot {
+        Snapshot {
+            number: 1,
+            kind: "single".to_string(),
+            date: "2026-11-12 10:00:00".to_string(),
+            user: "root".to_string(),
+            description: description.to_string(),
+            cleanup: String::new(),
+            userdata,
+        }
+    }
+
+    fn named_group(id: GroupId, description: &str, userdata: Option<Value>) -> Group {
+        Group {
+            id,
+            members: vec![Member {
+                config: "root".to_string(),
+                snapshot: snapshot(description, userdata),
+            }],
+        }
+    }
+
+    fn auto_groups(ids: &[GroupId]) -> Vec<Group> {
         ids.iter()
-            .map(|&id| Group { id, members: Vec::new() })
+            .map(|&id| named_group(id, "Checkpoint 2026-11-12 10:00", None))
             .collect()
     }
 
@@ -189,13 +255,13 @@ mod tests {
 
     #[test]
     fn keep_zero_prunes_nothing() {
-        let g = groups(&[5, 4, 3, 2, 1]);
+        let g = auto_groups(&[5, 4, 3, 2, 1]);
         assert!(pruned_ids(&g, 0).is_empty());
     }
 
     #[test]
     fn fewer_or_equal_than_keep_prunes_nothing() {
-        let g = groups(&[3, 2, 1]);
+        let g = auto_groups(&[3, 2, 1]);
         assert!(pruned_ids(&g, 3).is_empty());
         assert!(pruned_ids(&g, 5).is_empty());
     }
@@ -203,8 +269,60 @@ mod tests {
     #[test]
     fn prunes_tail_beyond_keep() {
         // newest-first: mantém os 2 mais novos (5, 4), poda o resto.
-        let g = groups(&[5, 4, 3, 2, 1]);
+        let g = auto_groups(&[5, 4, 3, 2, 1]);
         assert_eq!(pruned_ids(&g, 2), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn pinned_groups_neither_count_nor_get_pruned() {
+        let g = vec![
+            named_group(6, "Antes do driver", None),
+            named_group(5, "Checkpoint 2026-11-12 10:00", None),
+            named_group(4, "Certo", None),
+            named_group(3, "Checkpoint 2026-11-11 10:00", None),
+            named_group(2, "Checkpoint 2026-11-10 10:00", None),
+            named_group(1, "Atual-1", None),
+        ];
+        // Os 2 automáticos mais novos (5, 3) ficam; só o 2 sai. Fixos ficam.
+        assert_eq!(pruned_ids(&g, 2), vec![2]);
+    }
+
+    #[test]
+    fn default_name_matches_only_what_save_generates() {
+        assert!(is_default_name("Checkpoint 2026-11-12 00:06"));
+        assert!(is_default_name("Checkpoint 1794456375"));
+        assert!(!is_default_name("Checkpoint antes do driver"));
+        assert!(!is_default_name("Checkpoint 2026-11-12 00:06 bom"));
+        assert!(!is_default_name("Checkpoint 2026-11-12"));
+        assert!(!is_default_name("Checkpoint "));
+        assert!(!is_default_name("checkpoint 2026-11-12 00:06"));
+        assert!(!is_default_name("Regret 2026-11-12 00:06"));
+        assert!(is_default_name("snapg save 1781249891"));
+        assert!(!is_default_name("snapg save teste"));
+        assert!(!is_default_name("snapg save "));
+    }
+
+    #[test]
+    fn auto_mark_wins_over_the_name() {
+        let marked = json!({"snapgroup-id": "1", "snapgroup-auto": "1"});
+        let pinned = json!({"snapgroup-id": "1", "snapgroup-auto": "0"});
+        assert!(is_auto(&named_group(1, "Checkpoint 2026-11-12 10:00", Some(marked.clone()))));
+        assert!(is_auto(&named_group(1, "qualquer", Some(marked))));
+        assert!(!is_auto(&named_group(1, "Checkpoint 2026-11-12 10:00", Some(pinned))));
+        // Sem a marca (grupo antigo), decide o nome.
+        assert!(is_auto(&named_group(1, "Checkpoint 2026-11-12 10:00", Some(json!({"snapgroup-id": "1"})))));
+        assert!(!is_auto(&named_group(1, "Teste restore", Some(json!({"snapgroup-id": "1"})))));
+    }
+
+    #[test]
+    fn mixed_or_empty_groups_count_as_pinned() {
+        let mut mixed = named_group(1, "Checkpoint 2026-11-12 10:00", None);
+        mixed.members.push(Member {
+            config: "home".to_string(),
+            snapshot: snapshot("Checkpoint 2026-11-12 10:00", Some(json!({"snapgroup-auto": "0"}))),
+        });
+        assert!(!is_auto(&mixed));
+        assert!(!is_auto(&Group { id: 1, members: Vec::new() }));
     }
 
     #[test]

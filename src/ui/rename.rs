@@ -1,11 +1,11 @@
 use crate::group::{self, Group, GroupId};
 use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, picker_header, picker_prompt,
+    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, picker_header, picker_prompt,
     picker_row,
 };
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line,
-    truncate_for_terminal,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, input_line, line, note, note_apart, result,
+    result_section, truncate_for_terminal, warn,
 };
 use anyhow::{Context, Result};
 use console::style;
@@ -77,48 +77,47 @@ fn group_picker_items(
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
     )
-    .fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
+    .fit_to_terminal(SELECT_MARKER);
 
     let items = groups
         .iter()
         .map(|g| {
-            let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
+            let text = picker_row(g, kernel_labels, &columns);
             truncate_for_terminal(&text, SELECT_MARKER)
         })
         .collect();
     (
         items,
-        picker_header(&columns, None, PickerTail::MembersAndId),
+        picker_header(&columns),
     )
 }
 
 pub(crate) fn print_cancelled() {
-    println!("renomeação cancelada");
+    note_apart(format_args!("renomeação cancelada"));
 }
 
 pub(crate) fn print_unchanged(group_id: GroupId) {
-    println!("checkpoint #{group_id}: nome mantido");
+    note(format_args!("checkpoint #{group_id}: nome mantido"));
 }
 
 pub(crate) fn print_done(group: &Group, description: &str, expected_members: usize) {
-    println!(
-        "{} checkpoint #{} renomeado para {} ({} membros)",
-        style("✓").green().bold(),
-        group.id,
-        description,
-        group.members.len()
-    );
+    result_section("Renomeado");
+    result(format_args!(
+        "{}   {}",
+        style(description).bold(),
+        style(format!("#{} · {} membros", group.id, group.members.len())).dim()
+    ));
     if group.members.len() < expected_members {
-        println!(
-            "  checkpoint parcial: {} de {} configs encontradas",
+        warn(format_args!(
+            "checkpoint parcial: {} de {} configs encontradas",
             group.members.len(),
             expected_members
-        );
+        ));
     }
 }
 
 pub(crate) fn print_no_groups() {
-    println!("nenhum grupo snapg save encontrado");
+    note(format_args!("nenhum grupo snapg save encontrado"));
 }
 
 const NAME_COL_MAX: usize = 36;

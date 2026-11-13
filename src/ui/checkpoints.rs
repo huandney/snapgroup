@@ -20,12 +20,6 @@ pub(crate) struct CheckpointColumns {
     id: usize,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum PickerTail {
-    MembersAndId,
-    None,
-}
-
 impl CheckpointColumns {
     pub(crate) fn new(
         groups: &[Group],
@@ -57,31 +51,14 @@ impl CheckpointColumns {
         Self { name, kernel, id }
     }
 
-    pub(crate) fn fit_to_terminal(
-        mut self,
-        marker_width: usize,
-        status_width: Option<usize>,
-        tail: PickerTail,
-    ) -> Self {
+    pub(crate) fn fit_to_terminal(mut self, marker_width: usize) -> Self {
         let terminal_width = console::Term::stdout().size().1 as usize;
-        self.fit_name_to_width(terminal_width, marker_width, status_width, tail);
+        self.fit_name_to_width(terminal_width, marker_width);
         self
     }
 
-    fn fit_name_to_width(
-        &mut self,
-        terminal_width: usize,
-        marker_width: usize,
-        status_width: Option<usize>,
-        tail: PickerTail,
-    ) {
-        let mut fixed = self.kernel + DATE_WIDTH + 6;
-        if let Some(status_width) = status_width {
-            fixed += 3 + status_width;
-        }
-        if matches!(tail, PickerTail::MembersAndId) {
-            fixed += 3 + MEMBERS_WIDTH + 3 + self.id;
-        }
+    fn fit_name_to_width(&mut self, terminal_width: usize, marker_width: usize) {
+        let fixed = self.kernel + DATE_WIDTH + 6 + 3 + MEMBERS_WIDTH + 3 + self.id;
         let available = terminal_width
             .saturating_sub(CONTENT_INDENT.chars().count())
             .saturating_sub(marker_width)
@@ -111,48 +88,26 @@ pub(crate) fn picker_row(
     group: &Group,
     kernel_labels: &HashMap<GroupId, String>,
     columns: &CheckpointColumns,
-    status: Option<(&str, usize)>,
-    tail: PickerTail,
 ) -> String {
     let name = name_cell(group, columns.name);
     let kernel = kernel_label(kernel_labels, group.id);
-    let status = status
-        .map(|(value, width)| format!("   {value:<width$}"))
-        .unwrap_or_default();
-    let tail = match tail {
-        PickerTail::MembersAndId => format!(
-            "   {:<MEMBERS_WIDTH$}   {:<id_col$}",
-            group.members.len(),
-            format!("#{}", group.id),
-            id_col = columns.id,
-        ),
-        PickerTail::None => String::new(),
-    };
     format!(
-        "{name}   {kernel:<kernel_col$}   {:<DATE_WIDTH$}{status}{tail}",
+        "{name}   {kernel:<kernel_col$}   {:<DATE_WIDTH$}   {:<MEMBERS_WIDTH$}   {:<id_col$}",
         short_datetime(group::date(group)),
+        group.members.len(),
+        format!("#{}", group.id),
         kernel_col = columns.kernel,
+        id_col = columns.id,
     )
 }
 
-pub(crate) fn picker_header(
-    columns: &CheckpointColumns,
-    status: Option<(&str, usize)>,
-    tail: PickerTail,
-) -> String {
-    let status = status
-        .map(|(label, width)| format!("   {label:<width$}"))
-        .unwrap_or_default();
-    let tail = match tail {
-        PickerTail::MembersAndId => {
-            format!("   {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER:<id_col$}", id_col = columns.id)
-        }
-        PickerTail::None => String::new(),
-    };
+pub(crate) fn picker_header(columns: &CheckpointColumns) -> String {
     format!(
-        "{NAME_HEADER:<name_col$}   {KERNEL_HEADER:<kernel_col$}   {DATE_HEADER:<DATE_WIDTH$}{status}{tail}",
+        "{NAME_HEADER:<name_col$}   {KERNEL_HEADER:<kernel_col$}   {DATE_HEADER:<DATE_WIDTH$}   \
+         {MEMBERS_HEADER:<MEMBERS_WIDTH$}   {ID_HEADER:<id_col$}",
         name_col = columns.name,
         kernel_col = columns.kernel,
+        id_col = columns.id,
     )
 }
 
@@ -167,9 +122,14 @@ pub(crate) enum ReviewDecision {
     Cancel,
 }
 
-pub(crate) fn review_irreversible(
-    targets: &[&Group],
-    kernel_labels: &HashMap<GroupId, String>,
+/// Cartão da revisão irreversível: uma linha de título e uma de detalhe.
+pub(crate) struct ReviewCard {
+    pub(crate) title: String,
+    pub(crate) detail: String,
+}
+
+pub(crate) fn review_cards(
+    cards: &[ReviewCard],
     title: &str,
     prompt: &str,
     hint: &str,
@@ -178,18 +138,10 @@ pub(crate) fn review_irreversible(
     let mut page = 0usize;
     loop {
         let page_size = review_page_size();
-        let pages = targets.len().div_ceil(page_size).max(1);
+        let pages = cards.len().div_ceil(page_size).max(1);
         page = page.min(pages - 1);
 
-        render_review(
-            targets,
-            kernel_labels,
-            title,
-            prompt,
-            hint,
-            yes,
-            (page, page_size, pages),
-        );
+        render_review(cards, title, prompt, hint, yes, (page, page_size, pages));
         match console::Term::stdout()
             .read_key()
             .context("aguardar confirmação")?
@@ -211,8 +163,7 @@ pub(crate) fn review_irreversible(
 }
 
 fn render_review(
-    targets: &[&Group],
-    kernel_labels: &HashMap<GroupId, String>,
+    cards: &[ReviewCard],
     title: &str,
     prompt: &str,
     hint: &str,
@@ -229,9 +180,9 @@ fn render_review(
     println!();
 
     let start = page * page_size;
-    let end = (start + page_size).min(targets.len());
-    for group in &targets[start..end] {
-        print_review_card(group, kernel_label(kernel_labels, group.id));
+    let end = (start + page_size).min(cards.len());
+    for card in &cards[start..end] {
+        print_review_card(card);
     }
     if pages > 1 {
         line(format_args!(
@@ -246,27 +197,11 @@ fn review_page_size() -> usize {
     rows.saturating_sub(8).max(3) / 3
 }
 
-fn print_review_card(group: &Group, kernel: &str) {
-    let description = group::description(group).trim();
-    let description = if description.is_empty() {
-        format!("#{}", group.id)
-    } else {
-        description.to_string()
-    };
-    let description = truncate_chars(&description, content_width().min(80));
-    println!("{CONTENT_INDENT}{description}");
-    println!(
-        "{}{}",
-        CONTENT_INDENT,
-        style(format!(
-            "└─ {}  ·  kernel {}  ·  {} membros  ·  #{}",
-            short_datetime(group::date(group)),
-            kernel,
-            group.members.len(),
-            group.id
-        ))
-        .dim()
-    );
+fn print_review_card(card: &ReviewCard) {
+    let title = truncate_chars(&card.title, content_width().min(80));
+    let detail = truncate_chars(&card.detail, content_width().saturating_sub(3));
+    println!("{CONTENT_INDENT}{title}");
+    println!("{}{}", CONTENT_INDENT, style(format!("└─ {detail}")).dim());
 }
 
 fn truncate_chars(value: &str, maximum: usize) -> String {
@@ -282,8 +217,7 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckpointColumns, PickerTail, kernel_label, name_cell, picker_header, picker_prompt,
-        picker_row,
+        CheckpointColumns, kernel_label, name_cell, picker_header, picker_prompt, picker_row,
     };
     use crate::group::{Group, Member};
     use crate::snapper::Snapshot;
@@ -324,21 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn picker_row_keeps_common_field_order_and_optional_status() {
+    fn picker_row_keeps_common_field_order() {
         let group = group(7, "Teste");
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
         let columns =
             CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
 
         assert_eq!(
-            picker_row(
-                &group,
-                &labels,
-                &columns,
-                Some(("em ~2d", 6)),
-                PickerTail::MembersAndId,
-            ),
-            "Teste   7.0.12-1-cachyos   2026-07-10 20:50   em ~2d   1         #7"
+            picker_row(&group, &labels, &columns),
+            "Teste   7.0.12-1-cachyos   2026-07-10 20:50   1         #7"
         );
     }
 
@@ -348,32 +276,14 @@ mod tests {
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
         let columns =
             CheckpointColumns::new(std::slice::from_ref(&group), &labels, 4, 36, 6);
-        let header = picker_header(&columns, None, PickerTail::MembersAndId);
-        let row = picker_row(
-            &group,
-            &labels,
-            &columns,
-            None,
-            PickerTail::MembersAndId,
-        );
+        let header = picker_header(&columns);
+        let row = picker_row(&group, &labels, &columns);
 
         assert_eq!(header.find("Kernel"), row.find("7.0.12-1-cachyos"));
         assert_eq!(header.find("Data"), row.find("2026-07-10 20:50"));
         assert_eq!(header.find("Membros"), row.find("1         #7"));
         assert_eq!(header.find("ID"), row.find("#7"));
         assert!(picker_prompt("Escolha", &header, 6).contains("\n         Nome"));
-
-        let compact_header = picker_header(&columns, Some(("Purga", 7)), PickerTail::None);
-        let compact_row = picker_row(
-            &group,
-            &labels,
-            &columns,
-            Some(("em ~2d", 7)),
-            PickerTail::None,
-        );
-        assert!(!compact_header.contains("Membros"));
-        assert!(!compact_header.contains("ID"));
-        assert!(!compact_row.contains("#7"));
     }
 
     #[test]
@@ -382,24 +292,16 @@ mod tests {
         let labels = HashMap::from([(7, "7.0.12-1-cachyos".to_string())]);
 
         let mut narrow = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
-        narrow.fit_name_to_width(80, 6, None, PickerTail::MembersAndId);
+        narrow.fit_name_to_width(80, 6);
         assert_eq!(narrow.name, 18);
-        assert_eq!(picker_header(&narrow, None, PickerTail::MembersAndId).len() + 9, 80);
+        assert_eq!(picker_header(&narrow).len() + 9, 80);
 
         let mut medium = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
-        medium.fit_name_to_width(100, 6, None, PickerTail::MembersAndId);
+        medium.fit_name_to_width(100, 6);
         assert_eq!(medium.name, 36);
 
         let mut wide = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
-        wide.fit_name_to_width(120, 6, None, PickerTail::MembersAndId);
+        wide.fit_name_to_width(120, 6);
         assert_eq!(wide.name, 36);
-
-        let mut compact = CheckpointColumns::new(&groups, &labels, 4, 36, 6);
-        compact.fit_name_to_width(80, 6, Some(7), PickerTail::None);
-        assert_eq!(compact.name, 23);
-        assert_eq!(
-            picker_header(&compact, Some(("Purga", 7)), PickerTail::None).len() + 9,
-            80
-        );
     }
 }

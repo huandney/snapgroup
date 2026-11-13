@@ -60,10 +60,14 @@ fn rename_group(group: &Group, description: &str, expected_members: usize) -> Re
     // Compara contra TODOS os membros, não só o primeiro: um rename anterior
     // interrompido (Ctrl-C no meio do loop) deixa descrições divergentes, e
     // re-rodar com o mesmo nome precisa reparar os membros que ficaram para trás.
-    if group
-        .members
-        .iter()
-        .all(|m| m.snapshot.description == description)
+    // Renomear é escolher o nome: um automático vira fixo, mesmo mantendo o
+    // texto. Por isso "mesmo nome" só é no-op quando já não há o que fixar.
+    let auto = group::is_auto(group);
+    if !auto
+        && group
+            .members
+            .iter()
+            .all(|m| m.snapshot.description == description)
     {
         rename_ui::print_unchanged(group.id);
         return Ok(());
@@ -91,6 +95,24 @@ fn rename_group(group: &Group, description: &str, expected_members: usize) -> Re
         ));
     }
 
+    if auto {
+        pin_group(group)?;
+    }
+
     rename_ui::print_done(group, description, expected_members);
+    Ok(())
+}
+
+/// Grava a marca de fixo em cada membro. Falha no meio deixa o grupo misto,
+/// que `is_auto` já trata como fixo; re-rodar o rename completa os demais.
+fn pin_group(group: &Group) -> Result<()> {
+    for member in &group.members {
+        snapper::pin(&member.config, member.snapshot.number, group.id).with_context(|| {
+            format!(
+                "nome trocado, mas fixar {} #{} do checkpoint #{} falhou",
+                member.config, member.snapshot.number, group.id
+            )
+        })?;
+    }
     Ok(())
 }

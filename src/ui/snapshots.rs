@@ -1,14 +1,12 @@
 use crate::group::{self, Group, GroupId};
+use crate::orphan::OrphanBackup;
 use crate::snapper;
-use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, kernel_label,
-    name_cell, picker_header, picker_prompt, picker_row, review_irreversible,
-};
+use crate::ui::checkpoints::{CheckpointColumns, KERNEL_HEADER, NAME_HEADER, kernel_label, name_cell};
 use crate::ui::term::{
-    AltScreen, HINT_MULTI, THEME, app_header, clear_screen, ellipsize, header, input_line, line,
-    prompt_hint, section_header, short_datetime, truncate_for_terminal,
+    AltScreen, app_header, clear_screen, ellipsize, header, input_line, line, note, note_apart,
+    result, result_section, section_header, short_datetime, warn,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::style;
 use std::collections::HashMap;
 
@@ -20,6 +18,7 @@ pub(crate) fn prompt_save_name(
     mountpoints: &mut [String],
     kernel: &str,
     placeholder: &str,
+    keep_groups: usize,
 ) -> Result<Option<String>> {
     let _alt = AltScreen::enter();
     let badges = member_badges(mountpoints);
@@ -29,216 +28,178 @@ pub(crate) fn prompt_save_name(
         header("Salvar checkpoint");
         line(format_args!("{:<9} {}", "membros", badges));
         line(format_args!("{:<9} {}", "kernel", kernel));
+        // Sem retenção (KEEP_GROUPS=0) a diferença não muda nada: sem aviso.
+        if keep_groups > 0 {
+            line(format_args!(
+                "{:<9} {}",
+                "retenção",
+                style(format!(
+                    "nome padrão entra nos {keep_groups} automáticos mantidos · nome digitado fixa"
+                ))
+                .dim()
+            ));
+        }
         println!();
     })
 }
 
 pub(crate) fn print_save_cancelled() {
-    println!("save cancelado");
+    note_apart(format_args!("save cancelado"));
 }
 
-/// Confirmação do save no vocabulário do `list`: nome primeiro, badges de
-/// mountpoint (root primeiro) e ID em dim. Os números por-config do snapper
-/// são detalhe interno — nenhum outro comando os pede.
+/// Confirmação do save no vocabulário do `list`: nome primeiro, membros
+/// (root primeiro) e ID em dim. Os números por-config do snapper são detalhe
+/// interno — nenhum outro comando os pede.
 pub(crate) fn print_save_created(id: i64, desc: &str, mountpoints: &mut [String]) {
-    println!(
-        "{} {} salvo  {}  {}  {}  {}",
-        style("✓").green().bold(),
-        ellipsize(desc, NAME_COL_MAX),
-        style("·").dim(),
-        style(member_badges(mountpoints)).dim(),
-        style("·").dim(),
-        style(format!("#{id}")).dim()
-    );
+    result_section("Salvo");
+    result(format_args!(
+        "{}   {}",
+        style(ellipsize(desc, NAME_COL_MAX)).bold(),
+        style(format!("{} · #{id}", member_badges(mountpoints))).dim()
+    ));
 }
 
-/// Roda o wizard de exclusão (modo → seleção → confirmação) no alternate screen
-/// e devolve os índices a apagar, ou `None` se cancelado. Esc na confirmação
-/// volta pra seleção (um passo). A exclusão em si roda fora, no terminal normal.
-pub(crate) fn select_delete_plan(
-    groups: &[Group],
-    kernel_labels: &HashMap<GroupId, String>,
-    purge: bool,
-) -> Result<Option<Vec<usize>>> {
-    let _alt = AltScreen::enter();
-    // Uma tela de revisão para qualquer caminho (seleção ou "todos"): mostra o
-    // que será afetado e confirma. Trash ou purge só muda o texto. Esc na
-    // revisão volta pra seleção (um passo).
-    loop {
-        let Some(indices) = select_delete_targets(groups, kernel_labels)? else {
-            return Ok(None);
-        };
-        let targets: Vec<&Group> = indices.iter().map(|&i| &groups[i]).collect();
-        match confirm_delete_targets(&targets, kernel_labels, purge)? {
-            ReviewDecision::Proceed => return Ok(Some(indices)),
-            ReviewDecision::Back => continue,
-            ReviewDecision::Cancel => return Ok(None),
-        }
+pub(crate) fn print_orphan_deleted(orphan: &OrphanBackup) {
+    result_section("Apagado");
+    result(format_args!(
+        "backup órfão {}   {}",
+        style(&orphan.created).bold(),
+        style(orphan.bases.join(" ")).dim()
+    ));
+}
+
+pub(crate) fn print_orphan_delete_failed(name: &str, e: &anyhow::Error) {
+    warn(format_args!("falha ao apagar {name}: {e:#}"));
+}
+
+pub(crate) fn print_orphan_scan_failed(e: &anyhow::Error) {
+    warn(format_args!("backups órfãos não listados: {e:#}"));
+}
+
+/// Espaço livre antes e depois do comando, ao lado do previsto pela tela.
+/// `liberados` vem do statvfs, que só enxerga dados: compara com a parte de
+/// dados da previsão; o metadado sai junto, mas fica reservado no btrfs.
+/// `partial`: o comando também apagou o que a previsão não cobre (purga da
+/// lixeira), então ela vale só para a seleção.
+pub(crate) fn print_space_freed(
+    before: u64,
+    after: u64,
+    predicted: Option<crate::space::Freed>,
+    partial: bool,
+    synced: bool,
+) {
+    let human = crate::ui::delete::human_bytes;
+    let scope = if partial { " só da seleção" } else { "" };
+    let predicted_data = predicted
+        .map(|p| format!("   {}", style(format!("previsto {}{scope}", human(p.data))).dim()))
+        .unwrap_or_default();
+    result_section("Espaço");
+    result(format_args!(
+        "{:<10} {}{predicted_data}",
+        "liberados",
+        style(human(after.saturating_sub(before))).bold()
+    ));
+    result(format_args!(
+        "{:<10} {}",
+        "livre",
+        style(free_range(before, after)).bold()
+    ));
+    if let Some(p) = predicted.filter(|p| p.metadata > 0) {
+        note(format_args!("{:<10} {} ficam reservados no btrfs", "metadados", human(p.metadata)));
+    }
+    if !synced {
+        note(format_args!("o btrfs ainda está liberando blocos; o livre pode crescer mais"));
     }
 }
 
-fn select_delete_targets(
-    groups: &[Group],
-    kernel_labels: &HashMap<GroupId, String>,
-) -> Result<Option<Vec<usize>>> {
-    loop {
-        clear_screen();
-        header("Apagar checkpoints");
-        let action = dialoguer::Select::with_theme(&THEME)
-            .items(&["Selecionar", "Apagar todos"])
-            .default(0)
-            .clear(true)
-            .report(false)
-            .interact_opt()
-            .context("seleção cancelada")?;
-
-        match action {
-            Some(0) => match select_delete_targets_manually(groups, kernel_labels)? {
-                Some(targets) => return Ok(Some(targets)),
-                None => continue,
-            },
-            // "Apagar todos" só seleciona; a revisão única em select_delete_plan
-            // já cobre a confirmação — sem segunda pergunta redundante.
-            Some(1) => return Ok(Some((0..groups.len()).collect())),
-            _ => return Ok(None),
-        }
+/// "107.4 → 111.2 GiB": com a mesma unidade dos dois lados, ela sai uma vez.
+fn free_range(before: u64, after: u64) -> String {
+    let human = crate::ui::delete::human_bytes_parts;
+    let ((before, unit), (after, after_unit)) = (human(before), human(after));
+    if unit == after_unit {
+        return format!("{before} → {after} {unit}");
     }
-}
-
-fn select_delete_targets_manually(
-    groups: &[Group],
-    kernel_labels: &HashMap<GroupId, String>,
-) -> Result<Option<Vec<usize>>> {
-    let columns = CheckpointColumns::new(
-        groups,
-        kernel_labels,
-        NAME_HEADER.len(),
-        NAME_COL_MAX,
-        KERNEL_HEADER.len(),
-    )
-    .fit_to_terminal(
-        crate::ui::term::MULTI_MARKER,
-        None,
-        PickerTail::MembersAndId,
-    );
-
-    let mut items: Vec<String> = Vec::new();
-    for g in groups {
-        let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
-        items.push(truncate_for_terminal(&text, crate::ui::term::MULTI_MARKER));
-    }
-    let columns_header = picker_header(&columns, None, PickerTail::MembersAndId);
-    let prompt = picker_prompt(
-        &prompt_hint("Selecione os checkpoints para apagar", HINT_MULTI),
-        &columns_header,
-        crate::ui::term::MULTI_MARKER,
-    );
-
-    clear_screen();
-    header("Apagar checkpoints");
-    let Some(selections) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(prompt)
-        .items(&items)
-        .max_length(crate::ui::term::picker_page_len(4))
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(None);
-    };
-
-    if selections.is_empty() {
-        println!("nenhum checkpoint selecionado");
-        return Ok(None);
-    }
-
-    Ok(Some(selections))
-}
-
-fn confirm_delete_targets(
-    targets: &[&Group],
-    kernel_labels: &HashMap<GroupId, String>,
-    purge: bool,
-) -> Result<ReviewDecision> {
-    let (prompt, hint) = if purge {
-        ("Apagar permanentemente?", "ignora a lixeira")
-    } else {
-        ("Mover para a lixeira?", "recuperável em snapg trash")
-    };
-    review_irreversible(targets, kernel_labels, "Apagar checkpoints", prompt, hint)
+    format!("{before} {unit} → {after} {after_unit}")
 }
 
 pub(crate) fn print_delete_cancelled() {
-    println!("cancelado");
+    note_apart(format_args!("cancelado"));
 }
 
 pub(crate) fn print_delete_done(g: &Group) {
-    println!(
-        "{} grupo {} apagado ({} membros)",
-        style("✓").green().bold(),
-        g.id,
-        g.members.len()
-    );
+    result_section("Apagado");
+    result(format_args!("grupo {} apagado ({} membros)", g.id, g.members.len()));
 }
 
 pub(crate) fn print_trash_done(n: usize) {
-    println!(
-        "{} {}",
-        style("✓").green().bold(),
-        count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira"),
-    );
+    result_section("Lixeira");
+    result(format_args!(
+        "{}",
+        count_text(n, "checkpoint movido para a lixeira", "checkpoints movidos para a lixeira")
+    ));
+}
+
+/// O que a lixeira devolve quando o purge levar estes checkpoints: estimativa
+/// da tela do delete, só dados (o que volta ao livre).
+pub(crate) fn print_trash_space(n: usize, bytes: u64, prune_days: u64) {
+    let when = match prune_days {
+        0 => "no próximo save ou delete".to_string(),
+        1 => "em 1 dia".to_string(),
+        n => format!("em {n} dias"),
+    };
+    let (verb, leave) = if n == 1 { ("libera", "sair") } else { ("liberam", "saírem") };
+    note(format_args!(
+        "{verb} ~{} quando {leave} da lixeira, {when}",
+        crate::ui::delete::human_bytes(bytes)
+    ));
 }
 
 pub(crate) fn print_trash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
-    eprintln!(
-        "{} falha ao marcar {config} #{number} como lixeira: {e:#}",
-        style("!").yellow().bold()
-    );
+    warn(format_args!("falha ao marcar {config} #{number} como lixeira: {e:#}"));
 }
 
 pub(crate) fn print_cleanup_done(n: usize) {
-    println!(
-        "{} cleanup: {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo antigo movido para a lixeira", "grupos antigos movidos para a lixeira"),
-    );
+    result_section("Retenção");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo antigo movido para a lixeira", "grupos antigos movidos para a lixeira")
+    ));
 }
 
 pub(crate) fn print_cleanup_failed(e: &anyhow::Error) {
-    eprintln!("{} cleanup falhou: {e:#}", style("!").yellow().bold());
+    warn(format_args!("cleanup falhou: {e:#}"));
 }
 
 pub(crate) fn print_purge_done(n: usize) {
-    println!(
-        "{} lixeira: {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo expirado apagado", "grupos expirados apagados"),
-    );
+    result_section("Retenção");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo expirado apagado da lixeira", "grupos expirados apagados da lixeira")
+    ));
 }
 
 pub(crate) fn print_purge_failed(e: &anyhow::Error) {
-    eprintln!("{} purge da lixeira falhou: {e:#}", style("!").yellow().bold());
+    warn(format_args!("purge da lixeira falhou: {e:#}"));
 }
 
 pub(crate) fn print_purge_member_failed(id: GroupId, e: &anyhow::Error) {
-    eprintln!("{} falha ao purgar grupo {id}: {e:#}", style("!").yellow().bold());
+    warn(format_args!("falha ao purgar grupo {id}: {e:#}"));
 }
 
 pub(crate) fn print_trash_empty() {
-    println!("lixeira vazia");
+    note(format_args!("lixeira vazia"));
 }
 
 pub(crate) fn print_trash_cancelled() {
-    println!("cancelado");
+    note_apart(format_args!("cancelado"));
 }
 
 pub(crate) fn print_untrash_done(n: usize) {
-    println!(
-        "{} {}",
-        style("✓").green().bold(),
-        count_text(n, "grupo restaurado da lixeira", "grupos restaurados da lixeira"),
-    );
+    result_section("Restaurado");
+    result(format_args!(
+        "{}",
+        count_text(n, "grupo restaurado da lixeira", "grupos restaurados da lixeira")
+    ));
 }
 
 fn count_text(n: usize, singular: &str, plural: &str) -> String {
@@ -247,14 +208,11 @@ fn count_text(n: usize, singular: &str, plural: &str) -> String {
 }
 
 pub(crate) fn print_untrash_member_failed(config: &str, number: u32, e: &anyhow::Error) {
-    eprintln!(
-        "{} falha ao restaurar {config} #{number} da lixeira: {e:#}",
-        style("!").yellow().bold()
-    );
+    warn(format_args!("falha ao restaurar {config} #{number} da lixeira: {e:#}"));
 }
 
 pub(crate) fn print_no_groups() {
-    println!("nenhum grupo snapg save encontrado");
+    note(format_args!("nenhum grupo snapg save encontrado"));
 }
 
 const ID_COL: usize = 10;
@@ -342,7 +300,7 @@ fn member_badges(mountpoints: &mut [String]) -> String {
     });
     mountpoints
         .iter()
-        .map(|m| format!("[{m}]"))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -374,4 +332,22 @@ pub(crate) fn print_regret_status(creation_time: &str, kernel: &str, saved: bool
         style("snapg restore").dim()
     ));
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::free_range;
+
+    const GIB: u64 = 1 << 30;
+    const MIB: u64 = 1 << 20;
+
+    #[test]
+    fn free_range_prints_shared_unit_once() {
+        assert_eq!(free_range(107 * GIB, 111 * GIB), "107.0 → 111.0 GiB");
+    }
+
+    #[test]
+    fn free_range_keeps_both_units_when_they_differ() {
+        assert_eq!(free_range(900 * MIB, 2 * GIB), "900 MiB → 2.0 GiB");
+    }
 }

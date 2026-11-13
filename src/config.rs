@@ -11,7 +11,8 @@ const MAX_PRUNE_DAYS: u64 = 3650;
 /// default — o snapgroup nasceu zero-config e instalar a feature não pode
 /// mudar comportamento de ninguém sem opt-in.
 pub struct Config {
-    /// Quantos grupos snapg manter vivos. `0` = ilimitado (comportamento legado).
+    /// Quantos grupos automáticos (nome padrão) manter vivos; fixos não contam.
+    /// `0` = ilimitado (comportamento legado).
     pub keep_groups: usize,
     /// Dias que um grupo fica na lixeira antes do purge apagar de vez.
     /// `u64`: dias negativos não existem, e um valor negativo poria o cutoff

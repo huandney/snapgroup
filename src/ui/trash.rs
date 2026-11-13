@@ -1,14 +1,8 @@
 use crate::group::{self, Group, GroupId};
-use crate::ui::checkpoints::{
-    CheckpointColumns, KERNEL_HEADER, NAME_HEADER, PickerTail, ReviewDecision, picker_row,
-    picker_header, picker_prompt, review_irreversible,
-};
-use crate::ui::term::{
-    AltScreen, HINT_MULTI, MULTI_MARKER, THEME, clear_screen, header, prompt_hint,
-    truncate_for_terminal,
-};
+use crate::ui::delete::{self as delete_ui, DeleteContext, Estimate, Mode, PurgeDue};
+use crate::ui::term::{AltScreen, THEME, clear_screen, header};
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(crate) enum TrashAction {
@@ -16,13 +10,16 @@ pub(crate) enum TrashAction {
     Purge(Vec<usize>),
 }
 
-/// Wizard da lixeira: escolhe a ação (restaurar / apagar de vez) e os grupos.
-/// `prune_days` alimenta a coluna "purga em ~Nd". `None` = cancelado/sem seleção.
+/// Wizard da lixeira: escolhe a ação (restaurar / apagar de vez) e os grupos,
+/// na mesma tela do delete. `prune_days` alimenta a coluna "Purga";
+/// `estimate` responde quanto a seleção libera ao apagar. `None` = cancelado.
 pub(crate) fn select_trash_action(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
     prune_days: u64,
+    estimate: &mut dyn FnMut(&BTreeSet<usize>, &BTreeSet<usize>) -> Estimate,
 ) -> Result<Option<TrashAction>> {
+    let purge_due: Vec<PurgeDue> = groups.iter().map(|g| purge_due(g, prune_days)).collect();
     let _alt = AltScreen::enter();
     loop {
         clear_screen();
@@ -34,128 +31,27 @@ pub(crate) fn select_trash_action(
             .report(false)
             .interact_opt()
             .context("seleção cancelada")?;
-
-        match action {
-            Some(0) => {
-                if let Some(sel) =
-                    select_groups(groups, kernel_labels, prune_days, "Selecione para restaurar")?
-                {
-                    return Ok(Some(TrashAction::Restore(sel)));
-                }
-            }
-            Some(1) => {
-                loop {
-                    let Some(sel) = select_groups(
-                        groups,
-                        kernel_labels,
-                        prune_days,
-                        "Selecione para apagar de vez",
-                    )?
-                    else {
-                        break;
-                    };
-                    let targets: Vec<&Group> = sel.iter().map(|&index| &groups[index]).collect();
-                    match review_irreversible(
-                        &targets,
-                        kernel_labels,
-                        "Lixeira",
-                        "Apagar permanentemente?",
-                        "não dá para desfazer",
-                    )? {
-                        ReviewDecision::Proceed => return Ok(Some(TrashAction::Purge(sel))),
-                        ReviewDecision::Back => continue,
-                        ReviewDecision::Cancel => break,
-                    }
-                }
-            }
+        let mode = match action {
+            Some(0) => Mode::TrashRestore,
+            Some(1) => Mode::TrashPurge,
             _ => return Ok(None),
+        };
+        let ctx = DeleteContext { groups, kernel_labels, orphans: &[], mode, purge_due: &purge_due };
+        let Some(sel) = delete_ui::select_trash_groups(&ctx, estimate)? else {
+            continue;
+        };
+        if mode == Mode::TrashRestore {
+            return Ok(Some(TrashAction::Restore(sel)));
         }
+        return Ok(Some(TrashAction::Purge(sel)));
     }
 }
-
-fn select_groups(
-    groups: &[Group],
-    kernel_labels: &HashMap<GroupId, String>,
-    prune_days: u64,
-    prompt: &str,
-) -> Result<Option<Vec<usize>>> {
-    let purge_labels: Vec<String> = groups
-        .iter()
-        .map(|group| purge_due_label(group, prune_days))
-        .collect();
-    let purge_width = purge_labels
-        .iter()
-        .map(|label| label.chars().count())
-        .max()
-        .unwrap_or(PURGE_HEADER.len())
-        .max(PURGE_HEADER.len());
-    let columns = CheckpointColumns::new(
-        groups,
-        kernel_labels,
-        NAME_HEADER.len(),
-        NAME_COL_MAX,
-        KERNEL_HEADER.len(),
-    )
-    .fit_to_terminal(MULTI_MARKER, Some(purge_width), PickerTail::None);
-    let items: Vec<String> = groups
-        .iter()
-        .zip(&purge_labels)
-        .map(|(group, purge)| trash_row(group, kernel_labels, purge, purge_width, &columns))
-        .collect();
-    let columns_header = picker_header(
-        &columns,
-        Some((PURGE_HEADER, purge_width)),
-        PickerTail::None,
-    );
-    let prompt = picker_prompt(
-        &prompt_hint(prompt, HINT_MULTI),
-        &columns_header,
-        MULTI_MARKER,
-    );
-    clear_screen();
-    header("Lixeira");
-    let Some(sel) = dialoguer::MultiSelect::with_theme(&THEME)
-        .with_prompt(prompt)
-        .items(&items)
-        .max_length(crate::ui::term::picker_page_len(4))
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
-    else {
-        return Ok(None);
-    };
-    if sel.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(sel))
-}
-
-fn trash_row(
-    g: &Group,
-    kernel_labels: &HashMap<GroupId, String>,
-    purge: &str,
-    purge_width: usize,
-    columns: &CheckpointColumns,
-) -> String {
-    let text = picker_row(
-        g,
-        kernel_labels,
-        columns,
-        Some((purge, purge_width)),
-        PickerTail::None,
-    );
-    truncate_for_terminal(&text, MULTI_MARKER)
-}
-
-const NAME_COL_MAX: usize = 36;
-const PURGE_HEADER: &str = "Purga";
 
 /// Quanto falta pro purge automático: `prune_days` menos os dias já passados
 /// desde a marca de trash. <= 0 → vencido (sai no próximo save/delete).
-fn purge_due_label(g: &Group, prune_days: u64) -> String {
+fn purge_due(g: &Group, prune_days: u64) -> PurgeDue {
     let Some(marked) = group::trash_epoch(g) else {
-        return "?".to_string();
+        return PurgeDue { label: "?".to_string(), expired: false };
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -163,7 +59,7 @@ fn purge_due_label(g: &Group, prune_days: u64) -> String {
         .unwrap_or(marked);
     let left = prune_days as i64 - (now - marked) / 86_400;
     if left <= 0 {
-        return "vencida".to_string();
+        return PurgeDue { label: "vencida".to_string(), expired: true };
     }
-    format!("em ~{left}d")
+    PurgeDue { label: format!("em ~{left}d"), expired: false }
 }

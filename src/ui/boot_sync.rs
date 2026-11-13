@@ -1,4 +1,4 @@
-use crate::ui::term::{clear_screen, header, line, tree_branch};
+use crate::ui::term::{clear_screen, fail, header, line, note, tree_branch, warn, warn_detail};
 use console::style;
 
 const STEP_COUNT: usize = 5;
@@ -248,21 +248,18 @@ impl BootSyncPanel {
 }
 
 pub(crate) fn print_restore_backup_after_failure() {
-    eprintln!("  restaurando backup de /boot");
+    warn(format_args!("restaurando backup de /boot"));
 }
 
 pub(crate) fn print_backup_restore_failed(error: &anyhow::Error) {
-    eprintln!("  restauração do backup falhou: {error:#}");
+    fail(format_args!("restauração do backup falhou: {error:#}"));
 }
 
 pub(crate) fn print_backup_restored() {
-    println!("  ficheiros de boot restaurados do backup");
+    note(format_args!("ficheiros de boot restaurados do backup"));
 }
 
 pub(crate) fn print_backup_cleanup_failed(error: &std::io::Error) {
-    eprintln!(
-        "  {} /boot sincronizado, mas a limpeza do backup falhou: {error}",
-        style("!").yellow().bold()
-    );
-    eprintln!("  o sistema está bootável; rode 'snapg doctor' para remover o backup");
+    warn(format_args!("/boot sincronizado, mas a limpeza do backup falhou: {error}"));
+    warn_detail(format_args!("o sistema está bootável; rode 'snapg doctor' para remover o backup"));
 }
