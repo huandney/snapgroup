@@ -208,7 +208,8 @@ fn pick(
     let mut drawn: Option<(bool, (u16, u16))> = None;
     let mut dirty = true;
     loop {
-        let est = estimate(&sel.groups, &sel.orphans);
+        // Restaurar não libera nada: sem estimativa, a leitura nem começa.
+        let est = if ctx.mode == Mode::TrashRestore { Estimate::Pending } else { estimate(&sel.groups, &sel.orphans) };
         let pending = matches!(est, Estimate::Pending);
         let size = term.size();
         if dirty || drawn != Some((pending, size)) {
