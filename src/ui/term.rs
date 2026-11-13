@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use console::style;
 use dialoguer::theme::Theme;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fmt;
@@ -54,18 +55,11 @@ impl Theme for SnapgTheme {
         checked: bool,
         active: bool,
     ) -> fmt::Result {
-        write!(
-            f,
-            "{}{} {}",
-            CONTENT_INDENT,
-            match (checked, active) {
-                (true, true) => "> [x]",
-                (true, false) => "  [x]",
-                (false, true) => "> [ ]",
-                (false, false) => "  [ ]",
-            },
-            text
-        )
+        let cursor = if active { ">" } else { " " };
+        if !checked {
+            return write!(f, "{CONTENT_INDENT}{cursor} {} {text}", style("□").dim());
+        }
+        write!(f, "{CONTENT_INDENT}{cursor} ■ {}", style(text).bold())
     }
 }
 
@@ -90,10 +84,10 @@ pub const CONTENT_INDENT: &str = "   ";
 
 /// Largura do prefixo que cada tema injeta entre o CONTENT_INDENT e o texto do
 /// item. Select escreve "> " (marcador 1 + espaço 1 = 2); MultiSelect escreve
-/// "> [x] " (marcador 5 + espaço 1 = 6). O CONTENT_INDENT é somado dentro de
+/// "> ■ " (marcador 3 + espaço 1 = 4). O CONTENT_INDENT é somado dentro de
 /// `truncate_for_terminal`, então o caller passa só um destes.
 pub const SELECT_MARKER: usize = 2;
-pub const MULTI_MARKER: usize = 6;
+pub const MULTI_MARKER: usize = 4;
 
 /// Dica canônica pros MultiSelect (marcação múltipla).
 pub const HINT_MULTI: &str = "(espaço marca · enter confirma · esc volta)";

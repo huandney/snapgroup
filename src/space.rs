@@ -78,6 +78,8 @@ pub struct ScanStats {
     pub metadata_bytes: u64,
     pub attempts: usize,
     pub elapsed: Duration,
+    /// Parte do tempo gasta lendo e conferindo blocos (o resto é a conta).
+    pub reading: Duration,
 }
 
 /// Uso do disco por conjunto de subvolumes. `freed` responde em microssegundos
@@ -155,6 +157,7 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
     let mut meta_by_set: HashMap<u32, u64> = HashMap::new();
     let mut extents: HashMap<u64, (u32, u64)> = HashMap::new();
     let mut blocks = 0;
+    let mut reading = Duration::ZERO;
     for level in (0..by_level.len()).rev() {
         let mut pending: Vec<(u64, Pending)> = by_level[level].drain().collect();
         pending.sort_unstable_by_key(|(bytenr, _)| *bytenr);
@@ -163,7 +166,9 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
             for (_, p) in batch {
                 *meta_by_set.entry(p.set).or_default() += disk.nodesize as u64 * meta_mult;
             }
+            let started = Instant::now();
             let found = read_batch(&disk, batch, level as u8)?;
+            reading += started.elapsed();
             for item in found {
                 match item {
                     Found::Child { bytenr, generation, set } => {
@@ -213,6 +218,7 @@ fn scan_once(device: &Path) -> Result<SpaceMap> {
             metadata_bytes,
             attempts: 0,
             elapsed: Duration::ZERO,
+            reading,
         },
     })
 }
@@ -759,6 +765,17 @@ mod tests {
             let used = line.split("Used:").nth(1).unwrap().split_whitespace().next().unwrap();
             used.trim_end_matches(',').parse::<u64>().unwrap()
         };
+        // O que o `df` mostra: só a parte de dados aparece aqui; o metadado
+        // liberado fica reservado nos chunks de metadados.
+        let free = || {
+            run(&["btrfs", "filesystem", "sync", "."]);
+            let c_path = std::ffi::CString::new(top.to_str().unwrap()).unwrap();
+            let mut st = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+            // SAFETY: caminho C válido; statvfs preenche a struct quando devolve 0.
+            assert_eq!(unsafe { libc::statvfs(c_path.as_ptr(), st.as_mut_ptr()) }, 0);
+            let st = unsafe { st.assume_init() };
+            st.f_bavail * st.f_frsize
+        };
         let id = |name: &str| crate::btrfs::subvol_id(&top.join(name)).unwrap();
 
         run(&["btrfs", "subvolume", "create", "sp_live"]);
@@ -773,6 +790,7 @@ mod tests {
         let (s1, s2) = (id("sp_s1"), id("sp_s2"));
 
         let before = data_used();
+        let free_before = free();
         let device = crate::btrfs::fs_device(top.to_str().unwrap()).unwrap();
         let map = super::scan(Path::new(&device)).unwrap();
         let only_s1 = map.freed(&[s1]);
@@ -784,9 +802,11 @@ mod tests {
         run(&["btrfs", "subvolume", "sync", "."]);
         let after_s1 = data_used();
         assert_eq!(before - after_s1, only_s1.data);
+        assert_eq!(free() - free_before, only_s1.data, "o livre sobe só a parte de dados");
         run(&["btrfs", "subvolume", "delete", "sp_s2"]);
         run(&["btrfs", "subvolume", "sync", "."]);
         assert_eq!(before - data_used(), both.data);
+        assert_eq!(free() - free_before, both.data);
 
         run(&["btrfs", "subvolume", "delete", "sp_live"]);
     }
