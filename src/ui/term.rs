@@ -167,6 +167,48 @@ pub fn line(args: fmt::Arguments<'_>) {
     println!("{CONTENT_INDENT}{args}");
 }
 
+/// Último título de resultado impresso. Ações em sequência (purge, save, …)
+/// caem na mesma seção sem repetir o título; seção nova ganha linha em branco.
+static RESULT_SECTION: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// Abre (ou continua) a seção que fecha uma ação: `▪ Apagado`, `▪ Salvo`.
+pub fn result_section(name: &'static str) {
+    let mut last = RESULT_SECTION.lock().unwrap_or_else(|e| e.into_inner());
+    if *last == Some(name) {
+        return;
+    }
+    if last.is_some() {
+        println!();
+    }
+    section_header("▪", name);
+    *last = Some(name);
+}
+
+/// Linha de resultado sem símbolo, sob a seção aberta.
+pub fn result(args: fmt::Arguments<'_>) {
+    println!("{CONTENT_INDENT}{args}");
+}
+
+/// Linha neutra (cancelado, nada a fazer), apagada.
+pub fn note(args: fmt::Arguments<'_>) {
+    println!("{CONTENT_INDENT}{}", style(args.to_string()).dim());
+}
+
+/// Aviso no stderr: `!` amarelo, alinhado ao conteúdo.
+pub fn warn(args: fmt::Arguments<'_>) {
+    eprintln!("{CONTENT_INDENT}{} {args}", style("!").yellow().bold());
+}
+
+/// Erro no stderr: `✗` vermelho, alinhado ao conteúdo.
+pub fn fail(args: fmt::Arguments<'_>) {
+    eprintln!("{CONTENT_INDENT}{} {args}", style("✗").red().bold());
+}
+
+/// Continuação de aviso/erro no stderr, sob o texto (depois do símbolo).
+pub fn warn_detail(args: fmt::Arguments<'_>) {
+    eprintln!("{CONTENT_INDENT}  {args}");
+}
+
 /// Itens por página de um Select/MultiSelect que tem `lines_above` linhas
 /// impressas acima da lista (cabeçalho + linhas do prompt). Ao paginar, o
 /// dialoguer reserva só a linha do prompt; sem este limite a página estoura a
