@@ -1,5 +1,6 @@
 //! Tela do `snapg delete`: checkpoints e backups órfãos numa lista só, com o
-//! espaço que a seleção libera no topo, recalculado a cada marcação.
+//! espaço que a seleção libera no topo, recalculado a cada marcação. A lixeira
+//! (`snapg trash`) usa a mesma tela, só com checkpoints.
 
 use crate::group::{self, Group, GroupId};
 use crate::orphan::OrphanBackup;
@@ -32,13 +33,48 @@ pub(crate) enum Estimate {
 /// ("no purge") que marcam a seleção.
 const FIXED_COLOR: u8 = 211;
 
+/// Para onde a seleção vai, e com isso o título, o rodapé e o bloco de espaço.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Mode {
+    /// `snapg delete`: checkpoints vão para a lixeira de `trash_days` dias, ou
+    /// saem de vez com `--purge`.
+    Delete { purge: bool, trash_days: u64 },
+    /// Lixeira → Apagar de vez: tudo sai agora.
+    TrashPurge,
+    /// Lixeira → Restaurar para o pool: nada sai, então sem bloco de espaço.
+    TrashRestore,
+}
+
+impl Mode {
+    /// Os checkpoints marcados saem do disco ao confirmar.
+    fn leaves_now(self) -> bool {
+        matches!(self, Mode::Delete { purge: true, .. } | Mode::TrashPurge)
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Mode::Delete { .. } => "Apagar",
+            Mode::TrashPurge => "Apagar de vez",
+            Mode::TrashRestore => "Restaurar para o pool",
+        }
+    }
+}
+
+/// Coluna "Purga" da lixeira: quanto falta para o purge automático.
+pub(crate) struct PurgeDue {
+    pub(crate) label: String,
+    /// Já venceu: sai no próximo save ou delete.
+    pub(crate) expired: bool,
+}
+
 /// O que a tela precisa saber de fora dela.
 pub(crate) struct DeleteContext<'a> {
     pub(crate) groups: &'a [Group],
     pub(crate) kernel_labels: &'a HashMap<GroupId, String>,
     pub(crate) orphans: &'a [OrphanBackup],
-    pub(crate) purge: bool,
-    pub(crate) trash_days: u64,
+    pub(crate) mode: Mode,
+    /// Um por grupo na lixeira; vazio no `delete`.
+    pub(crate) purge_due: &'a [PurgeDue],
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -101,6 +137,31 @@ fn toggle_everything(ctx: &DeleteContext<'_>, sel: &mut Selection) {
     sel.orphans.extend(0..ctx.orphans.len());
 }
 
+/// Lista da lixeira (sem órfãos), dentro do alternate screen de quem chama.
+/// Apagar passa pela revisão; restaurar volta direto. `None` = esc ou
+/// cancelado: quem chama volta ao menu.
+pub(crate) fn select_trash_groups(
+    ctx: &DeleteContext<'_>,
+    estimate: &mut dyn FnMut(&BTreeSet<usize>, &BTreeSet<usize>) -> Estimate,
+) -> Result<Option<Vec<usize>>> {
+    let rows: Vec<Row> = (0..ctx.groups.len()).map(Row::Group).collect();
+    let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 0, offset: 0 };
+    loop {
+        if !pick(ctx, &rows, &mut sel, estimate)? {
+            return Ok(None);
+        }
+        if ctx.mode == Mode::TrashRestore {
+            return Ok(Some(sel.groups.into_iter().collect()));
+        }
+        let summary = summary_text(ctx, &sel, &estimate(&sel.groups, &sel.orphans));
+        match review_cards(&review(ctx, &sel), "Lixeira", "Apagar permanentemente?", &summary)? {
+            ReviewDecision::Proceed => return Ok(Some(sel.groups.into_iter().collect())),
+            ReviewDecision::Back => continue,
+            ReviewDecision::Cancel => return Ok(None),
+        }
+    }
+}
+
 /// Lista → revisão → plano. Esc na revisão volta para a lista com a seleção
 /// intacta. `estimate` é chamado a cada redesenho e deve responder rápido.
 pub(crate) fn select_delete_plan(
@@ -159,7 +220,7 @@ fn pick(
         if !key_ready(150)? {
             continue;
         }
-        let page = list_height(size.0).max(1);
+        let page = list_height(ctx.mode, size.0).max(1);
         let last = rows.len().saturating_sub(1);
         match term.read_key_raw().context("ler tecla")? {
             Key::ArrowUp => sel.cursor = sel.cursor.saturating_sub(1),
@@ -182,6 +243,10 @@ fn pick(
                 &mut sel.groups,
                 (0..ctx.groups.len()).filter(|&i| !group::is_auto(&ctx.groups[i])),
             ),
+            Key::Char('v') => toggle_all(
+                &mut sel.groups,
+                (0..ctx.purge_due.len()).filter(|&i| ctx.purge_due[i].expired),
+            ),
             Key::Char('t') => toggle_everything(ctx, sel),
             Key::Enter if !sel.is_empty() => {
                 let _ = term.show_cursor();
@@ -198,13 +263,18 @@ fn pick(
 }
 
 /// Linhas fixas fora da lista: cabeçalho (2), espaço em branco, bloco Espaço
-/// (4), branco, e no rodapé branco + dica.
-const FIXED_LINES: usize = 10;
+/// (4, ou só a contagem ao restaurar), branco, e no rodapé branco + dica.
+fn fixed_lines(mode: Mode) -> usize {
+    if mode == Mode::TrashRestore {
+        return 7;
+    }
+    10
+}
 
 /// Linhas da lista: o que sobra da altura. Mínimo 1, para o quadro nunca
-/// passar da tela a partir de `FIXED_LINES + 1` linhas.
-fn list_height(rows: u16) -> usize {
-    (rows as usize).saturating_sub(FIXED_LINES).max(1)
+/// passar da tela a partir de `fixed_lines + 1` linhas.
+fn list_height(mode: Mode, rows: u16) -> usize {
+    (rows as usize).saturating_sub(fixed_lines(mode)).max(1)
 }
 
 fn render(
@@ -221,13 +291,13 @@ fn render(
         style("SnapGroup").color256(214).bold(),
         style(DISPLAY_VERSION).dim()
     ));
-    out.push(format!("{PAGE_INDENT}{} {}", title("▪"), title("Apagar")));
+    out.push(format!("{PAGE_INDENT}{} {}", title("▪"), title(ctx.mode.title())));
     out.push(String::new());
     out.extend(space_block(ctx, sel, est, width));
     out.push(String::new());
 
     let (list, cursor_line) = list_lines(ctx, rows, sel, width);
-    let height = list_height(height);
+    let height = list_height(ctx.mode, height);
     if cursor_line < sel.offset + 2 {
         sel.offset = cursor_line.saturating_sub(2);
     }
@@ -252,7 +322,18 @@ fn render(
     if ctx.groups.iter().any(|g| !group::is_auto(g)) {
         keys.push("f fixos");
     }
-    keys.extend(["t tudo", "enter revisa", "esc sai"]);
+    if ctx.purge_due.iter().any(|due| due.expired) {
+        keys.push("v vencidos");
+    }
+    keys.push("t tudo");
+    keys.push(match ctx.mode {
+        Mode::TrashRestore => "enter restaura",
+        _ => "enter revisa",
+    });
+    keys.push(match ctx.mode {
+        Mode::Delete { .. } => "esc sai",
+        _ => "esc volta",
+    });
     let position = if list.len() > height {
         format!("   {}/{}", sel.cursor + 1, rows.len())
     } else {
@@ -268,6 +349,9 @@ fn render(
 }
 
 fn space_block(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate, width: usize) -> Vec<String> {
+    if ctx.mode == Mode::TrashRestore {
+        return vec![format!("{CONTENT_INDENT}{}", style(counts_text(ctx, sel)).dim())];
+    }
     let cells = width.saturating_sub(CONTENT_INDENT.len() + 2).clamp(10, 60);
     let heading = match est {
         Estimate::Pending => format!("{PAGE_INDENT}{} {}", title("▪ Espaço"), style("calculando…").dim()),
@@ -335,7 +419,7 @@ fn freed_text(ctx: &DeleteContext<'_>, sel: &Selection, orphans: u64, auto: u64,
     }
     let checkpoints = checkpoints.join(&plus);
     let backups = paint(format!("{} backups", human_bytes(orphans)), Paint::Now);
-    if ctx.purge {
+    if ctx.mode.leaves_now() {
         let mut all = Vec::new();
         if orphans > 0 {
             all.push(backups);
@@ -386,10 +470,10 @@ fn blocks(eighths: usize) -> String {
 fn counts_text(ctx: &DeleteContext<'_>, sel: &Selection) -> String {
     let mut parts = Vec::new();
     if !ctx.groups.is_empty() {
-        let dest = if ctx.purge {
-            "apagados de vez".to_string()
-        } else {
-            format!("lixeira ({} dias)", ctx.trash_days)
+        let dest = match ctx.mode {
+            Mode::Delete { purge: false, trash_days } => format!("lixeira ({trash_days} dias)"),
+            Mode::TrashRestore => "voltam ao pool".to_string(),
+            _ => "apagados de vez".to_string(),
         };
         parts.push(format!("{} de {} checkpoints → {dest}", sel.groups.len(), ctx.groups.len()));
     }
@@ -402,6 +486,7 @@ fn counts_text(ctx: &DeleteContext<'_>, sel: &Selection) -> String {
 }
 
 const NAME_MAX: usize = 36;
+const PURGE_HEADER: &str = "Purga";
 const DATE_WIDTH: usize = 16;
 const FIX_WIDTH: usize = 4;
 
@@ -420,7 +505,13 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             .max()
             .unwrap_or(0)
             .max("Kernel".len());
-        let fixed = prefix + FIX_WIDTH + 2 + 3 + kernel_w + 3 + DATE_WIDTH;
+        let purge_w = ctx
+            .purge_due
+            .iter()
+            .map(|due| due.label.chars().count())
+            .max()
+            .map(|w| w.max(PURGE_HEADER.len()));
+        let fixed = prefix + FIX_WIDTH + 2 + 3 + kernel_w + 3 + DATE_WIDTH + purge_w.map_or(0, |w| w + 3);
         let name_w = ctx
             .groups
             .iter()
@@ -430,12 +521,14 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             .clamp("Nome".len(), NAME_MAX)
             .min(width.saturating_sub(fixed).max("Nome".len()));
         lines.push(format!("{PAGE_INDENT}{}", title("▪ Checkpoints")));
+        let purge_header = purge_w.map(|w| format!("   {PURGE_HEADER:<w$}")).unwrap_or_default();
         lines.push(style(format!(
-            "{}{:FIX_WIDTH$}  {:<name_w$}   {:<kernel_w$}   Data",
+            "{}{:FIX_WIDTH$}  {:<name_w$}   {:<kernel_w$}   {:<DATE_WIDTH$}{purge_header}",
             " ".repeat(prefix),
             "",
             "Nome",
-            "Kernel"
+            "Kernel",
+            "Data"
         ))
         .dim()
         .to_string());
@@ -447,8 +540,13 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             }
             let fix = if group::is_auto(g) { "" } else { "fixo" };
             let name = fit(group::description(g), name_w);
+            let purge = match (ctx.purge_due.get(i), purge_w) {
+                (Some(due), Some(w)) if due.expired => format!("   {}", style(format!("{:<w$}", due.label)).yellow()),
+                (Some(due), Some(w)) => format!("   {:<w$}", due.label),
+                _ => String::new(),
+            };
             let rest = format!(
-                "   {:<kernel_w$}   {}",
+                "   {:<kernel_w$}   {:<DATE_WIDTH$}{purge}",
                 kernel_label(ctx.kernel_labels, g.id),
                 short_datetime(group::date(g))
             );
@@ -537,7 +635,7 @@ fn fit(text: &str, width: usize) -> String {
 }
 
 fn review(ctx: &DeleteContext<'_>, sel: &Selection) -> Vec<ReviewCard> {
-    let dest = if ctx.purge { "apagado de vez" } else { "lixeira" };
+    let dest = if ctx.mode.leaves_now() { "apagado de vez" } else { "lixeira" };
     let mut cards = Vec::new();
     for &i in &sel.groups {
         let g = &ctx.groups[i];
@@ -565,17 +663,20 @@ fn review(ctx: &DeleteContext<'_>, sel: &Selection) -> Vec<ReviewCard> {
 fn summary_text(ctx: &DeleteContext<'_>, sel: &Selection, est: &Estimate) -> String {
     let mut parts = Vec::new();
     if !sel.groups.is_empty() {
-        let dest = if ctx.purge { "apagados de vez" } else { "para a lixeira" };
+        let dest = if ctx.mode.leaves_now() { "apagados de vez" } else { "para a lixeira" };
         parts.push(format!("{} checkpoints {dest}", sel.groups.len()));
     }
     if !sel.orphans.is_empty() {
         parts.push(format!("{} backups apagados agora, sem lixeira", sel.orphans.len()));
     }
     if let Estimate::Ready { orphans, auto, fixed, .. } = est {
-        let now = if ctx.purge { orphans + auto + fixed } else { *orphans };
+        let now = if ctx.mode.leaves_now() { orphans + auto + fixed } else { *orphans };
         if now > 0 {
             parts.push(format!("libera {} agora", human_bytes(now)));
         }
+    }
+    if ctx.mode == Mode::TrashPurge {
+        parts.push("não dá para desfazer".to_string());
     }
     parts.join(" · ")
 }
@@ -647,7 +748,7 @@ fn key_ready(timeout_ms: i32) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BTreeSet, DeleteContext, Estimate, Row, Selection, blocks, human_bytes, render, toggle_all};
+    use super::{BTreeSet, DeleteContext, Estimate, Mode, Row, Selection, blocks, human_bytes, render, toggle_all};
     use crate::orphan::OrphanBackup;
     use std::collections::HashMap;
 
@@ -662,7 +763,8 @@ mod tests {
             })
             .collect();
         let labels = HashMap::new();
-        let ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, purge: false, trash_days: 15 };
+        let mode = Mode::Delete { purge: false, trash_days: 15 };
+        let ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, mode, purge_due: &[] };
         let rows: Vec<Row> = (0..orphans.len()).map(Row::Orphan).collect();
         let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 39, offset: 0 };
         for height in [12u16, 24, 40] {
@@ -682,7 +784,8 @@ mod tests {
             bases: vec!["@".to_string()],
             created: String::new(),
         }];
-        let mut ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, purge: false, trash_days: 15 };
+        let mode = Mode::Delete { purge: false, trash_days: 15 };
+        let mut ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, mode, purge_due: &[] };
         let sel = Selection {
             groups: [0, 1].into_iter().collect(),
             orphans: [0].into_iter().collect(),
@@ -698,11 +801,49 @@ mod tests {
             super::freed_text(&ctx, &sel, 8 * gib, 0, gib),
             "libera 8.0 GiB agora · 1.0 GiB fixos no purge da lixeira"
         );
-        ctx.purge = true;
+        ctx.mode = Mode::Delete { purge: true, trash_days: 15 };
         assert_eq!(
             super::freed_text(&ctx, &sel, 8 * gib, 2 * gib, gib),
             "libera 8.0 GiB backups + 2.0 GiB automáticos + 1.0 GiB fixos agora"
         );
+    }
+
+    fn trashed_group(id: i64) -> crate::group::Group {
+        crate::group::Group {
+            id,
+            members: vec![crate::group::Member {
+                config: "root".to_string(),
+                snapshot: crate::snapper::Snapshot {
+                    number: 1,
+                    kind: "single".to_string(),
+                    date: "2026-07-10 20:50:00".to_string(),
+                    user: "root".to_string(),
+                    description: format!("Checkpoint {id}"),
+                    cleanup: String::new(),
+                    userdata: None,
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn trash_screen_fills_the_terminal_and_names_its_keys() {
+        let groups = vec![trashed_group(1), trashed_group(2)];
+        let due = vec![
+            super::PurgeDue { label: "em ~3d".to_string(), expired: false },
+            super::PurgeDue { label: "vencida".to_string(), expired: true },
+        ];
+        let labels = HashMap::new();
+        let rows: Vec<Row> = (0..groups.len()).map(Row::Group).collect();
+        for (mode, enter) in [(Mode::TrashRestore, "enter restaura"), (Mode::TrashPurge, "enter revisa")] {
+            let ctx = DeleteContext { groups: &groups, kernel_labels: &labels, orphans: &[], mode, purge_due: &due };
+            let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 0, offset: 0 };
+            let frame = render(&ctx, &rows, &mut sel, &Estimate::Pending, (20, 120));
+            assert_eq!(frame.matches('\n').count() + 1, 20);
+            assert!(frame.contains("Purga") && frame.contains("vencida"));
+            assert!(frame.contains("v vencidos") && frame.contains(enter) && frame.contains("esc volta"));
+            assert_eq!(frame.contains("▪ Espaço"), mode == Mode::TrashPurge);
+        }
     }
 
     #[test]

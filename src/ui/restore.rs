@@ -4,7 +4,7 @@ use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, PickerTail, picker_header, picker_prompt, picker_row,
+    CheckpointColumns, picker_header, picker_prompt, picker_row,
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
@@ -201,7 +201,7 @@ pub(crate) fn select_restore_action(
     columns.kernel = columns
         .kernel
         .max(regret_kernel.map(|kernel| kernel.chars().count()).unwrap_or(1));
-    columns = columns.fit_to_terminal(SELECT_MARKER, None, PickerTail::MembersAndId);
+    columns = columns.fit_to_terminal(SELECT_MARKER);
 
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
@@ -221,11 +221,11 @@ pub(crate) fn select_restore_action(
     }
 
     for g in groups {
-        let text = picker_row(g, kernel_labels, &columns, None, PickerTail::MembersAndId);
+        let text = picker_row(g, kernel_labels, &columns);
         items.push(truncate_for_terminal(&text, prefix_len));
         actions.push(RestoreAction::Checkpoint(g.id));
     }
-    let columns_header = picker_header(&columns, None, PickerTail::MembersAndId);
+    let columns_header = picker_header(&columns);
     let prompt = picker_prompt("Escolha o ponto de restauração", &columns_header, SELECT_MARKER);
 
     let Some(selection) = dialoguer::Select::with_theme(&THEME)

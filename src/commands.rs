@@ -76,7 +76,10 @@ pub fn save(description: Option<String>) -> Result<()> {
             else {
                 snapshots::print_save_cancelled();
                 // Cancelar o nome não cancela a manutenção da lixeira.
-                purge_expired_trash(&cfg);
+                let free_before = free_bytes(Path::new("/"));
+                if purge_expired_trash(&cfg) > 0 {
+                    report_freed(free_before, None, false);
+                }
                 return Ok(());
             };
             d
@@ -115,16 +118,22 @@ pub fn save(description: Option<String>) -> Result<()> {
     // no disco. Na ordem inversa, uma falha do snapper levava o Regret embora
     // sem deixar nada no lugar.
     // btrfs subvolume delete é quase instantâneo (marca pra GC assíncrono do kernel).
-    kill_regrets(&configs).context("checkpoint criado, mas o Regret anterior não foi removido")?;
+    // O livre é lido antes: o Regret e o purge saem no mesmo "▪ Espaço".
+    let free_before = free_bytes(Path::new("/"));
+    let regrets = kill_regrets(&configs).context("checkpoint criado, mas o Regret anterior não foi removido")?;
 
     // Purga de carona: apaga de vez grupos cuja carência na lixeira venceu.
     // Depois do save e do Regret, para cair na mesma seção de Retenção do
     // cleanup (a nota do Regret fica sob Salvo).
-    purge_expired_trash(&cfg);
+    let purged = purge_expired_trash(&cfg);
 
     // Cleanup group-aware: o grupo recém-criado é o mais novo, logo protegido
     // pelo "manter os N mais novos". Best-effort — o snapshot já está no disco.
+    // Só move para a lixeira: não libera espaço.
     run_cleanup(&cfg);
+    if regrets + purged > 0 {
+        report_freed(free_before, None, false);
+    }
     Ok(())
 }
 
@@ -189,18 +198,21 @@ fn try_cleanup(keep: usize) -> Result<()> {
     Ok(())
 }
 
-fn purge_expired_trash(cfg: &config::Config) {
-    if let Err(e) = try_purge_expired_trash(cfg) {
+/// Grupos apagados de vez (vencidos e Regrets duplicados), para o chamador
+/// saber se há espaço liberado a mostrar.
+fn purge_expired_trash(cfg: &config::Config) -> usize {
+    try_purge_expired_trash(cfg).unwrap_or_else(|e| {
         snapshots::print_purge_failed(&e);
-    }
+        0
+    })
 }
 
-fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
+fn try_purge_expired_trash(cfg: &config::Config) -> Result<usize> {
     let trashed = group::list_trashed_groups()?;
     if trashed.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
-    purge_duplicate_regrets_in_groups(&trashed);
+    let duplicates = purge_duplicate_regrets_in_groups(&trashed);
 
     let trashed = group::list_trashed_groups()?;
     // O parser limita trash_prune_days a MAX_PRUNE_DAYS, então o cast e a
@@ -222,11 +234,11 @@ fn try_purge_expired_trash(cfg: &config::Config) -> Result<()> {
     if purged > 0 {
         snapshots::print_purge_done(purged);
     }
-    Ok(())
+    Ok(purged + duplicates)
 }
 
 /// Monta toplevel, varre regrets existentes e deleta. Idempotente.
-fn kill_regrets(configs: &[String]) -> Result<()> {
+fn kill_regrets(configs: &[String]) -> Result<usize> {
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
@@ -1163,10 +1175,11 @@ fn purge_duplicate_regrets_in_trash(keep_id: i64, origin_date: &str) {
     }
 }
 
-fn purge_duplicate_regrets_in_groups(groups: &[Group]) {
-    for group in duplicate_regret_groups(groups) {
-        let _ = delete_group_members(group);
-    }
+fn purge_duplicate_regrets_in_groups(groups: &[Group]) -> usize {
+    duplicate_regret_groups(groups)
+        .into_iter()
+        .filter(|group| delete_group_members(group).is_ok())
+        .count()
 }
 
 fn duplicate_regrets_matching<'a>(
@@ -1351,8 +1364,12 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Livre lido antes da purga de carona: o que ela solta continua saindo
+    // em segundo plano enquanto a tela está aberta, e entra no mesmo
+    // "▪ Espaço" do fim em vez de vazar para a medida da seleção.
+    let free_before = free_bytes(Path::new("/"));
     // Purga de carona, como no save.
-    purge_expired_trash(&cfg);
+    let purged = purge_expired_trash(&cfg) > 0;
 
     let groups = group::list_groups()?;
 
@@ -1361,17 +1378,32 @@ pub fn delete(yes: bool, purge: bool) -> Result<()> {
     if yes {
         let Some(newest) = groups.first() else {
             snapshots::print_no_groups();
+            if purged {
+                report_freed(free_before, None, false);
+            }
             return Ok(());
         };
-        return apply_delete(&[newest], purge);
+        let result = apply_delete(&[newest], purge);
+        if purged || purge {
+            report_freed(free_before, None, false);
+        }
+        return result;
     }
 
     let uuid = btrfs::fs_uuid("/")?;
     let mount_path = rollback::toplevel_mount_path(&uuid);
     btrfs::mount_toplevel(&uuid, &mount_path).context("mount toplevel falhou")?;
-    let result = delete_interactive(&configs, &groups, &mount_path, purge, cfg.trash_prune_days);
+    let base = SpaceBase { free_before, purged };
+    let result = delete_interactive(&configs, &groups, &mount_path, purge, cfg.trash_prune_days, base);
     let _ = btrfs::umount_toplevel(&mount_path);
     result
+}
+
+/// Ponto de partida da medida de espaço do `delete`: o livre antes de tudo e
+/// se a purga de carona já apagou algo de vez.
+struct SpaceBase {
+    free_before: Option<u64>,
+    purged: bool,
 }
 
 /// Parte do `delete` que precisa do top-level montado: rótulos de kernel,
@@ -1382,6 +1414,7 @@ fn delete_interactive(
     mount_path: &Path,
     purge: bool,
     trash_days: u64,
+    base: SpaceBase,
 ) -> Result<()> {
     let kernel_labels = group::kernel_labels(groups, mount_path);
     // Falha ao listar órfãos não pode bloquear o delete de checkpoints.
@@ -1393,40 +1426,58 @@ fn delete_interactive(
         });
     if groups.is_empty() && orphans.is_empty() {
         snapshots::print_no_groups();
+        if base.purged {
+            report_freed(base.free_before, None, false);
+        }
         return Ok(());
     }
 
     // A leitura dos metadados (alguns segundos) roda enquanto a lista já está
     // na tela; a estimativa aparece quando ela termina.
     let mut space = SpaceEstimator::start(groups, &orphans, mount_path);
-    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, purge, trash_days };
+    let mode = delete_ui::Mode::Delete { purge, trash_days };
+    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, mode, purge_due: &[] };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
     let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
         snapshots::print_delete_cancelled();
+        if base.purged {
+            report_freed(base.free_before, None, false);
+        }
         return Ok(());
     };
     let chosen_groups: BTreeSet<usize> = plan.groups.iter().copied().collect();
     let chosen_orphans: BTreeSet<usize> = plan.orphans.iter().copied().collect();
     // Sem purge, os checkpoints vão para a lixeira: agora só os backups saem.
     let none = BTreeSet::new();
-    let predicted = space.freed(if purge { &chosen_groups } else { &none }, &chosen_orphans);
+    let to_trash = !purge && !chosen_groups.is_empty();
+    let deletes_selection = !chosen_orphans.is_empty() || (purge && !chosen_groups.is_empty());
+    let predicted = space
+        .freed(if purge { &chosen_groups } else { &none }, &chosen_orphans)
+        .filter(|_| deletes_selection);
+    let trash_estimate = space.freed(&chosen_groups, &none).filter(|_| to_trash);
 
-    let free_before = free_bytes(Path::new("/"));
     let targets: Vec<&OrphanBackup> = plan.orphans.iter().map(|&i| &orphans[i]).collect();
     let orphan_result = delete_orphans(&targets, mount_path);
     let groups_chosen: Vec<&Group> = plan.groups.iter().map(|&i| &groups[i]).collect();
     let group_result = if groups_chosen.is_empty() { Ok(()) } else { apply_delete(&groups_chosen, purge) };
+    if let (Some(estimate), Ok(())) = (trash_estimate, &group_result) {
+        snapshots::print_trash_space(groups_chosen.len(), estimate.data, trash_days);
+    }
 
     // Só o que foi apagado de vez libera espaço agora; a lixeira, no purge.
-    if !targets.is_empty() || (purge && !groups_chosen.is_empty()) {
-        report_freed(mount_path, free_before, predicted);
+    // Com a purga de carona junto, a previsão cobre só a seleção.
+    if base.purged || deletes_selection {
+        report_freed(base.free_before, predicted, base.purged);
     }
     orphan_result.and(group_result)
 }
 
 /// Espera o btrfs terminar de liberar os blocos (o delete de subvolume é
-/// assíncrono) e mostra o espaço livre antes e depois.
-fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<space::Freed>) {
+/// assíncrono) e mostra o espaço livre antes e depois. Os dois `sync` valem
+/// para o filesystem inteiro, então `/` serve sem montar o top-level.
+/// `partial`: o comando apagou mais do que a previsão cobre.
+fn report_freed(free_before: Option<u64>, predicted: Option<space::Freed>, partial: bool) {
+    let toplevel = Path::new("/");
     let pb = crate::ui::term::spinner("aguardando o btrfs liberar o espaço…".to_string());
     let synced = std::process::Command::new("btrfs")
         .args(["subvolume", "sync"])
@@ -1448,7 +1499,7 @@ fn report_freed(toplevel: &Path, free_before: Option<u64>, predicted: Option<spa
     let (Some(before), Some(after)) = (free_before, free_bytes(Path::new("/"))) else {
         return;
     };
-    snapshots::print_space_freed(before, after, predicted, synced && committed);
+    snapshots::print_space_freed(before, after, predicted, partial, synced && committed);
 }
 
 /// Espaço livre para o usuário em `path` (statvfs), se legível.
@@ -1660,8 +1711,20 @@ pub fn trash() -> Result<()> {
     let kernel_labels = group::kernel_labels(&groups, &mount_path);
 
     use crate::ui::trash::TrashAction;
-    let selection =
-        crate::ui::trash::select_trash_action(&groups, &kernel_labels, cfg.trash_prune_days);
+    // Como no delete: a leitura dos metadados roda com a lista na tela, e o
+    // top-level fica montado até ela terminar (a estimativa lê por ele).
+    let mut space = SpaceEstimator::start(&groups, &[], &mount_path);
+    let selection = crate::ui::trash::select_trash_action(
+        &groups,
+        &kernel_labels,
+        cfg.trash_prune_days,
+        &mut |g, o| space.estimate(g, o),
+    );
+    let predicted = match &selection {
+        Ok(Some(TrashAction::Purge(indices))) => space.freed(&indices.iter().copied().collect(), &BTreeSet::new()),
+        _ => None,
+    };
+    drop(space);
     let _ = btrfs::umount_toplevel(&mount_path);
     match selection? {
         None => {
@@ -1686,15 +1749,25 @@ pub fn trash() -> Result<()> {
             Ok(())
         }
         Some(TrashAction::Purge(indices)) => {
+            let free_before = free_bytes(Path::new("/"));
+            let mut deleted = 0;
+            let mut result = Ok(());
             for i in indices {
                 let g = &groups[i];
                 let date = regret_identity(g).map(str::to_string);
-                delete_group(g)?;
+                if let Err(e) = delete_group(g) {
+                    result = Err(e);
+                    break;
+                }
+                deleted += 1;
                 if let Some(date) = date {
                     purge_duplicate_regrets_in_trash(g.id, &date);
                 }
             }
-            Ok(())
+            if deleted > 0 {
+                report_freed(free_before, predicted, false);
+            }
+            result
         }
     }
 }
