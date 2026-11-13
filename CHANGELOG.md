@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+> Commits: `cdb8d5f`, `51704ec`, `f8691af`, `a353df4`, `7b2d0bf`, `729983d`, `12fc477`, `9cafc3e`, `d77e9f4`, `f15bb4d`, `a79d2d9`
+
+### Pacman checkpoints
+- **Feature**: `snapg pacman on` makes snapg take one grouped checkpoint (every Snapper config under one id) before pacman transactions, in place of snap-pac's per-config pre/post pairs, which Snapper prunes per config and snapg cannot restore together. `off` switches back and `snapg pacman` shows which one is active. Both packages stay installed: the switch masks the other side's hooks with `/dev/null` overrides in `/etc/pacman.d/hooks`. Installing changes nothing until `on`, upgrading keeps the choice, and removing snapgroup hands the checkpoints back to snap-pac.
+- **Feature**: A paru, yay or `makepkg -si` run (paru does a `-Syu` plus one `-U` per AUR package) is a single checkpoint; a plain `pacman` transaction gets one each. Names say what comes after the snapshot: `Antes de paru -Syu`, `Antes de pacman -U openai-codex-bin`, `Antes de makepkg -si (snapgroup)`.
+- **Feature**: `KEEP_PACMAN` (default 20, not unlimited, since the hook runs unattended) is a retention queue of its own, separate from `KEEP_GROUPS`: a burst of transactions no longer pushes manual automatic checkpoints out. The excess goes to the trash like any cleanup; renaming pins a checkpoint. Pacman checkpoints never drop the Regret.
+- **Feature**: The hook output opens with the SnapGroup brand and version, in color when pacman itself shows color. The hook never aborts a transaction: it backs off when a snap-pac hook is still active, skips with a warning during a pending restore, and waits up to 10 s for another snapg before giving up with the reason.
+
+### Log / Restore
+- **Feature**: `snapg log` shows what each pacman checkpoint's transactions did, read from `pacman.log` (it lives in `@log` and survives restores): versions before and after, boot packages first, `.pacnew`/`.pacsave` files and interrupted or aborted transactions, in "Repositório" and "Compilados (AUR)" blocks.
+- **Feature**: The restore shows a preview between the picker and the member selection, comparing the package database inside the root snapshot with the live one. It lists how many packages change, the boot packages grouped by version change, a warning when snapgroup itself would go back or away, and `d` for the full list. It works for any checkpoint with the root, older ones included, and stays exact after other restores.
+- **Feature**: The list, restore, rename, delete and trash screens show an Origem column (`pacman ↑14` / `manual`) when pacman checkpoints exist. It drops out before the name would fall under 10 characters, so 80 columns keep the old layout.
+- **Feature**: The restore picker filters by origin with Tab (Todos · Manuais · Pacman) while keeping one list by date; `RESTORE_FILTER` in `/etc/snapgroup.conf` sets the filter it opens with.
+
 ## [0.12.0-beta] - 2026-11-13
 > Commits: `d543f5f`, `6a15c67`, `786aff2`, `4226311`, `82f5ff9`, `3e2df3a`, `43b200b`, `e04cd20`, `9b75447`, `cb83cf1`, `52a8176`, `20e9fa3`, `c9a0558`, `2b61ede`, `ff05b99`
 
