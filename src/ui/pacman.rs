@@ -6,9 +6,10 @@ use crate::pacman_log::{self, Change, NetChange, Op, State, Transaction};
 use crate::snapper;
 use crate::ui::checkpoints::picker_prompt;
 use crate::ui::snapshots::{count_text, member_badges};
+use crate::pacman_hooks::Status;
 use crate::ui::term::{
     AltScreen, SELECT_MARKER, THEME, clear_screen, header, line, note, path,
-    picker_page_len, short_datetime, title, truncate_for_terminal,
+    picker_page_len, result, result_section, short_datetime, title, truncate_for_terminal, warn,
 };
 use anyhow::{Context, Result};
 use console::{Key, style};
@@ -85,6 +86,54 @@ pub(crate) fn browse(groups: &[Group]) -> Result<()> {
 fn first_transaction(group: &Group, log: Option<&[u8]>) -> Option<Transaction> {
     let offset = group::pacman_log_offset(group)?;
     pacman_log::since(log?, offset)?.into_iter().next()
+}
+
+/// `snapg pacman`: quem faz os checkpoints agora.
+pub(crate) fn print_hook_status(status: &Status) {
+    header("Checkpoints do pacman");
+    match (status.snapg_runs(), status.snap_pac_runs()) {
+        (true, false) => {
+            line(format_args!("o snapg faz os checkpoints: um grupo por transação"));
+            note(format_args!("para voltar ao snap-pac: snapg pacman off"));
+        }
+        (false, true) => {
+            line(format_args!("o snap-pac faz os checkpoints (padrão do sistema)"));
+            note(format_args!("para o snapg fazê-los: snapg pacman on"));
+        }
+        (true, true) => {
+            warn(format_args!("snapg e snap-pac ligados: o snapg recua para não dobrar os snapshots"));
+            note(format_args!("escolha um: snapg pacman on (snapg) ou off (snap-pac)"));
+        }
+        (false, false) => {
+            warn(format_args!("nenhum dos dois faz checkpoints nas transações do pacman"));
+            note(format_args!("para o snapg fazê-los: snapg pacman on"));
+        }
+    }
+    if status.snap_pac.is_empty() {
+        note(format_args!("snap-pac não instalado"));
+    }
+}
+
+pub(crate) fn print_hook_switched(on: bool, status: &Status) {
+    result_section("Pacman");
+    let snap_pac = if status.snap_pac.is_empty() { "snap-pac não instalado" } else if on { "snap-pac desligado" } else { "snap-pac ligado" };
+    let snapg = if on { "snapg ligado" } else { "snapg desligado" };
+    result(format_args!("{} · {}", style(snapg).bold(), style(snap_pac).dim()));
+    if on && !status.snap_pac.is_empty() {
+        note(format_args!(
+            "os pre/post antigos do snap-pac não saem sozinhos: veja \"Migração do snap-pac\" no README"
+        ));
+    }
+    if !on && status.snap_pac.is_empty() {
+        warn(format_args!("sem snap-pac, as transações do pacman ficam sem checkpoint"));
+    }
+}
+
+/// Aviso do hook quando o snap-pac também está ligado.
+pub(crate) fn print_snap_pac_active() {
+    warn(format_args!(
+        "snap-pac ligado: checkpoint do snapg não criado. Para o snapg assumir: snapg pacman on"
+    ));
 }
 
 pub(crate) fn print_no_pacman_groups() {

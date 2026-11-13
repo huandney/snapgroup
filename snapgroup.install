@@ -1,26 +1,29 @@
-# Os pre/post que o snap-pac deixou não saem sozinhos: o cleanup `number` do
-# snapper só corta o que passa do NUMBER_LIMIT, e o snapg ignora snapshots sem
-# grupo. Apagar 100+ snapshots é escolha do usuário, então só avisamos.
+# O hook do snapg chega desligado (link para /dev/null em /etc, que toma o
+# lugar do arquivo em /usr): instalar não muda quem faz os checkpoints do
+# pacman. `snapg pacman on` troca o snap-pac pelo snapg; `off` desfaz.
+OWN_HOOK_MASK=/etc/pacman.d/hooks/05-snapgroup-pre.hook
+
+mask_own_hook() {
+    mkdir -p /etc/pacman.d/hooks
+    [ -e "$OWN_HOOK_MASK" ] || [ -L "$OWN_HOOK_MASK" ] || ln -s /dev/null "$OWN_HOOK_MASK"
+}
+
 note_pacman_hook() {
-    echo "==> O snapgroup agora cria um checkpoint por transação do pacman,"
-    echo "    no lugar do snap-pac (KEEP_PACMAN em /etc/snapgroup.conf)."
-    echo "    Os pre/post antigos do snap-pac continuam no snapper. Para apagá-los:"
-    echo "      for c in \$(snapper --csvout list-configs --columns config | tail -n +2); do"
-    echo "        snapper -c \"\$c\" --csvout list --columns number,type,cleanup |"
-    echo "          awk -F, '\$2 != \"single\" && \$3 == \"number\" {print \$1}' |"
-    echo "          xargs -r snapper -c \"\$c\" delete"
-    echo "      done"
+    echo "==> O snapgroup pode fazer um checkpoint agrupado por transação do pacman,"
+    echo "    no lugar do snap-pac. Para ligar: sudo snapg pacman on · voltar: sudo snapg pacman off"
 }
 
 post_install() {
     systemctl daemon-reload
     # Não habilita aqui — o `snapg redo` arma o serviço sob demanda.
+    mask_own_hook
     note_pacman_hook
 }
 
 post_upgrade() {
     systemctl daemon-reload
     if [ "$(vercmp "$2" 0.13.0)" -lt 0 ]; then
+        mask_own_hook
         note_pacman_hook
     fi
 }
@@ -29,6 +32,12 @@ pre_remove() {
     # Best-effort: se o serviço estiver armado (após um redo sem reboot),
     # desarma antes de remover o unit.
     systemctl disable snapg-cleanup.service 2>/dev/null || true
+    # Sem o snapg, o snap-pac volta a fazer os checkpoints: some todo link para
+    # /dev/null que o `snapg pacman on/off` possa ter deixado.
+    for hook in "$OWN_HOOK_MASK" /etc/pacman.d/hooks/*snap-pac*.hook; do
+        [ -L "$hook" ] && [ "$(readlink "$hook")" = /dev/null ] && rm -f "$hook"
+    done
+    return 0
 }
 
 post_remove() {

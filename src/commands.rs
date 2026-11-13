@@ -5,6 +5,7 @@ use crate::doctor;
 use crate::group::{self, Group, Member};
 use crate::orphan::{self, OrphanBackup};
 use crate::pacman;
+use crate::pacman_hooks;
 use crate::pacman_log;
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
@@ -137,6 +138,13 @@ pub fn save_pacman() -> Result<()> {
         bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
     }
 
+    // O hook do snap-pac ativo também (link apagado à mão, ou renomeado numa
+    // atualização dele): o snapg recua em vez de dobrar os snapshots.
+    if pacman_hooks::status(&pacman_hooks::Dirs::system_default()).snap_pac_runs() {
+        crate::ui::pacman::print_snap_pac_active();
+        return Ok(());
+    }
+
     // Com uma restauração pendente o snapper nem lista (o `.snapshots` já foi
     // movido). O kernel/initramfs já são barrados pelo pending-check; o resto
     // da transação segue sem checkpoint.
@@ -160,6 +168,25 @@ pub fn save_pacman() -> Result<()> {
 
     purge_expired_trash(&cfg);
     run_cleanup(&cfg);
+    Ok(())
+}
+
+/// `snapg pacman`: só leitura.
+pub fn pacman_status() -> Result<()> {
+    crate::ui::pacman::print_hook_status(&pacman_hooks::status(&pacman_hooks::Dirs::system_default()));
+    Ok(())
+}
+
+/// `snapg pacman on|off`.
+pub fn pacman_switch(on: bool) -> Result<()> {
+    let dirs = pacman_hooks::Dirs::system_default();
+    let before = pacman_hooks::status(&dirs);
+    if on {
+        pacman_hooks::enable(&dirs, &before)?;
+    } else {
+        pacman_hooks::disable(&dirs, &before)?;
+    }
+    crate::ui::pacman::print_hook_switched(on, &pacman_hooks::status(&dirs));
     Ok(())
 }
 

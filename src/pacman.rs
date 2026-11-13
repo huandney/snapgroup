@@ -1,5 +1,6 @@
-//! Entrada do hook do pacman: de onde sai o nome do checkpoint. O hook roda com `NeedsTargets` (pacotes no stdin) e tem o
-//! pacman como processo pai, então a linha de comando dele diz a operação.
+//! Entrada do hook do pacman: de onde sai o nome do checkpoint. O hook roda
+//! com `NeedsTargets` (pacotes no stdin) e tem o pacman como processo pai,
+//! então a linha de comando dele diz a operação.
 
 use std::fs;
 use std::io::{self, BufRead};

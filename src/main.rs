@@ -8,6 +8,7 @@ mod group;
 mod lock;
 mod orphan;
 mod pacman;
+mod pacman_hooks;
 mod pacman_log;
 mod proc;
 mod rename;
@@ -56,6 +57,11 @@ fn main() -> Result<()> {
         }
         cli::Command::List => commands::list(),
         cli::Command::Log => commands::log(),
+        cli::Command::Pacman { action: None } => commands::pacman_status(),
+        cli::Command::Pacman { action: Some(action) } => {
+            let _lock = lock::acquire()?;
+            commands::pacman_switch(matches!(action, cli::PacmanAction::On))
+        }
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
         cli::Command::PendingCheck => commands::pending_check(),
         cli::Command::SpaceProbe => commands::space_probe(),
