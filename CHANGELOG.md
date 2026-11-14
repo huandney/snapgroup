@@ -5,8 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-> Commits: `cdb8d5f`, `51704ec`, `f8691af`, `a353df4`, `7b2d0bf`, `729983d`, `12fc477`, `9cafc3e`, `d77e9f4`, `f15bb4d`, `a79d2d9`
+## [0.13.0-beta] - 2026-11-13
+> Commits: `cdb8d5f`, `51704ec`, `f8691af`, `a353df4`, `7b2d0bf`, `729983d`, `12fc477`, `9cafc3e`, `d77e9f4`, `f15bb4d`, `a79d2d9`, `ce9054d`, `d0fc659`, `46b4f36`
 
 ### Pacman checkpoints
 - **Feature**: `snapg pacman on` makes snapg take one grouped checkpoint (every Snapper config under one id) before pacman transactions, in place of snap-pac's per-config pre/post pairs, which Snapper prunes per config and snapg cannot restore together. `off` switches back and `snapg pacman` shows which one is active. Both packages stay installed: the switch masks the other side's hooks with `/dev/null` overrides in `/etc/pacman.d/hooks`. Installing changes nothing until `on`, upgrading keeps the choice, and removing snapgroup hands the checkpoints back to snap-pac.
