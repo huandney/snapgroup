@@ -25,5 +25,7 @@ package() {
     "$pkgdir/usr/lib/systemd/system/snapg-cleanup.service"
   install -Dm644 "$startdir/pacman/00-snapgroup-pending.hook" \
     "$pkgdir/usr/share/libalpm/hooks/00-snapgroup-pending.hook"
+  install -Dm644 "$startdir/pacman/05-snapgroup-pre.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/05-snapgroup-pre.hook"
   install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }

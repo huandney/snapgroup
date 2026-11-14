@@ -14,17 +14,60 @@ pub struct Config {
     /// Quantos grupos automáticos (nome padrão) manter vivos; fixos não contam.
     /// `0` = ilimitado (comportamento legado).
     pub keep_groups: usize,
+    /// Quantos grupos do hook do pacman manter vivos, numa fila própria: um
+    /// dia de muitas transações não empurra os automáticos do `save` para a
+    /// lixeira. `0` = ilimitado.
+    pub keep_pacman: usize,
     /// Dias que um grupo fica na lixeira antes do purge apagar de vez.
     /// `u64`: dias negativos não existem, e um valor negativo poria o cutoff
     /// no futuro e purgaria a lixeira inteira na hora.
     pub trash_prune_days: u64,
+    /// O que o seletor do restore mostra ao abrir (Tab troca).
+    pub restore_filter: RestoreFilter,
+}
+
+/// Recorte do seletor do restore. O Regret conta como manual.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RestoreFilter {
+    All,
+    Manual,
+    Pacman,
+}
+
+impl RestoreFilter {
+    pub const ORDER: [RestoreFilter; 3] = [RestoreFilter::All, RestoreFilter::Manual, RestoreFilter::Pacman];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RestoreFilter::All => "Todos",
+            RestoreFilter::Manual => "Manuais",
+            RestoreFilter::Pacman => "Pacman",
+        }
+    }
+
+    pub fn shows(self, pacman: bool) -> bool {
+        match self {
+            RestoreFilter::All => true,
+            RestoreFilter::Manual => !pacman,
+            RestoreFilter::Pacman => pacman,
+        }
+    }
+
+    pub fn next(self) -> RestoreFilter {
+        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
+        Self::ORDER[(i + 1) % Self::ORDER.len()]
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             keep_groups: 0,
+            // Diferente de 0 de propósito: o hook cria grupos sozinhos, e sem
+            // teto eles cresceriam para sempre (o snap-pac parava em 50).
+            keep_pacman: 20,
             trash_prune_days: 15,
+            restore_filter: RestoreFilter::All,
         }
     }
 }
@@ -56,6 +99,17 @@ fn parse(content: &str) -> Config {
                     cfg.keep_groups = n;
                 }
             }
+            "KEEP_PACMAN" => {
+                if let Ok(n) = val.parse() {
+                    cfg.keep_pacman = n;
+                }
+            }
+            "RESTORE_FILTER" => match val.to_ascii_lowercase().as_str() {
+                "todos" => cfg.restore_filter = RestoreFilter::All,
+                "manuais" => cfg.restore_filter = RestoreFilter::Manual,
+                "pacman" => cfg.restore_filter = RestoreFilter::Pacman,
+                _ => {}
+            },
             "TRASH_PRUNE_DAYS" => {
                 // Valor grande sinaliza "reter muito" → clampa no teto seguro,
                 // em vez de cair no default e encolher a janela em silêncio.
@@ -77,7 +131,24 @@ mod tests {
     fn empty_content_yields_defaults() {
         let cfg = parse("");
         assert_eq!(cfg.keep_groups, 0);
+        assert_eq!(cfg.keep_pacman, 20);
         assert_eq!(cfg.trash_prune_days, 15);
+    }
+
+    #[test]
+    fn reads_restore_filter() {
+        use super::RestoreFilter;
+        assert_eq!(parse("").restore_filter, RestoreFilter::All);
+        assert_eq!(parse("RESTORE_FILTER=manuais\n").restore_filter, RestoreFilter::Manual);
+        assert_eq!(parse("RESTORE_FILTER=\"Pacman\"\n").restore_filter, RestoreFilter::Pacman);
+        assert_eq!(parse("RESTORE_FILTER=outro\n").restore_filter, RestoreFilter::All);
+    }
+
+    #[test]
+    fn reads_keep_pacman() {
+        assert_eq!(parse("KEEP_PACMAN=5\n").keep_pacman, 5);
+        assert_eq!(parse("KEEP_PACMAN=0\n").keep_pacman, 0);
+        assert_eq!(parse("KEEP_PACMAN=-3\n").keep_pacman, 20);
     }
 
     #[test]

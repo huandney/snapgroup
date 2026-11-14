@@ -4,7 +4,10 @@
 
 use crate::group::{self, Group, GroupId};
 use crate::orphan::OrphanBackup;
-use crate::ui::checkpoints::{ReviewCard, ReviewDecision, kernel_label, review_cards};
+use crate::ui::checkpoints::{
+    ORIGIN_HEADER, ReviewCard, ReviewDecision, fit_name_and_origin, kernel_label, origin_cell, origin_width,
+    review_cards,
+};
 use crate::ui::term::{AltScreen, CONTENT_INDENT, DISPLAY_VERSION, PAGE_INDENT, short_datetime, title};
 use anyhow::{Context, Result, bail};
 use console::{Key, Term, style};
@@ -71,6 +74,8 @@ pub(crate) struct PurgeDue {
 pub(crate) struct DeleteContext<'a> {
     pub(crate) groups: &'a [Group],
     pub(crate) kernel_labels: &'a HashMap<GroupId, String>,
+    /// Coluna Origem (`pacman ↑14` / `manual`); vazio = coluna escondida.
+    pub(crate) origins: &'a HashMap<GroupId, String>,
     pub(crate) orphans: &'a [OrphanBackup],
     pub(crate) mode: Mode,
     /// Um por grupo na lixeira; vazio no `delete`.
@@ -520,18 +525,20 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
             .max()
             .map(|w| w.max(PURGE_HEADER.len()));
         let fixed = prefix + FIX_WIDTH + 2 + 3 + kernel_w + 3 + DATE_WIDTH + purge_w.map_or(0, |w| w + 3);
-        let name_w = ctx
+        let wanted_name = ctx
             .groups
             .iter()
             .map(|g| group::description(g).chars().count())
             .max()
             .unwrap_or(0)
-            .clamp("Nome".len(), NAME_MAX)
-            .min(width.saturating_sub(fixed).max("Nome".len()));
+            .clamp("Nome".len(), NAME_MAX);
+        let (name_w, origin_w) =
+            fit_name_and_origin(wanted_name, origin_width(ctx.origins), width.saturating_sub(fixed));
+        let origin_header = if origin_w > 0 { format!("{ORIGIN_HEADER:<origin_w$}   ") } else { String::new() };
         lines.push(format!("{PAGE_INDENT}{}", title("▪ Checkpoints")));
         let purge_header = purge_w.map(|w| format!("   {PURGE_HEADER:<w$}")).unwrap_or_default();
         lines.push(style(format!(
-            "{}{:FIX_WIDTH$}  {:<name_w$}   {:<kernel_w$}   {:<DATE_WIDTH$}{purge_header}",
+            "{}{:FIX_WIDTH$}  {:<name_w$}   {origin_header}{:<kernel_w$}   {:<DATE_WIDTH$}{purge_header}",
             " ".repeat(prefix),
             "",
             "Nome",
@@ -554,7 +561,8 @@ fn list_lines(ctx: &DeleteContext<'_>, rows: &[Row], sel: &Selection, width: usi
                 _ => String::new(),
             };
             let rest = format!(
-                "   {:<kernel_w$}   {:<DATE_WIDTH$}{purge}",
+                "   {}{:<kernel_w$}   {:<DATE_WIDTH$}{purge}",
+                origin_cell(ctx.origins, g.id, origin_w),
                 kernel_label(ctx.kernel_labels, g.id),
                 short_datetime(group::date(g))
             );
@@ -772,7 +780,7 @@ mod tests {
             .collect();
         let labels = HashMap::new();
         let mode = Mode::Delete { purge: false, trash_days: 15 };
-        let ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, mode, purge_due: &[] };
+        let ctx = DeleteContext { groups: &[], kernel_labels: &labels, origins: &HashMap::new(), orphans: &orphans, mode, purge_due: &[] };
         let rows: Vec<Row> = (0..orphans.len()).map(Row::Orphan).collect();
         let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 39, offset: 0 };
         for height in [12u16, 24, 40] {
@@ -793,7 +801,7 @@ mod tests {
             created: String::new(),
         }];
         let mode = Mode::Delete { purge: false, trash_days: 15 };
-        let mut ctx = DeleteContext { groups: &[], kernel_labels: &labels, orphans: &orphans, mode, purge_due: &[] };
+        let mut ctx = DeleteContext { groups: &[], kernel_labels: &labels, origins: &HashMap::new(), orphans: &orphans, mode, purge_due: &[] };
         let sel = Selection {
             groups: [0, 1].into_iter().collect(),
             orphans: [0].into_iter().collect(),
@@ -844,7 +852,7 @@ mod tests {
         let labels = HashMap::new();
         let rows: Vec<Row> = (0..groups.len()).map(Row::Group).collect();
         for (mode, enter) in [(Mode::TrashRestore, "enter restaura"), (Mode::TrashPurge, "enter revisa")] {
-            let ctx = DeleteContext { groups: &groups, kernel_labels: &labels, orphans: &[], mode, purge_due: &due };
+            let ctx = DeleteContext { groups: &groups, kernel_labels: &labels, origins: &HashMap::new(), orphans: &[], mode, purge_due: &due };
             let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 0, offset: 0 };
             let frame = render(&ctx, &rows, &mut sel, &Estimate::Pending, (20, 120));
             assert_eq!(frame.matches('\n').count() + 1, 20);
@@ -852,6 +860,31 @@ mod tests {
             assert!(frame.contains("v vencidos") && frame.contains(enter) && frame.contains("esc volta"));
             assert_eq!(frame.contains("▪ Espaço"), mode == Mode::TrashPurge);
         }
+    }
+
+    #[test]
+    fn origin_column_shows_when_wide_and_leaves_before_the_name_starves() {
+        let groups = vec![trashed_group(1), trashed_group(2)];
+        let labels = HashMap::new();
+        let origins = HashMap::from([(1, "pacman ↑3".to_string()), (2, "manual".to_string())]);
+        let rows: Vec<Row> = (0..groups.len()).map(Row::Group).collect();
+        let ctx = DeleteContext {
+            groups: &groups,
+            kernel_labels: &labels,
+            origins: &origins,
+            orphans: &[],
+            mode: Mode::Delete { purge: false, trash_days: 15 },
+            purge_due: &[],
+        };
+        let sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 0, offset: 0 };
+        let (wide, _) = super::list_lines(&ctx, &rows, &sel, 120);
+        assert!(wide[1].contains("Origem"));
+        assert!(wide[2].contains("Checkpoint 1   pacman ↑3"));
+        assert!(wide[3].contains("manual"));
+        // Aqui o Nome caberia, mas ficaria com menos de 10 ao lado da Origem.
+        let (narrow, _) = super::list_lines(&ctx, &rows, &sel, 50);
+        assert!(!narrow[1].contains("Origem"));
+        assert!(!narrow[2].contains("pacman"));
     }
 
     #[test]
