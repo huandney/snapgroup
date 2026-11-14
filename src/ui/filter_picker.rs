@@ -13,6 +13,13 @@ pub(crate) struct Item {
     pub(crate) pacman: bool,
 }
 
+/// O que o seletor lembra entre uma abertura e outra no mesmo restore: voltar
+/// da prévia com Esc reabre no mesmo filtro e no mesmo checkpoint.
+pub(crate) struct PickState {
+    pub(crate) filter: RestoreFilter,
+    pub(crate) chosen: Option<usize>,
+}
+
 /// Linhas acima da lista (cabeçalho de 2, pergunta, filtro, colunas) e abaixo
 /// (branco, dica, cursor).
 const CHROME_LINES: usize = 8;
@@ -24,15 +31,21 @@ pub(crate) fn pick(
     prompt: &str,
     columns_header: &str,
     items: &[Item],
-    initial: RestoreFilter,
+    state: &mut PickState,
 ) -> Result<Option<usize>> {
     let has_pacman = items.iter().any(|item| item.pacman);
-    let mut filter = if has_pacman { initial } else { RestoreFilter::All };
-    let mut cursor = 0usize;
+    if !has_pacman {
+        state.filter = RestoreFilter::All;
+    }
+    let mut cursor = state
+        .chosen
+        .and_then(|chosen| visible(items, state.filter).iter().position(|&i| i == chosen))
+        .unwrap_or(0);
     let mut offset = 0usize;
     let term = console::Term::stdout();
     let _ = term.hide_cursor();
-    loop {
+    let picked = loop {
+        let filter = state.filter;
         let visible = visible(items, filter);
         cursor = cursor.min(visible.len().saturating_sub(1));
         let page = (term.size().0 as usize).saturating_sub(CHROME_LINES).max(1);
@@ -56,23 +69,27 @@ pub(crate) fn pick(
         let tab = if has_pacman { " · tab filtra" } else { "" };
         line(format_args!("{}", style(format!("↑/↓ move{tab} · enter confirma")).dim()));
 
+        // As teclas do Select do dialoguer, que este substitui, mais o Tab.
         match term.read_key().context("aguardar tecla")? {
-            Key::ArrowUp => cursor = cursor.checked_sub(1).unwrap_or(visible.len().saturating_sub(1)),
-            Key::ArrowDown => cursor = if cursor + 1 >= visible.len() { 0 } else { cursor + 1 },
-            Key::PageUp => cursor = cursor.saturating_sub(page),
-            Key::PageDown => cursor = (cursor + page).min(visible.len().saturating_sub(1)),
+            Key::ArrowUp | Key::Char('k') => cursor = cursor.checked_sub(1).unwrap_or(visible.len().saturating_sub(1)),
+            Key::ArrowDown | Key::Char('j') => cursor = if cursor + 1 >= visible.len() { 0 } else { cursor + 1 },
+            Key::PageUp | Key::ArrowLeft | Key::Char('h') => cursor = cursor.saturating_sub(page),
+            Key::PageDown | Key::ArrowRight | Key::Char('l') => cursor = (cursor + page).min(visible.len().saturating_sub(1)),
             Key::Home => cursor = 0,
             Key::End => cursor = visible.len().saturating_sub(1),
             Key::Tab if has_pacman => {
-                filter = filter.next();
+                state.filter = filter.next();
                 cursor = 0;
                 offset = 0;
             }
-            Key::Enter if !visible.is_empty() => return Ok(Some(visible[cursor])),
-            Key::Escape => return Ok(None),
+            Key::Enter if !visible.is_empty() => break Some(visible[cursor]),
+            Key::Escape | Key::Char('q') => break None,
             _ => {}
         }
-    }
+    };
+    let _ = term.show_cursor();
+    state.chosen = picked.or(state.chosen);
+    Ok(picked)
 }
 
 /// Índices dos itens que o recorte mostra, na ordem original (data).

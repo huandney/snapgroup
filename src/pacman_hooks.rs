@@ -13,6 +13,18 @@ use std::process::Command;
 pub const OWN_HOOK: &str = "05-snapgroup-pre.hook";
 const SYSTEM_DIR: &str = "/usr/share/libalpm/hooks";
 const OVERRIDE_DIR: &str = "/etc/pacman.d/hooks";
+/// A escolha do usuário (`on`/`off`), para o script de instalação seguir num
+/// upgrade. Os links sozinhos não dizem: sem snap-pac, um `on` não deixa link.
+const CHOICE_PATH: &str = "/var/lib/snapgroup/pacman-hook";
+
+/// Grava `on` ou `off` em `CHOICE_PATH`.
+pub fn record_choice(on: bool) -> Result<()> {
+    let path = Path::new(CHOICE_PATH);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).with_context(|| format!("criar {}", dir.display()))?;
+    }
+    fs::write(path, if on { "on\n" } else { "off\n" }).with_context(|| format!("gravar {CHOICE_PATH}"))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HookState {
@@ -111,6 +123,14 @@ fn is_null_link(path: &Path) -> bool {
 
 /// `snapg pacman on`: desliga os hooks do snap-pac e liga o do snapg.
 pub fn enable(dirs: &Dirs, status: &Status) -> Result<()> {
+    // Sem o hook do snapg instalado, desligar o snap-pac deixaria as
+    // transações sem checkpoint nenhum.
+    if status.snapg == HookState::Absent {
+        bail!(
+            "{} não existe: o hook do snapg não está instalado. Reinstale o pacote snapgroup.",
+            dirs.system.join(OWN_HOOK).display()
+        );
+    }
     let snap_pac: Vec<&str> = status.snap_pac.iter().map(|(name, _)| name.as_str()).collect();
     refuse_replaced(dirs, &snap_pac)?;
     for name in &snap_pac {
@@ -244,6 +264,18 @@ mod tests {
         assert!(fs::symlink_metadata(d.overrides.join(PRE)).is_err());
         assert!(fs::symlink_metadata(d.overrides.join(POST)).is_err());
         assert_eq!(state(&d, OWN_HOOK), HookState::Masked);
+        let _ = fs::remove_dir_all(d.system.parent().unwrap());
+    }
+
+    #[test]
+    fn on_refuses_without_the_snapg_hook() {
+        let d = dirs("absent");
+        fs::remove_file(d.system.join(OWN_HOOK)).unwrap();
+        let st = status(&d);
+        assert_eq!(st.snapg, HookState::Absent);
+        assert!(enable(&d, &st).is_err());
+        // O snap-pac continua ligado.
+        assert_eq!(state(&d, PRE), HookState::Active);
         let _ = fs::remove_dir_all(d.system.parent().unwrap());
     }
 

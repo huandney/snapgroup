@@ -160,7 +160,7 @@ pub fn save_pacman() -> Result<()> {
 
     // Uma execução do paru/makepkg faz várias transações: a primeira cria o
     // checkpoint, as outras só contam nele. Restaurar desfaz a execução toda.
-    let helper = cmdline.as_ref().and(pacman::helper_above_parent());
+    let helper = cmdline.as_ref().and_then(|_| pacman::helper_above_parent());
     if let Some(helper) = &helper
         && let Some(covering) = covering_checkpoint(&helper.session)?
     {
@@ -224,6 +224,7 @@ pub fn pacman_switch(on: bool) -> Result<()> {
     } else {
         pacman_hooks::disable(&dirs, &before)?;
     }
+    pacman_hooks::record_choice(on)?;
     crate::ui::pacman::print_hook_switched(on, &pacman_hooks::status(&dirs));
     Ok(())
 }

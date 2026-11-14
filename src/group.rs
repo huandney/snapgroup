@@ -149,10 +149,9 @@ pub fn is_auto(group: &Group) -> bool {
 
 /// Âncora no `pacman.log` gravada no save (`None` em grupos anteriores a ela).
 pub fn pacman_log_anchor(group: &Group) -> Option<crate::pacman_log::Anchor> {
-    let snapshot = &group.members.first()?.snapshot;
     Some(crate::pacman_log::Anchor {
-        offset: userdata_str(snapshot, PACMAN_LOG_KEY)?.parse().ok()?,
-        ino: userdata_str(snapshot, PACMAN_LOG_INO_KEY).and_then(|v| v.parse().ok()),
+        offset: first_userdata(group, PACMAN_LOG_KEY)?.parse().ok()?,
+        ino: first_userdata(group, PACMAN_LOG_INO_KEY).and_then(|v| v.parse().ok()),
     })
 }
 
@@ -180,11 +179,7 @@ pub fn pacman_transactions(group: &Group) -> usize {
 
 /// Grupo criado pelo hook do pacman.
 pub fn is_pacman(group: &Group) -> bool {
-    group
-        .members
-        .first()
-        .and_then(|m| userdata_str(&m.snapshot, TRIGGER_KEY))
-        == Some(TRIGGER_PACMAN)
+    first_userdata(group, TRIGGER_KEY) == Some(TRIGGER_PACMAN)
 }
 
 /// Grupos a mover pra lixeira (`KEEP_GROUPS`): entre os automáticos do `save`,

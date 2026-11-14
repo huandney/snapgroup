@@ -41,11 +41,7 @@ const NAME_COL_MAX: usize = 32;
 /// Esc no detalhe volta para a lista; Esc na lista sai.
 pub(crate) fn browse(groups: &[Group]) -> Result<()> {
     let _alt = AltScreen::enter();
-    let log = pacman_log::read_for(groups).ok();
-    let transactions: Vec<Option<Vec<Transaction>>> = groups
-        .iter()
-        .map(|g| log.as_ref().and_then(|log| pacman_log::of_group(log, g)))
-        .collect();
+    let transactions: Vec<Option<Vec<Transaction>>> = groups.iter().map(pacman_log::of_group).collect();
 
     let name_col = groups
         .iter()
@@ -115,10 +111,15 @@ pub(crate) fn print_hook_status(status: &Status) {
     }
 }
 
+/// O resultado vem do estado depois da troca, não do que foi pedido.
 pub(crate) fn print_hook_switched(on: bool, status: &Status) {
     result_section("Pacman");
-    let snap_pac = if status.snap_pac.is_empty() { "snap-pac não instalado" } else if on { "snap-pac desligado" } else { "snap-pac ligado" };
-    let snapg = if on { "snapg ligado" } else { "snapg desligado" };
+    let snap_pac = match (status.snap_pac.is_empty(), status.snap_pac_runs()) {
+        (true, _) => "snap-pac não instalado",
+        (false, true) => "snap-pac ligado",
+        (false, false) => "snap-pac desligado",
+    };
+    let snapg = if status.snapg_runs() { "snapg ligado" } else { "snapg desligado" };
     result(format_args!("{} · {}", style(snapg).bold(), style(snap_pac).dim()));
     if on && !status.snap_pac.is_empty() {
         note(format_args!(

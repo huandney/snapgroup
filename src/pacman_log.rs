@@ -5,11 +5,10 @@
 //! pacotes (`pacman_db`).
 
 use crate::group::{self, Group, GroupId};
-use anyhow::{Context, Result};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 
 const LOG_PATH: &str = "/var/log/pacman.log";
@@ -70,16 +69,11 @@ pub struct Anchor {
     pub ino: Option<u64>,
 }
 
-/// O log a partir de `base` (o resto não interessa a ninguém que vai ler).
-pub struct Log {
-    bytes: Vec<u8>,
-    base: u64,
-    len: u64,
-    ino: u64,
-}
-
 enum Event {
     Running(String),
+    /// `[ALPM] running '05-snapgroup-pre.hook'...`: o hook do snapg rodou para
+    /// uma transação, ou seja, ela abre o checkpoint seguinte ou conta nele.
+    OwnHook,
     Started,
     Completed,
     Change(Change),
@@ -93,42 +87,25 @@ pub fn anchor_now() -> Option<Anchor> {
     Some(Anchor { offset: meta.len(), ino: Some(meta.ino()) })
 }
 
-/// Lê o log uma vez, a partir da âncora mais antiga dos grupos: um log de
-/// anos pode ter dezenas de MB, e só o trecho depois dela é consultado.
-pub fn read_for(groups: &[Group]) -> Result<Log> {
-    let base = groups.iter().filter_map(group::pacman_log_anchor).map(|a| a.offset).min();
-    read_from(base.unwrap_or(0))
-}
-
-fn read_from(base: u64) -> Result<Log> {
-    let mut file = File::open(LOG_PATH).with_context(|| format!("abrir {LOG_PATH}"))?;
-    let meta = file.metadata().with_context(|| format!("ler {LOG_PATH}"))?;
-    let mut bytes = Vec::new();
-    if base < meta.len() {
-        file.seek(SeekFrom::Start(base)).with_context(|| format!("posicionar em {LOG_PATH}"))?;
-        file.read_to_end(&mut bytes).with_context(|| format!("ler {LOG_PATH}"))?;
-    }
-    Ok(Log { bytes, base, len: meta.len(), ino: meta.ino() })
-}
-
-/// As transações do checkpoint: as `count` primeiras depois da âncora (o hook
-/// roda depois do `Running` da primeira e antes do `started`). Para nelas, sem
-/// ler o resto do log. `None` se o log foi trocado ou está menor que a âncora.
-fn run(log: &Log, anchor: Anchor, count: usize) -> Option<Vec<Transaction>> {
-    if anchor.ino.is_some_and(|ino| ino != log.ino) || anchor.offset > log.len {
-        return None;
-    }
-    let start = usize::try_from(anchor.offset.checked_sub(log.base)?).ok()?;
-    let tail = log.bytes.get(start..)?;
-    let lines = tail.split(|&b| b == b'\n').map(String::from_utf8_lossy);
-    Some(parse_lines(lines, count))
+/// A âncora vale neste log? Outro arquivo (inode diferente) ou um log menor
+/// que a posição gravada não são o log em que ela foi gravada.
+fn anchor_fits(anchor: Anchor, len: u64, ino: u64) -> bool {
+    anchor.offset <= len && anchor.ino.is_none_or(|saved| saved == ino)
 }
 
 /// As transações que o checkpoint do pacman cobre: uma, ou as da execução do
-/// paru/makepkg. A operação da primeira vem do userdata (o `Running` dela fica
-/// antes da âncora).
-pub fn of_group(log: &Log, group: &Group) -> Option<Vec<Transaction>> {
-    let mut transactions = run(log, group::pacman_log_anchor(group)?, group::pacman_transactions(group))?;
+/// paru/makepkg. Lê do arquivo só o trecho delas (posiciona na âncora e para
+/// no fim), então um checkpoint antigo não custa reler meses de log. A
+/// operação da primeira vem do userdata: o `Running` dela fica antes da âncora.
+pub fn of_group(group: &Group) -> Option<Vec<Transaction>> {
+    let anchor = group::pacman_log_anchor(group)?;
+    let mut file = File::open(LOG_PATH).ok()?;
+    let meta = file.metadata().ok()?;
+    if !anchor_fits(anchor, meta.len(), meta.ino()) {
+        return None;
+    }
+    file.seek(SeekFrom::Start(anchor.offset)).ok()?;
+    let mut transactions = read_run(BufReader::new(file), group::pacman_transactions(group));
     if let Some(first) = transactions.first_mut()
         && first.op.is_none()
     {
@@ -137,14 +114,20 @@ pub fn of_group(log: &Log, group: &Group) -> Option<Vec<Transaction>> {
     Some(transactions)
 }
 
+/// Lê, a partir da âncora, as transações de um checkpoint que cobre `count`
+/// delas. Para no que vier primeiro: `count` transações, ou o hook do snapg
+/// rodando para uma transação que já não é deste checkpoint (a contagem sobe
+/// no PreTransaction, e uma transação que aborta depois disso não deixa
+/// `started` no log; sem este limite, a leitura invadiria a seguinte).
+fn read_run(reader: impl BufRead, count: usize) -> Vec<Transaction> {
+    let lines = reader.split(b'\n').map_while(Result::ok).map(|line| Cow::Owned(String::from_utf8_lossy(&line).into_owned()));
+    parse_lines(lines, count, Some(count))
+}
+
 fn known_op(op: &str) -> Option<&'static str> {
     ["-Syu", "-S", "-U", "-R"].into_iter().find(|known| *known == op)
 }
 
-#[cfg(test)]
-fn first(log: &Log, anchor: Anchor) -> Option<Transaction> {
-    run(log, anchor, 1)?.into_iter().next()
-}
 
 /// Rótulo da coluna Origem: `pacman ↑14` (pacotes da transação do grupo) ou
 /// `manual`. Vazio quando nenhum grupo veio do pacman: a coluna não aparece.
@@ -152,20 +135,14 @@ pub fn origin_labels(groups: &[Group]) -> HashMap<GroupId, String> {
     if !groups.iter().any(group::is_pacman) {
         return HashMap::new();
     }
-    let log = read_for(groups).ok();
-    groups
-        .iter()
-        .map(|g| (g.id, origin_label(g, log.as_ref())))
-        .collect()
+    groups.iter().map(|g| (g.id, origin_label(g))).collect()
 }
 
-fn origin_label(group: &Group, log: Option<&Log>) -> String {
+fn origin_label(group: &Group) -> String {
     if !group::is_pacman(group) {
         return "manual".to_string();
     }
-    let count = log
-        .and_then(|log| of_group(log, group))
-        .map(|txs| txs.iter().map(|tx| tx.changes.len()).sum::<usize>());
+    let count = of_group(group).map(|txs| txs.iter().map(|tx| tx.changes.len()).sum::<usize>());
     match count {
         Some(n) => format!("pacman ↑{n}"),
         None => "pacman".to_string(),
@@ -178,14 +155,21 @@ pub fn is_boot_package(name: &str) -> bool {
 
 #[cfg(test)]
 fn parse(text: &str) -> Vec<Transaction> {
-    parse_lines(text.lines().map(Cow::Borrowed), usize::MAX)
+    parse_lines(text.lines().map(Cow::Borrowed), usize::MAX, None)
 }
 
-/// Transações das linhas, até `limit` delas.
-fn parse_lines<'a>(lines: impl Iterator<Item = Cow<'a, str>>, limit: usize) -> Vec<Transaction> {
+/// Transações das linhas, até `limit` delas. Com `hook_runs`, para também na
+/// transação em que o hook do snapg roda pela `hook_runs`-ésima vez depois da
+/// âncora: ela é do checkpoint seguinte e fica de fora.
+fn parse_lines<'a>(
+    lines: impl Iterator<Item = Cow<'a, str>>,
+    limit: usize,
+    hook_runs: Option<usize>,
+) -> Vec<Transaction> {
     let mut out = Vec::new();
     let mut current = empty_transaction();
     let mut started = false;
+    let mut hooks_seen = 0;
     for line in lines {
         if out.len() >= limit {
             return out;
@@ -194,6 +178,12 @@ fn parse_lines<'a>(lines: impl Iterator<Item = Cow<'a, str>>, limit: usize) -> V
             continue;
         };
         match event {
+            Event::OwnHook => {
+                hooks_seen += 1;
+                if hook_runs.is_some_and(|runs| hooks_seen >= runs) {
+                    return out;
+                }
+            }
             Event::Running(command) => {
                 // A primeira entra mesmo vazia: é a do checkpoint, e vazia
                 // quer dizer que abortou antes de começar. As outras vazias
@@ -250,6 +240,9 @@ fn parse_line(line: &str) -> Option<Event> {
         return Some(Event::Running(command.trim_matches('\'').to_string()));
     }
     let message = rest.strip_prefix("[ALPM] ")?;
+    if message.strip_prefix("running '").is_some_and(|hook| hook.starts_with(crate::pacman_hooks::OWN_HOOK)) {
+        return Some(Event::OwnHook);
+    }
     match message {
         "transaction started" => return Some(Event::Started),
         "transaction completed" => return Some(Event::Completed),
@@ -292,7 +285,8 @@ fn config_file(warning: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Change, Log, Op, State, first, parse};
+    use super::{Anchor, Change, Op, State, anchor_fits, parse, read_run};
+    use std::io::Cursor;
 
     /// A troca do kernel de 08/11, do jeito que o log a guarda: o hook do
     /// snapg grava a posição depois do `Running` e antes do `started`.
@@ -378,16 +372,23 @@ mod tests {
         assert_eq!(txs[0].state, State::NotStarted);
     }
 
-    fn log(text: &str, ino: u64) -> Log {
-        Log { bytes: text.as_bytes().to_vec(), base: 0, len: text.len() as u64, ino }
+    /// O log a partir da âncora: o hook grava a posição depois da própria
+    /// linha `running`, então o trecho começa na linha seguinte.
+    fn after_anchor(text: &str) -> &str {
+        text.split_once("05-snapgroup-pre.hook'...\n").map(|(_, rest)| rest).unwrap_or(text)
+    }
+
+    fn run(text: &str, count: usize) -> Vec<super::Transaction> {
+        read_run(Cursor::new(after_anchor(text).as_bytes().to_vec()), count)
     }
 
     #[test]
-    fn first_reads_only_the_checkpoint_transaction() {
+    fn a_checkpoint_reads_only_its_transaction() {
         let text = format!("{KERNEL_UPGRADE}[t] [PACMAN] Running 'pacman -S x'\n[t] [ALPM] transaction started\n[t] [ALPM] installed x (1-1)\n[t] [ALPM] transaction completed\n");
-        let tx = first(&log(&text, 7), Anchor { offset: 0, ino: Some(7) }).unwrap();
-        assert_eq!(tx.changes.len(), 3);
-        assert_eq!(tx.changes[2].name, "linux-cachyos");
+        let txs = run(&text, 1);
+        assert_eq!(txs.len(), 1);
+        assert_eq!(txs[0].changes.len(), 3);
+        assert_eq!(txs[0].changes[2].name, "linux-cachyos");
     }
 
     #[test]
@@ -396,16 +397,18 @@ mod tests {
             "{KERNEL_UPGRADE}\
 [t] [PACMAN] Running 'pacman --sync --color=always -y -u --'
 [t] [PACMAN] Running 'pacman --upgrade --color=always --noconfirm -- /home/u/.cache/paru/clone/x/x-1-1-x86_64.pkg.tar.zst'
+[t] [ALPM] running '05-snapgroup-pre.hook'...
 [t] [ALPM] transaction started
 [t] [ALPM] upgraded x (1-1 -> 2-1)
 [t] [ALPM] transaction completed
 [t] [PACMAN] Running 'pacman -S other'
+[t] [ALPM] running '05-snapgroup-pre.hook'...
 [t] [ALPM] transaction started
 [t] [ALPM] installed other (1-1)
 [t] [ALPM] transaction completed
 "
         );
-        let txs = super::run(&log(&text, 7), Anchor { offset: 0, ino: Some(7) }, 2).unwrap();
+        let txs = run(&text, 2);
         assert_eq!(txs.len(), 2);
         // A primeira não tem `Running` depois da âncora; a do AUR tem.
         assert_eq!(txs[0].op, None);
@@ -414,25 +417,39 @@ mod tests {
     }
 
     #[test]
-    fn first_rejects_a_replaced_or_shorter_log() {
-        let l = log(KERNEL_UPGRADE, 7);
-        let len = KERNEL_UPGRADE.len() as u64;
-        // Outro arquivo (inode diferente): a posição não vale nele.
-        assert!(first(&l, Anchor { offset: 0, ino: Some(8) }).is_none());
-        assert!(first(&l, Anchor { offset: len + 1, ino: Some(7) }).is_none());
-        // Grupo anterior ao inode: só a posição decide.
-        assert!(first(&l, Anchor { offset: 0, ino: None }).is_some());
-        // Âncora no fim: a transação ainda não foi escrita.
-        assert_eq!(first(&l, Anchor { offset: len, ino: Some(7) }).unwrap().state, State::NotStarted);
+    fn an_aborted_counted_transaction_does_not_pull_in_the_next_checkpoint() {
+        // A 2ª transação da execução rodou o hook (a contagem subiu para 2) e
+        // abortou; depois veio um `pacman -S foo` com checkpoint próprio.
+        let text = format!(
+            "{KERNEL_UPGRADE}\
+[t] [PACMAN] Running 'pacman --upgrade --noconfirm -- /tmp/a-1-1-x86_64.pkg.tar.zst'
+[t] [ALPM] running '05-snapgroup-pre.hook'...
+[t] [ALPM] running '10-limine-snapper-lock.hook'...
+[t] [PACMAN] Running 'pacman -S foo'
+[t] [ALPM] running '05-snapgroup-pre.hook'...
+[t] [ALPM] transaction started
+[t] [ALPM] installed foo (1-1)
+[t] [ALPM] transaction completed
+"
+        );
+        let txs = run(&text, 2);
+        assert_eq!(txs.len(), 1);
+        assert!(txs.iter().all(|t| t.changes.iter().all(|c| c.name != "foo")));
     }
 
     #[test]
-    fn first_reads_offsets_relative_to_where_the_log_was_read_from() {
-        // Lido a partir do byte 100: a âncora 100 é o começo do trecho.
-        let l = Log { bytes: KERNEL_UPGRADE.as_bytes().to_vec(), base: 100, len: 100 + KERNEL_UPGRADE.len() as u64, ino: 7 };
-        assert_eq!(first(&l, Anchor { offset: 100, ino: Some(7) }).unwrap().changes.len(), 3);
-        // Antes do trecho lido: não dá para responder.
-        assert!(first(&l, Anchor { offset: 99, ino: Some(7) }).is_none());
+    fn the_anchor_only_fits_the_log_it_was_saved_in() {
+        // Outro arquivo (inode diferente) ou log menor que a posição: não vale.
+        assert!(!anchor_fits(Anchor { offset: 0, ino: Some(8) }, 100, 7));
+        assert!(!anchor_fits(Anchor { offset: 101, ino: Some(7) }, 100, 7));
+        assert!(anchor_fits(Anchor { offset: 100, ino: Some(7) }, 100, 7));
+        // Grupo anterior ao inode: só a posição decide.
+        assert!(anchor_fits(Anchor { offset: 0, ino: None }, 100, 7));
+    }
+
+    #[test]
+    fn an_anchor_at_the_end_reads_a_transaction_not_written_yet() {
+        assert_eq!(run("", 1)[0].state, State::NotStarted);
     }
 
     #[test]
@@ -449,8 +466,8 @@ mod tests {
     #[test]
     #[ignore]
     fn real_log_matches_the_transaction_markers() {
-        let raw = super::read_from(0).unwrap();
-        let text = String::from_utf8_lossy(&raw.bytes).into_owned();
+        let raw = std::fs::read(super::LOG_PATH).unwrap();
+        let text = String::from_utf8_lossy(&raw).into_owned();
         let txs = parse(&text);
         let started = text.lines().filter(|l| l.ends_with("] [ALPM] transaction started")).count();
         let completed = text.lines().filter(|l| l.ends_with("] [ALPM] transaction completed")).count();

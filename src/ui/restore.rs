@@ -126,10 +126,12 @@ pub(crate) fn select_restore_plan(
     toplevel: &Path,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
-    // Uma leitura do pacman.log por restore, não uma por volta ao seletor.
+    // Uma leitura do pacman.log por restore, não uma por volta ao seletor; o
+    // filtro e o checkpoint escolhido também sobrevivem às voltas.
     let origins = pacman_log::origin_labels(groups);
+    let mut pick = filter_picker::PickState { filter: crate::config::load().restore_filter, chosen: None };
     loop {
-        match select_restore_action(groups, regret, kernel_labels, &origins, regret_kernel)? {
+        match select_restore_action(groups, regret, kernel_labels, &origins, regret_kernel, &mut pick)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
@@ -195,6 +197,7 @@ pub(crate) fn select_restore_action(
     kernel_labels: &HashMap<GroupId, String>,
     origins: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
+    pick: &mut filter_picker::PickState,
 ) -> Result<RestoreAction> {
     let mut items: Vec<filter_picker::Item> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
@@ -247,7 +250,7 @@ pub(crate) fn select_restore_action(
         "Escolha o ponto de restauração",
         &columns_header,
         &items,
-        crate::config::load().restore_filter,
+        pick,
     )?
     else {
         return Ok(RestoreAction::Abort);

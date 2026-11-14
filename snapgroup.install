@@ -3,7 +3,11 @@
 # pacman. `snapg pacman on` troca o snap-pac pelo snapg; `off` desfaz.
 OWN_HOOK_MASK=/etc/pacman.d/hooks/05-snapgroup-pre.hook
 
-# Já rodou `snapg pacman on`: algum hook do snap-pac está desligado.
+# A escolha gravada pelo `snapg pacman on/off`. Com ela, o pacote não mexe
+# nos hooks: os links continuam como o usuário deixou.
+CHOICE=/var/lib/snapgroup/pacman-hook
+
+# Builds anteriores ao arquivo de escolha: um `on` deixou o snap-pac desligado.
 snap_pac_masked() {
     for hook in /etc/pacman.d/hooks/*snap-pac*.hook; do
         [ -L "$hook" ] && [ "$(readlink "$hook")" = /dev/null ] && return 0
@@ -11,16 +15,15 @@ snap_pac_masked() {
     return 1
 }
 
-# Decide pelo estado, não só pela versão: quem já escolheu o snapg (inclusive
-# num build anterior com o mesmo número de versão) não perde os checkpoints.
-# Limite: sem snap-pac, o `on` não deixa link nenhum para detectar, então um
-# build de pré-release com `on` volta desligado no upgrade para a 0.13.0
-# (rode `snapg pacman on` de novo). Quem vem da 0.12.0 publicada não tinha o
-# hook e não é afetado.
+# Desliga o hook do snapg só quando ninguém escolheu nada ainda (instalação
+# nova, ou upgrade de uma versão sem o hook). Sucesso só quando criou o link,
+# para o aviso sair uma vez.
 mask_own_hook() {
-    snap_pac_masked && return 0
+    [ -e "$CHOICE" ] && return 1
+    snap_pac_masked && return 1
+    [ -e "$OWN_HOOK_MASK" ] || [ -L "$OWN_HOOK_MASK" ] && return 1
     mkdir -p /etc/pacman.d/hooks
-    [ -e "$OWN_HOOK_MASK" ] || [ -L "$OWN_HOOK_MASK" ] || ln -s /dev/null "$OWN_HOOK_MASK"
+    ln -s /dev/null "$OWN_HOOK_MASK"
 }
 
 note_pacman_hook() {
@@ -31,16 +34,14 @@ note_pacman_hook() {
 post_install() {
     systemctl daemon-reload
     # Não habilita aqui — o `snapg redo` arma o serviço sob demanda.
-    mask_own_hook
-    note_pacman_hook
+    mask_own_hook && note_pacman_hook
+    return 0
 }
 
 post_upgrade() {
     systemctl daemon-reload
-    if [ "$(vercmp "$2" 0.13.0)" -lt 0 ] && ! snap_pac_masked; then
-        mask_own_hook
-        note_pacman_hook
-    fi
+    mask_own_hook && note_pacman_hook
+    return 0
 }
 
 pre_remove() {
@@ -52,6 +53,8 @@ pre_remove() {
     for hook in "$OWN_HOOK_MASK" /etc/pacman.d/hooks/*snap-pac*.hook; do
         [ -L "$hook" ] && [ "$(readlink "$hook")" = /dev/null ] && rm -f "$hook"
     done
+    rm -f "$CHOICE"
+    rmdir /var/lib/snapgroup 2>/dev/null
     return 0
 }
 

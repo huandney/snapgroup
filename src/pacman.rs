@@ -187,7 +187,10 @@ fn helper_label(helper: &Helper) -> String {
         .map(|arg| package_of_arg(arg))
         .collect();
     match (operation(&argv), packages.is_empty()) {
-        (Some("-Syu"), _) | (None, true) => format!("{name} -Syu"),
+        // Só `paru` sem nada é um -Syu: `paru -c` (limpa órfãos) é remoção.
+        (Some("-Syu"), _) => format!("{name} -Syu"),
+        (None, true) if helper.args.is_empty() => format!("{name} -Syu"),
+        (None, true) => format!("{name} {}", helper.args.join(" ")),
         (Some(op), true) => format!("{name} {op}"),
         (Some(op), false) => format!("{name} {op} {}", target_list(&packages)),
         (None, false) => format!("{name} {}", target_list(&packages)),
@@ -330,6 +333,8 @@ mod tests {
         assert_eq!(named(helper("paru", "-S google-chrome", None)), "Antes de paru -S google-chrome");
         assert_eq!(named(helper("yay", "-Sua", None)), "Antes de yay -Syu");
         assert_eq!(named(helper("paru", "chrome", None)), "Antes de paru chrome");
+        assert_eq!(named(helper("paru", "-c", None)), "Antes de paru -c");
+        assert_eq!(named(helper("yay", "-Yc", None)), "Antes de yay -Yc");
         assert_eq!(named(helper("makepkg", "-si", Some("snapgroup"))), "Antes de makepkg -si (snapgroup)");
         // Arquivo de pacote no argumento: só o nome do pacote.
         assert_eq!(
