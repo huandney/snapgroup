@@ -59,6 +59,10 @@ fn main() -> Result<()> {
         }
         cli::Command::List => commands::list(),
         cli::Command::Log => commands::log(),
+        cli::Command::Setup => {
+            let _lock = lock::acquire()?;
+            ui::setup::run()
+        }
         cli::Command::Pacman { action: None } => commands::pacman_status(),
         cli::Command::Pacman { action: Some(action) } => {
             let _lock = lock::acquire()?;

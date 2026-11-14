@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Setup
+- **Feature**: `snapg setup` gathers every setting in one screen: who takes the pacman checkpoints (the same switch as `snapg pacman on/off`), `KEEP_GROUPS`, `KEEP_PACMAN`, `TRASH_PRUNE_DAYS` and `RESTORE_FILTER`. ←/→ walks common values, Enter types another, and each change is written at once; the help for the item under the cursor and where it is stored sit below the list, and leaving prints what changed. `/etc/snapgroup.conf` keeps its comments: only the key's line is replaced, or the key is appended.
+
 ## [0.13.0-beta] - 2026-11-13
 > Commits: `cdb8d5f`, `51704ec`, `f8691af`, `a353df4`, `7b2d0bf`, `729983d`, `12fc477`, `9cafc3e`, `d77e9f4`, `f15bb4d`, `a79d2d9`, `ce9054d`, `d0fc659`, `46b4f36`
 
