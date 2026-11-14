@@ -70,9 +70,11 @@ fn group_picker_items(
     groups: &[Group],
     kernel_labels: &HashMap<GroupId, String>,
 ) -> (Vec<String>, String) {
+    let origins = crate::pacman_log::origin_labels(groups);
     let columns = CheckpointColumns::new(
         groups,
         kernel_labels,
+        &origins,
         NAME_HEADER.len(),
         NAME_COL_MAX,
         KERNEL_HEADER.len(),
@@ -82,7 +84,7 @@ fn group_picker_items(
     let items = groups
         .iter()
         .map(|g| {
-            let text = picker_row(g, kernel_labels, &columns);
+            let text = picker_row(g, kernel_labels, &origins, &columns);
             truncate_for_terminal(&text, SELECT_MARKER)
         })
         .collect();

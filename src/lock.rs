@@ -26,6 +26,29 @@ pub fn acquire() -> Result<Lock> {
     })
 }
 
+/// Para o hook do pacman: espera até `limit` por outro snapg que esteja só
+/// terminando (um save, um purge). Uma tela interativa aberta segura o lock
+/// enquanto espera o usuário, então a espera tem fim e o erro diz o motivo.
+pub fn acquire_waiting(limit: std::time::Duration) -> Result<Lock> {
+    acquire_waiting_path(LOCK_PATH, limit)
+}
+
+fn acquire_waiting_path(path: &str, limit: std::time::Duration) -> Result<Lock> {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if let Some(lock) = try_acquire_path(path)? {
+            return Ok(lock);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(anyhow!(
+                "outro snapg está aberto (lock {path}): checkpoint do pacman não criado.\n  \
+                 Feche a tela do snapg que estiver esperando (restore, delete, lixeira, rename) antes de atualizar."
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 /// Tenta adquirir o lock global. `Ok(None)` significa contenção benigna:
 /// outro snapg já segura o lock. Callers interativos transformam isso em erro;
 /// `boot-clean` usa como sinal para adiar a limpeza para o próximo boot.
@@ -51,7 +74,7 @@ fn try_acquire_path(path: &str) -> Result<Option<Lock>> {
 
 #[cfg(test)]
 mod tests {
-    use super::try_acquire_path;
+    use super::{acquire_waiting_path, try_acquire_path};
     use std::fs::File;
     use std::os::fd::AsRawFd;
 
@@ -64,5 +87,20 @@ mod tests {
 
         assert!(try_acquire_path(&path).expect("second attempt").is_none());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn waiting_gives_up_after_the_limit_and_gets_a_freed_lock() {
+        let path = format!("/tmp/snapgroup-test-lock-wait-{}", std::process::id());
+        let held = try_acquire_path(&path).unwrap().unwrap();
+        let started = std::time::Instant::now();
+        let Err(err) = acquire_waiting_path(&path, std::time::Duration::from_millis(300)) else {
+            panic!("pegou um lock que outro já segurava");
+        };
+        assert!(started.elapsed() >= std::time::Duration::from_millis(300));
+        assert!(err.to_string().contains("checkpoint do pacman não criado"));
+        drop(held);
+        assert!(acquire_waiting_path(&path, std::time::Duration::from_millis(300)).is_ok());
+        let _ = std::fs::remove_file(&path);
     }
 }

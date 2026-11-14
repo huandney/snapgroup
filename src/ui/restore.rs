@@ -1,10 +1,12 @@
 use crate::btrfs;
 use crate::group::{self, Group, GroupId};
+use crate::pacman_log;
+use crate::ui::filter_picker;
 use crate::rollback;
 use crate::rollback::RollbackError;
 use crate::snapper;
 use crate::ui::checkpoints::{
-    CheckpointColumns, picker_header, picker_prompt, picker_row,
+    CheckpointColumns, picker_header, picker_row,
 };
 use crate::ui::term::{
     AltScreen, CONTENT_INDENT, HINT_BACK, HINT_MULTI, MULTI_MARKER, PAGE_INDENT, SELECT_MARKER,
@@ -121,12 +123,24 @@ pub(crate) fn select_restore_plan(
     regret: Option<&RegretInfo>,
     kernel_labels: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
+    toplevel: &Path,
 ) -> Result<Option<RestorePlan>> {
     let _alt = AltScreen::enter();
+    // Uma leitura do pacman.log por restore, não uma por volta ao seletor; o
+    // filtro e o checkpoint escolhido também sobrevivem às voltas.
+    let origins = pacman_log::origin_labels(groups);
+    let mut pick = filter_picker::PickState { filter: crate::config::load().restore_filter, chosen: None };
     loop {
-        match select_restore_action(groups, regret, kernel_labels, regret_kernel)? {
+        match select_restore_action(groups, regret, kernel_labels, &origins, regret_kernel, &mut pick)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
+                let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
+                if matches!(
+                    crate::ui::pacman::review_package_restore(group, kernel, toplevel)?,
+                    crate::ui::pacman::PreviewFlow::Back
+                ) {
+                    continue;
+                }
                 loop {
                     let Some(selected) = select_checkpoint_members(group)? else {
                         break;
@@ -181,19 +195,20 @@ pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
     kernel_labels: &HashMap<GroupId, String>,
+    origins: &HashMap<GroupId, String>,
     regret_kernel: Option<&str>,
+    pick: &mut filter_picker::PickState,
 ) -> Result<RestoreAction> {
-    let mut items: Vec<String> = Vec::new();
+    let mut items: Vec<filter_picker::Item> = Vec::new();
     let mut actions: Vec<RestoreAction> = Vec::new();
 
     let prefix_len = SELECT_MARKER;
 
-    clear_screen();
-    header("Pontos de restauração");
     let minimum_name = restore_name_min(regret.is_some());
     let mut columns = CheckpointColumns::new(
         groups,
         kernel_labels,
+        origins,
         minimum_name,
         RESTORE_NAME_COL_MAX,
         1,
@@ -206,8 +221,9 @@ pub(crate) fn select_restore_action(
     if let Some(r) = regret {
         let kernel = regret_kernel.unwrap_or("?");
         let title = if r.saved { "↺ Regret guardado" } else { "↺ Regret" };
+        let origin = " ".repeat(if columns.origin > 0 { columns.origin + 3 } else { 0 });
         let text = format!(
-            "{:<name_col$}   {:<kernel_col$}   {}   {:<members_col$}",
+            "{:<name_col$}   {origin}{:<kernel_col$}   {}   {:<members_col$}",
             title,
             kernel,
             short_datetime(&r.creation_time),
@@ -216,27 +232,26 @@ pub(crate) fn select_restore_action(
             kernel_col = columns.kernel,
             members_col = "Membros".len(),
         );
-        items.push(truncate_for_terminal(&text, prefix_len));
+        items.push(filter_picker::Item { text: truncate_for_terminal(&text, prefix_len), pacman: false });
         actions.push(RestoreAction::Regret);
     }
 
     for g in groups {
-        let text = picker_row(g, kernel_labels, &columns);
-        items.push(truncate_for_terminal(&text, prefix_len));
+        let text = picker_row(g, kernel_labels, origins, &columns);
+        items.push(filter_picker::Item {
+            text: truncate_for_terminal(&text, prefix_len),
+            pacman: group::is_pacman(g),
+        });
         actions.push(RestoreAction::Checkpoint(g.id));
     }
-    let columns_header = picker_header(&columns);
-    let prompt = picker_prompt("Escolha o ponto de restauração", &columns_header, SELECT_MARKER);
-
-    let Some(selection) = dialoguer::Select::with_theme(&THEME)
-        .with_prompt(prompt)
-        .items(&items)
-        .max_length(picker_page_len(4))
-        .default(0)
-        .clear(true)
-        .report(false)
-        .interact_opt()
-        .context("seleção cancelada")?
+    let columns_header = truncate_for_terminal(&picker_header(&columns), prefix_len);
+    let Some(selection) = filter_picker::pick(
+        "Pontos de restauração",
+        "Escolha o ponto de restauração",
+        &columns_header,
+        &items,
+        pick,
+    )?
     else {
         return Ok(RestoreAction::Abort);
     };

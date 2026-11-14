@@ -18,11 +18,21 @@ pub enum Command {
     Save {
         /// Descrição opcional do snapshot
         description: Option<String>,
+        /// Uso interno: checkpoint do hook do pacman (pacotes no stdin).
+        #[arg(long, hide = true, conflicts_with = "description")]
+        pacman: bool,
     },
     /// Restauração interativa: seleciona checkpoint ou regret via TUI
     Restore,
     /// Lista grupos existentes
     List,
+    /// Mostra o que cada checkpoint do pacman instalou, atualizou ou removeu
+    Log,
+    /// Quem faz os checkpoints do pacman: sem argumento mostra; on = snapg, off = snap-pac
+    Pacman {
+        #[command(subcommand)]
+        action: Option<PacmanAction>,
+    },
     /// Renomeia a descrição de um checkpoint snapg
     Rename {
         /// ID do checkpoint. Sem ID, abre seleção interativa.
@@ -63,4 +73,12 @@ pub enum Command {
     /// Diagnóstico: mede a estimativa exata de espaço liberado.
     #[command(hide = true)]
     SpaceProbe,
+}
+
+#[derive(Subcommand)]
+pub enum PacmanAction {
+    /// O snapg faz um checkpoint agrupado por transação; o snap-pac é desligado
+    On,
+    /// Volta ao snap-pac; o hook do snapg é desligado
+    Off,
 }

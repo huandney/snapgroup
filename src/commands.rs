@@ -4,6 +4,9 @@ use crate::config;
 use crate::doctor;
 use crate::group::{self, Group, Member};
 use crate::orphan::{self, OrphanBackup};
+use crate::pacman;
+use crate::pacman_hooks;
+use crate::pacman_log;
 use crate::rollback::{self, RollbackError};
 use crate::snapper;
 use crate::space;
@@ -97,20 +100,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     // que falha com uma restauração pendente (o `.snapshots` já foi movido).
     let id = unique_group_id()?;
 
-    // Um membro que falha desfaz os já criados: grupo pela metade apareceria
-    // no restore como checkpoint e restauraria só parte do sistema.
-    let mut created: Vec<(&String, u32)> = Vec::new();
-    for cfg in &configs {
-        match snapper::create(cfg, &desc, id, auto) {
-            Ok(number) => created.push((cfg, number)),
-            Err(e) => {
-                for (done_cfg, number) in created {
-                    let _ = snapper::delete(done_cfg, number);
-                }
-                return Err(e).with_context(|| format!("criar snapshot em '{cfg}'"));
-            }
-        }
-    }
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, auto, None))?;
 
     snapshots::print_save_created(id, &desc, &mut mountpoints);
 
@@ -133,6 +123,137 @@ pub fn save(description: Option<String>) -> Result<()> {
     run_cleanup(&cfg);
     if regrets + purged > 0 {
         report_freed(free_before, None, false);
+    }
+    Ok(())
+}
+
+/// Checkpoint do hook do pacman (PreTransaction). Sem prompt, sem a espera do
+/// relatório de espaço e sem descartar o Regret: só o save manual é Highlander.
+/// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
+pub fn save_pacman() -> Result<()> {
+    let cfg = config::load();
+    // O pacman lê a saída do hook por um pipe: as cores seguem as dele.
+    let cmdline = pacman::parent_cmdline();
+    if cmdline.as_deref().is_some_and(pacman::pacman_shows_color) {
+        console::set_colors_enabled(true);
+        console::set_colors_enabled_stderr(true);
+    }
+    let configs = snapper::list_configs()?;
+    if configs.is_empty() {
+        bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
+    }
+
+    // O hook do snap-pac ativo também (link apagado à mão, ou renomeado numa
+    // atualização dele): o snapg recua em vez de dobrar os snapshots.
+    if pacman_hooks::status(&pacman_hooks::Dirs::system_default()).snap_pac_runs() {
+        crate::ui::pacman::print_snap_pac_active();
+        return Ok(());
+    }
+
+    // Com uma restauração pendente o snapper nem lista (o `.snapshots` já foi
+    // movido). O kernel/initramfs já são barrados pelo pending-check; o resto
+    // da transação segue sem checkpoint.
+    if pending_restore_from_live(&configs)?.is_some() {
+        snapshots::print_pacman_skipped_pending();
+        return Ok(());
+    }
+
+    // Uma execução do paru/makepkg faz várias transações: a primeira cria o
+    // checkpoint, as outras só contam nele. Restaurar desfaz a execução toda.
+    let helper = cmdline.as_ref().and_then(|_| pacman::helper_above_parent());
+    if let Some(helper) = &helper
+        && let Some(covering) = covering_checkpoint(&helper.session)?
+    {
+        count_session_transaction(&covering);
+        crate::ui::pacman::print_hook_covered(&covering, &helper.name);
+        return Ok(());
+    }
+
+    let mut mountpoints = Vec::new();
+    for cfg in &configs {
+        mountpoints.push(snapper::config_subvolume(cfg)?);
+    }
+    // Os pacotes vêm no stdin só quando o pacman chamou: rodado à mão (script,
+    // ssh sem tty) um stdin que nunca fecha travaria aqui com o lock pego.
+    let targets = if cmdline.is_some() { pacman::read_targets() } else { Vec::new() };
+    let desc = pacman::checkpoint_name(cmdline.as_deref(), &targets, helper.as_ref());
+    let marks = snapper::PacmanMarks {
+        anchor: pacman_log::anchor_now(),
+        op: cmdline.as_deref().and_then(pacman::operation),
+        session: helper.as_ref().map(|h| h.session.as_str()),
+    };
+
+    rollback::ensure_single_filesystem(&configs)?;
+    let id = unique_group_id()?;
+    create_members(&configs, |cfg| snapper::create(cfg, &desc, id, true, Some(&marks)))?;
+    crate::ui::pacman::print_hook_saved(id, &desc, &mut mountpoints);
+
+    purge_expired_trash(&cfg);
+    run_cleanup(&cfg);
+    Ok(())
+}
+
+/// O checkpoint do pacman mais novo, se ele for desta execução do ajudante.
+/// O pacman não roda duas transações ao mesmo tempo, então o mais novo basta.
+fn covering_checkpoint(session: &str) -> Result<Option<Group>> {
+    let newest = group::list_groups()?.into_iter().find(group::is_pacman);
+    Ok(newest.filter(|g| group::pacman_session(g) == Some(session)))
+}
+
+/// Best-effort: um membro que falha só deixa o `snapg log` mostrando menos
+/// transações da execução.
+fn count_session_transaction(group: &Group) {
+    let count = group::pacman_transactions(group) + 1;
+    for m in &group.members {
+        let _ = snapper::set_session_transactions(&m.config, m.snapshot.number, group.id, count);
+    }
+}
+
+/// `snapg pacman`: só leitura.
+pub fn pacman_status() -> Result<()> {
+    crate::ui::pacman::print_hook_status(&pacman_hooks::status(&pacman_hooks::Dirs::system_default()));
+    Ok(())
+}
+
+/// `snapg pacman on|off`.
+pub fn pacman_switch(on: bool) -> Result<()> {
+    let dirs = pacman_hooks::Dirs::system_default();
+    let before = pacman_hooks::status(&dirs);
+    if on {
+        pacman_hooks::enable(&dirs, &before)?;
+    } else {
+        pacman_hooks::disable(&dirs, &before)?;
+    }
+    pacman_hooks::record_choice(on)?;
+    crate::ui::pacman::print_hook_switched(on, &pacman_hooks::status(&dirs));
+    Ok(())
+}
+
+/// `snapg log`: só leitura, como o `list`.
+pub fn log() -> Result<()> {
+    let groups: Vec<Group> = group::list_groups()?.into_iter().filter(group::is_pacman).collect();
+    if groups.is_empty() {
+        crate::ui::pacman::print_no_pacman_groups();
+        return Ok(());
+    }
+    crate::ui::pacman::browse(&groups)
+}
+
+/// Cria um membro por config. Um membro que falha desfaz os já criados: grupo
+/// pela metade apareceria no restore como checkpoint e restauraria só parte do
+/// sistema.
+fn create_members(configs: &[String], create: impl Fn(&str) -> Result<u32>) -> Result<()> {
+    let mut created: Vec<(&String, u32)> = Vec::new();
+    for cfg in configs {
+        match create(cfg) {
+            Ok(number) => created.push((cfg, number)),
+            Err(e) => {
+                for (done_cfg, number) in created {
+                    let _ = snapper::delete(done_cfg, number);
+                }
+                return Err(e).with_context(|| format!("criar snapshot em '{cfg}'"));
+            }
+        }
     }
     Ok(())
 }
@@ -170,18 +291,20 @@ fn trash_group(g: &Group, trash_epoch: i64, reason: TrashReason) -> usize {
 }
 
 fn run_cleanup(cfg: &config::Config) {
-    if cfg.keep_groups == 0 {
+    if cfg.keep_groups == 0 && cfg.keep_pacman == 0 {
         return; // ilimitado
     }
-    if let Err(e) = try_cleanup(cfg.keep_groups) {
+    if let Err(e) = try_cleanup(cfg) {
         snapshots::print_cleanup_failed(&e);
     }
 }
 
-fn try_cleanup(keep: usize) -> Result<()> {
+fn try_cleanup(cfg: &config::Config) -> Result<()> {
     let groups = group::list_groups()?; // visíveis, newest-first
-    // Só automáticos contam e saem; fixos ficam até um `delete`.
-    let prune = group::groups_to_prune(&groups, keep);
+    // Só automáticos contam e saem; fixos ficam até um `delete`. Os do save e
+    // os do pacman são filas separadas.
+    let mut prune = group::groups_to_prune(&groups, cfg.keep_groups);
+    prune.extend(group::pacman_groups_to_prune(&groups, cfg.keep_pacman));
     if prune.is_empty() {
         return Ok(());
     }
@@ -673,6 +796,7 @@ fn restore_inner(
             regret.as_ref(),
             &kernel_labels,
             regret_kernel.as_deref(),
+            mount_path,
         )? {
             None => {
                 crate::ui::restore::print_cancelled();
@@ -1453,7 +1577,8 @@ fn delete_interactive(
     // na tela; a estimativa aparece quando ela termina.
     let mut space = SpaceEstimator::start(groups, &orphans, mount_path);
     let mode = delete_ui::Mode::Delete { purge, trash_days };
-    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, orphans: &orphans, mode, purge_due: &[] };
+    let origins = pacman_log::origin_labels(groups);
+    let ctx = DeleteContext { groups, kernel_labels: &kernel_labels, origins: &origins, orphans: &orphans, mode, purge_due: &[] };
     // Wizard interativo no alternate screen; a ação roda fora, no normal.
     let Some(plan) = delete_ui::select_delete_plan(&ctx, &mut |g, o| space.estimate(g, o))? else {
         snapshots::print_delete_cancelled();

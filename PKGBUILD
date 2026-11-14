@@ -1,6 +1,6 @@
 # Maintainer: Huandney <huandney@gmail.com>
 pkgname=snapgroup
-pkgver=0.12.0
+pkgver=0.13.0
 pkgrel=1
 pkgdesc="Wrapper Snapper com snapshots agrupados por subvolume (save/restore/list/rename/delete/trash/doctor)"
 arch=('x86_64')
@@ -25,5 +25,7 @@ package() {
     "$pkgdir/usr/lib/systemd/system/snapg-cleanup.service"
   install -Dm644 "$startdir/pacman/00-snapgroup-pending.hook" \
     "$pkgdir/usr/share/libalpm/hooks/00-snapgroup-pending.hook"
+  install -Dm644 "$startdir/pacman/05-snapgroup-pre.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/05-snapgroup-pre.hook"
   install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }
