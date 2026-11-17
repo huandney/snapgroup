@@ -3,7 +3,7 @@
 //! isso este é próprio; fora o Tab, ele se comporta igual (setas, enter, esc).
 
 use crate::config::RestoreFilter;
-use crate::ui::term::{CONTENT_INDENT, clear_screen, header, line};
+use crate::ui::term::{CONTENT_INDENT, clear_screen, content_width, header, line};
 use anyhow::{Context, Result};
 use console::{Key, style};
 
@@ -44,16 +44,17 @@ pub(crate) fn pick(
         .and_then(|chosen| visible(items, state.filter).iter().position(|&i| i == chosen))
         .unwrap_or(0);
     let mut offset = 0usize;
-    // O espaço do resumo é fixo: a lista não pula quando o cursor passa de um
-    // checkpoint do pacman para um manual.
-    let detail_lines = items.iter().map(|item| item.detail.len()).max().unwrap_or(0);
-    let detail_chrome = if detail_lines > 0 { detail_lines + 1 } else { 0 };
     let term = console::Term::stdout();
     let _ = term.hide_cursor();
     let picked = loop {
         let filter = state.filter;
         let visible = visible(items, filter);
         cursor = cursor.min(visible.len().saturating_sub(1));
+        // O espaço do resumo é fixo dentro do recorte: a lista não pula quando
+        // o cursor passa de um checkpoint do pacman para um manual, e some
+        // quando nada à vista tem resumo (o filtro Manuais).
+        let detail_lines = visible.iter().map(|&i| items[i].detail.len()).max().unwrap_or(0);
+        let detail_chrome = if detail_lines > 0 { detail_lines + 1 } else { 0 };
         let page = (term.size().0 as usize).saturating_sub(CHROME_LINES + detail_chrome).max(1);
         offset = scroll(offset, cursor, page);
 
@@ -76,7 +77,8 @@ pub(crate) fn pick(
             let detail = visible.get(cursor).map(|&i| items[i].detail.as_slice()).unwrap_or_default();
             for row in 0..detail_lines {
                 match detail.get(row) {
-                    Some(text) => line(format_args!("{text}")),
+                    // Na largura de agora: o resumo foi montado na da abertura.
+                    Some(text) => line(format_args!("{}", console::truncate_str(text, content_width(), "…"))),
                     None => println!(),
                 }
             }
