@@ -129,9 +129,10 @@ pub(crate) fn select_restore_plan(
     // Uma leitura do pacman.log por restore, não uma por volta ao seletor; o
     // filtro e o checkpoint escolhido também sobrevivem às voltas.
     let origins = pacman_log::origin_labels(groups);
+    let summaries = pacman_summaries(groups);
     let mut pick = filter_picker::PickState { filter: crate::config::load().restore_filter, chosen: None };
     loop {
-        match select_restore_action(groups, regret, kernel_labels, &origins, regret_kernel, &mut pick)? {
+        match select_restore_action(groups, regret, kernel_labels, &origins, &summaries, regret_kernel, &mut pick)? {
             RestoreAction::Checkpoint(group_id) => {
                 let group = groups.iter().find(|g| g.id == group_id).unwrap();
                 let kernel = crate::ui::checkpoints::kernel_label(kernel_labels, group.id);
@@ -191,11 +192,22 @@ pub(crate) fn select_restore_plan(
     }
 }
 
+/// Resumo de cada checkpoint do pacman para o seletor, pelo `pacman.log`.
+fn pacman_summaries(groups: &[Group]) -> HashMap<GroupId, Vec<String>> {
+    let width = crate::ui::term::content_width();
+    groups
+        .iter()
+        .filter(|g| group::is_pacman(g))
+        .filter_map(|g| Some((g.id, crate::ui::pacman::picker_summary(g, &pacman_log::of_group(g)?, width))))
+        .collect()
+}
+
 pub(crate) fn select_restore_action(
     groups: &[Group],
     regret: Option<&RegretInfo>,
     kernel_labels: &HashMap<GroupId, String>,
     origins: &HashMap<GroupId, String>,
+    summaries: &HashMap<GroupId, Vec<String>>,
     regret_kernel: Option<&str>,
     pick: &mut filter_picker::PickState,
 ) -> Result<RestoreAction> {
@@ -232,7 +244,7 @@ pub(crate) fn select_restore_action(
             kernel_col = columns.kernel,
             members_col = "Membros".len(),
         );
-        items.push(filter_picker::Item { text: truncate_for_terminal(&text, prefix_len), pacman: false });
+        items.push(filter_picker::Item { text: truncate_for_terminal(&text, prefix_len), pacman: false, detail: Vec::new() });
         actions.push(RestoreAction::Regret);
     }
 
@@ -241,6 +253,7 @@ pub(crate) fn select_restore_action(
         items.push(filter_picker::Item {
             text: truncate_for_terminal(&text, prefix_len),
             pacman: group::is_pacman(g),
+            detail: summaries.get(&g.id).cloned().unwrap_or_default(),
         });
         actions.push(RestoreAction::Checkpoint(g.id));
     }
