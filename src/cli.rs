@@ -28,6 +28,8 @@ pub enum Command {
     List,
     /// Mostra o que cada checkpoint do pacman instalou, atualizou ou removeu
     Log,
+    /// Ajustes do snapgroup numa tela: retenção, lixeira, restore e o hook do pacman
+    Setup,
     /// Quem faz os checkpoints do pacman: sem argumento mostra; on = snapg, off = snap-pac
     Pacman {
         #[command(subcommand)]

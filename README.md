@@ -35,6 +35,7 @@ makepkg -si
 | `snapg delete [-y]` | Apaga checkpoints (TUI multi-seleção; `-y` apaga o mais recente sem perguntar) |
 | `snapg pacman [on\|off]` | Escolhe quem faz os checkpoints das transações do pacman: o snapg (`on`) ou o snap-pac (`off`). Sem argumento, mostra o atual |
 | `snapg log` | Mostra o que cada checkpoint do pacman instalou, atualizou ou removeu |
+| `snapg setup` | Ajustes numa tela só: quem faz os checkpoints do pacman, quantos manter, dias na lixeira e o filtro do restore. Cada mudança é gravada na hora |
 
 Todos os comandos pedem `sudo` automaticamente (re-exec via `sudo` se não for root). Apenas uma instância mutante (`save`/`restore`/`delete`) roda por vez — um lock global (`flock` em `/run/snapgroup.lock`) bloqueia execuções concorrentes.
 

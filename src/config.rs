@@ -1,11 +1,11 @@
 use std::fs;
 
-const PATH: &str = "/etc/snapgroup.conf";
+pub const PATH: &str = "/etc/snapgroup.conf";
 
 /// Teto da carência: 10 anos. Acima disso, `dias * 86_400` no cálculo do cutoff
 /// estouraria `i64` e, no release (wrap silencioso), viraria negativo —
 /// purgando a lixeira inteira. Também pega typo (um valor absurdo).
-const MAX_PRUNE_DAYS: u64 = 3650;
+pub const MAX_PRUNE_DAYS: u64 = 3650;
 
 /// Config persistente do snapgroup. Arquivo ausente ou chave inválida cai no
 /// default — o snapgroup nasceu zero-config e instalar a feature não pode
@@ -72,6 +72,41 @@ impl Default for Config {
     }
 }
 
+/// Grava `KEY=valor` no `/etc/snapgroup.conf` (`snapg setup`). Troca só as
+/// linhas da chave e deixa os comentários; a chave ausente vai para o fim. O
+/// arquivo é um `backup=` do pacote: alterado, um upgrade gera `.pacnew` em
+/// vez de sobrescrever. Grava num temporário e renomeia, para um corte no meio
+/// não deixar o arquivo pela metade.
+pub fn set(key: &str, value: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let current = fs::read_to_string(PATH).unwrap_or_default();
+    let tmp = format!("{PATH}.snapg-tmp");
+    fs::write(&tmp, update_key(&current, key, value)).with_context(|| format!("gravar {tmp}"))?;
+    fs::rename(&tmp, PATH).with_context(|| format!("substituir {PATH}"))
+}
+
+fn update_key(content: &str, key: &str, value: &str) -> String {
+    let mut found = false;
+    let mut out: Vec<String> = content
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            let is_key = !trimmed.starts_with('#')
+                && trimmed.split_once('=').is_some_and(|(k, _)| k.trim() == key);
+            if !is_key {
+                return line.to_string();
+            }
+            // Todas as ocorrências: o parser fica com a última.
+            found = true;
+            format!("{key}={value}")
+        })
+        .collect();
+    if !found {
+        out.push(format!("{key}={value}"));
+    }
+    out.join("\n") + "\n"
+}
+
 pub fn load() -> Config {
     let Ok(content) = fs::read_to_string(PATH) else {
         return Config::default();
@@ -133,6 +168,18 @@ mod tests {
         assert_eq!(cfg.keep_groups, 0);
         assert_eq!(cfg.keep_pacman, 20);
         assert_eq!(cfg.trash_prune_days, 15);
+    }
+
+    #[test]
+    fn update_key_keeps_comments_and_replaces_only_the_key() {
+        let conf = "# Quantos manter\nKEEP_GROUPS=0\n\n# Dias\nTRASH_PRUNE_DAYS = 15\n";
+        let out = super::update_key(conf, "KEEP_GROUPS", "10");
+        assert_eq!(out, "# Quantos manter\nKEEP_GROUPS=10\n\n# Dias\nTRASH_PRUNE_DAYS = 15\n");
+        // Comentada não conta; ausente vai para o fim.
+        let out = super::update_key("# KEEP_PACMAN=5\n", "KEEP_PACMAN", "20");
+        assert_eq!(out, "# KEEP_PACMAN=5\nKEEP_PACMAN=20\n");
+        assert_eq!(super::update_key("", "RESTORE_FILTER", "pacman"), "RESTORE_FILTER=pacman\n");
+        assert_eq!(parse(&super::update_key(conf, "TRASH_PRUNE_DAYS", "30")).trash_prune_days, 30);
     }
 
     #[test]
