@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Restore
 - **Feature**: The restore picker shows, below the list, what the checkpoint under the cursor changed, one line per origin (`Repositório 43`, `AUR 2`): boot packages with their versions first, packages sharing a version change as `name +N`, and `+N` for what does not fit. The summary comes from `pacman.log`, read once per restore, and its space stays fixed while the cursor moves.
-- **Feature**: The `d` list in the restore preview splits "Repositório" from "Compilados" (unsigned packages, which is what makepkg builds), each with its own column widths, so a long AUR version no longer widens the rest. Packages sharing a version change take one line with the other names wrapped below, and only the part of the version that changes stands out. A section that continues on the next page repeats its title and column header, and a group never splits across pages.
+- **Feature**: The `d` list in the restore preview splits "Repositório" from "Compilados" (unsigned packages, which is what makepkg builds), each with its own column widths, so a long AUR version no longer widens the rest. Packages sharing a version change take one line with the other names wrapped below, and only the part of the version that changes stands out. A section that continues on the next page repeats its title and column header, a group splits across pages only when it is taller than one, and lines are cut at the terminal width so they never wrap.
 
 ## [0.13.0-beta] - 2026-11-13
 > Commits: `cdb8d5f`, `51704ec`, `f8691af`, `a353df4`, `7b2d0bf`, `729983d`, `12fc477`, `9cafc3e`, `d77e9f4`, `f15bb4d`, `a79d2d9`, `ce9054d`, `d0fc659`, `46b4f36`

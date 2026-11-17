@@ -128,8 +128,9 @@ pub(crate) fn select_restore_plan(
     let _alt = AltScreen::enter();
     // Uma leitura do pacman.log por restore, não uma por volta ao seletor; o
     // filtro e o checkpoint escolhido também sobrevivem às voltas.
-    let origins = pacman_log::origin_labels(groups);
-    let summaries = pacman_summaries(groups);
+    let runs = pacman_log::runs(groups);
+    let origins = pacman_log::origin_labels_from(groups, &runs);
+    let summaries = pacman_summaries(groups, &runs);
     let mut pick = filter_picker::PickState { filter: crate::config::load().restore_filter, chosen: None };
     loop {
         match select_restore_action(groups, regret, kernel_labels, &origins, &summaries, regret_kernel, &mut pick)? {
@@ -192,13 +193,15 @@ pub(crate) fn select_restore_plan(
     }
 }
 
-/// Resumo de cada checkpoint do pacman para o seletor, pelo `pacman.log`.
-fn pacman_summaries(groups: &[Group]) -> HashMap<GroupId, Vec<String>> {
+/// Resumo de cada checkpoint do pacman para o seletor, das transações já lidas.
+fn pacman_summaries(
+    groups: &[Group],
+    runs: &HashMap<GroupId, Vec<pacman_log::Transaction>>,
+) -> HashMap<GroupId, Vec<String>> {
     let width = crate::ui::term::content_width();
     groups
         .iter()
-        .filter(|g| group::is_pacman(g))
-        .filter_map(|g| Some((g.id, crate::ui::pacman::picker_summary(g, &pacman_log::of_group(g)?, width))))
+        .filter_map(|g| Some((g.id, crate::ui::pacman::picker_summary(g, runs.get(&g.id)?, width))))
         .collect()
 }
 
