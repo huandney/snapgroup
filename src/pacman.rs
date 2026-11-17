@@ -11,11 +11,14 @@ use std::path::Path;
 const NAMED_TARGETS: usize = 3;
 /// Ajudantes que fazem várias transações numa execução: o paru faz o `-Syu` e
 /// um `-U` por pacote do AUR; o `makepkg -si` instala dependências, o pacote e
-/// as remove. Uma execução deles vira um checkpoint só.
-const HELPERS: &[&str] = &["paru", "yay", "pikaur", "trizen", "aura", "makepkg"];
-/// Quantos processos subir procurando o ajudante (pacman ← sudo ← paru, com
-/// folga para um sudo com pty ou um shell no meio).
-const HELPER_DEPTH: usize = 6;
+/// as remove; o cachy-update (um link para o arch-update) roda `pacman -Syu` e
+/// depois o paru. Uma execução deles vira um checkpoint só.
+const HELPERS: &[&str] = &["paru", "yay", "pikaur", "trizen", "aura", "makepkg", "cachy-update", "arch-update"];
+/// Atualizadores que chamam o pacman e o ajudante do AUR: o nome deles basta.
+const UPDATERS: &[&str] = &["cachy-update", "arch-update"];
+/// Quantos processos subir procurando o ajudante (pacman ← sudo ← sudo ← paru
+/// ← cachy-update, com folga para um shell no meio).
+const HELPER_DEPTH: usize = 8;
 
 /// Pacotes da transação, um por linha no stdin (`NeedsTargets`). Só chamar
 /// com o pacman como pai: ele fecha o stdin depois de escrever a lista.
@@ -57,20 +60,29 @@ pub struct Helper {
     pub workdir: Option<String>,
 }
 
-/// O ajudante acima do pacman que chamou o hook, se houver.
+/// O ajudante acima do pacman que chamou o hook, se houver. Vale o mais de
+/// fora: no cachy-update, o paru que ele chama é parte da mesma execução.
 pub fn helper_above_parent() -> Option<Helper> {
+    let mut chain = Vec::new();
     let mut pid = stat_of(std::os::unix::process::parent_id())?.ppid;
     for _ in 0..HELPER_DEPTH {
         if pid <= 1 {
-            return None;
+            break;
         }
-        let stat = stat_of(pid)?;
-        if HELPERS.contains(&stat.comm.as_str()) {
-            return Some(helper(pid, &stat));
-        }
-        pid = stat.ppid;
+        let Some(stat) = stat_of(pid) else {
+            break;
+        };
+        let parent = stat.ppid;
+        chain.push((pid, stat));
+        pid = parent;
     }
-    None
+    let (pid, stat) = &chain[outermost_helper(&chain)?];
+    Some(helper(*pid, stat))
+}
+
+/// Posição do último ajudante na cadeia, que vai do pai do pacman para cima.
+fn outermost_helper(chain: &[(u32, Stat)]) -> Option<usize> {
+    chain.iter().rposition(|(_, stat)| HELPERS.contains(&stat.comm.as_str()))
 }
 
 fn helper(pid: u32, stat: &Stat) -> Helper {
@@ -168,9 +180,12 @@ fn pacman_label(cmdline: Option<&[String]>, targets: &[String]) -> String {
 }
 
 /// `paru` sem argumentos é um `-Syu`; `paru -S x` lista os pacotes; o
-/// makepkg leva as flags e a pasta do pacote.
+/// makepkg leva as flags e a pasta do pacote; o cachy-update, só o nome.
 fn helper_label(helper: &Helper) -> String {
     let name = &helper.name;
+    if UPDATERS.contains(&name.as_str()) {
+        return name.clone();
+    }
     if name == "makepkg" {
         let flags = helper.args.join(" ");
         let flags = if flags.is_empty() { String::new() } else { format!(" {flags}") };
@@ -263,7 +278,7 @@ fn target_list(targets: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Helper, checkpoint_name, pacman_shows_color, parse_stat};
+    use super::{Helper, Stat, checkpoint_name, outermost_helper, pacman_shows_color, parse_stat};
 
     fn args(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
@@ -342,6 +357,28 @@ mod tests {
             "Antes de paru -U linux-cachyos-headers"
         );
         assert_eq!(named(helper("paru", "/tmp/out/snapgroup-0.12.0-1-x86_64.pkg.tar.zst", None)), "Antes de paru snapgroup");
+        assert_eq!(named(helper("cachy-update", "", None)), "Antes de cachy-update");
+        assert_eq!(named(helper("arch-update", "", None)), "Antes de arch-update");
+    }
+
+    fn chain(comms: &[&str]) -> Vec<(u32, Stat)> {
+        comms
+            .iter()
+            .enumerate()
+            .map(|(i, comm)| (i as u32 + 10, Stat { comm: comm.to_string(), ppid: i as u32 + 11, start: 1 }))
+            .collect()
+    }
+
+    #[test]
+    fn the_outermost_helper_owns_the_run() {
+        // pacman -Syu do cachy-update: só sudo entre ele e o pacman.
+        assert_eq!(outermost_helper(&chain(&["sudo", "sudo", "cachy-update", "fish", "kitty"])), Some(2));
+        // O -U do AUR, pelo paru que o cachy-update chamou: a sessão é a dele.
+        assert_eq!(outermost_helper(&chain(&["sudo", "sudo", "paru", "cachy-update", "fish"])), Some(3));
+        // O paru sozinho, e o makepkg que ele chama, seguem do paru.
+        assert_eq!(outermost_helper(&chain(&["sudo", "paru", "fish"])), Some(1));
+        assert_eq!(outermost_helper(&chain(&["sudo", "makepkg", "paru", "fish"])), Some(2));
+        assert_eq!(outermost_helper(&chain(&["sudo", "fish", "kitty"])), None);
     }
 
     #[test]
