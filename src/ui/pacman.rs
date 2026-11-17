@@ -33,8 +33,8 @@ pub(crate) enum PreviewFlow {
 /// Linhas acima da lista no detalhe sem avisos nem arquivos: cabeçalho de 2,
 /// nome, data, branco, contagens, branco.
 const DETAIL_INTRO_LINES: usize = 7;
-/// Cabeçalho da lista, branco e rodapé abaixo dela, mais o cursor.
-const LIST_CHROME_LINES: usize = 4;
+/// Branco e rodapé abaixo da lista, mais o cursor.
+const LIST_FOOTER_LINES: usize = 3;
 const NAME_COL_MAX: usize = 32;
 
 /// `snapg log`: escolhe um checkpoint do pacman e mostra a transação dele.
@@ -211,13 +211,14 @@ fn show_transaction(group: &Group, transactions: Option<&[Transaction]>) -> Resu
         }
         println!();
     };
-    let body = source_sections(group, txs);
-    page_lines(&intro, intro_lines, &body)
+    let (head, body) = source_sections(group, txs);
+    page_lines(&intro, intro_lines, &head, &body)
 }
 
 /// Blocos "Repositório" e "Compilados", cada um com título e as linhas dos
-/// pacotes, com as colunas alinhadas entre os dois.
-fn source_sections(group: &Group, txs: &[Transaction]) -> Vec<String> {
+/// pacotes, com as colunas alinhadas entre os dois. Devolve o cabeçalho das
+/// colunas à parte: ele se repete em toda página.
+fn source_sections(group: &Group, txs: &[Transaction]) -> (String, Vec<String>) {
     let (local, repo): (Vec<&Transaction>, Vec<&Transaction>) = txs.iter().partition(|t| t.op == Some("-U"));
     let compiled = match group::pacman_helper(group) {
         Some("makepkg") => "Compilados (makepkg)",
@@ -231,13 +232,14 @@ fn source_sections(group: &Group, txs: &[Transaction]) -> Vec<String> {
         .map(|(i, (_, txs))| (i, change_rows(&txs.iter().flat_map(|t| t.changes.clone()).collect::<Vec<_>>())))
         .collect();
     let widths = column_widths(rows.iter().flat_map(|(_, r)| r), "Antes");
-    let mut body = vec![head_line(widths, ("Antes", "Depois"))];
+    let head = head_line(widths, ("Antes", "Depois"));
+    let mut body = Vec::new();
     for (i, section_rows) in &rows {
         let (name, section_txs) = &sections[*i];
         if section_txs.is_empty() {
             continue;
         }
-        if body.len() > 1 {
+        if !body.is_empty() {
             body.push(String::new());
         }
         let packages = count_text(section_rows.len(), "pacote", "pacotes");
@@ -251,7 +253,7 @@ fn source_sections(group: &Group, txs: &[Transaction]) -> Vec<String> {
         body.push(format!("{}{}", title(name), style(format!("  {summary}")).dim()));
         body.extend(section_rows.iter().map(|row| row_line(row, widths)));
     }
-    body
+    (head, body)
 }
 
 /// Prévia 3A, entre o seletor e a escolha de membros: compara o banco de
@@ -283,11 +285,8 @@ pub(crate) fn review_package_restore(group: &Group, kernel: &str, toplevel: &Pat
                     ));
                     println!();
                 };
-                let rows = net_rows(&nets);
-                let widths = column_widths(rows.iter(), "Agora");
-                let mut body = vec![head_line(widths, ("Agora", "Depois do restore"))];
-                body.extend(rows.iter().map(|row| row_line(row, widths)));
-                page_lines(&intro, 4, &body)?;
+                let sections = restore_sections(&nets);
+                paged(&intro, 4, &|room| section_pages(&sections, room))?;
             }
             Key::Enter => return Ok(PreviewFlow::Continue),
             Key::Escape => return Ok(PreviewFlow::Back),
@@ -477,21 +476,266 @@ fn change_rows(changes: &[Change]) -> Vec<Row> {
 }
 
 /// Na prévia do restore a leitura é "agora → depois do restore".
-fn net_rows(nets: &[NetChange]) -> Vec<Row> {
-    let mut sorted: Vec<&NetChange> = nets.iter().collect();
-    sorted.sort_by(|a, b| boot_first(&a.name, &b.name));
-    sorted
+/// Uma seção da lista do `d`: título, cabeçalho das colunas e os grupos, cada
+/// um com a linha dele e os nomes que quebram embaixo.
+struct Section {
+    title: String,
+    head: String,
+    units: Vec<Vec<String>>,
+}
+
+/// Lista do `d` na prévia do restore: "Repositório" e "Compilados", cada um
+/// com o cabeçalho e a largura das colunas dele (uma versão longa do AUR não
+/// alarga o resto). Pacotes com a mesma troca de versão viram uma linha com o
+/// primeiro nome e `+N`, e os outros nomes quebram embaixo, apagados.
+fn restore_sections(nets: &[NetChange]) -> Vec<Section> {
+    let (local, repo): (Vec<&NetChange>, Vec<&NetChange>) = nets.iter().partition(|n| n.built_here);
+    let names_width = crate::ui::term::content_width().saturating_sub(4).min(GROUP_NAMES_MAX);
+    let mut sections = Vec::new();
+    for (name, section) in [("Repositório", repo), ("Compilados", local)] {
+        if section.is_empty() {
+            continue;
+        }
+        let packages = count_text(section.len(), "pacote", "pacotes");
+        let units = same_version_change(&section);
+        let name_col = units.iter().map(|u| unit_label(u).chars().count()).max().unwrap_or(0).clamp("Pacote".len(), NAME_COL_MAX);
+        let left_col = units.iter().map(|u| version(&u[0].now).chars().count()).max().unwrap_or(0).max("Agora".len());
+        let lines = units
+            .iter()
+            .map(|unit| {
+                let mut lines = vec![unit_line(unit, name_col, left_col)];
+                if unit.len() > 2 {
+                    let others: Vec<&str> = unit[1..].iter().map(|n| n.name.as_str()).collect();
+                    lines.extend(wrap_words(&others, names_width).into_iter().map(|t| format!("    {}", style(t).dim())));
+                }
+                lines
+            })
+            .collect();
+        sections.push(Section {
+            title: format!("{}{}", title(name), style(format!("  {packages}")).dim()),
+            head: head_line((name_col, left_col), ("Agora", "Depois do restore")),
+            units: lines,
+        });
+    }
+    sections
+}
+
+/// Páginas de até `room` linhas. Uma seção que continua na página seguinte
+/// repete o título e o cabeçalho; um grupo não se parte entre páginas, e um
+/// título não fica sozinho no pé da página.
+fn section_pages(sections: &[Section], room: usize) -> Vec<Vec<String>> {
+    let mut pages = Vec::new();
+    let mut page: Vec<String> = Vec::new();
+    for section in sections {
+        let mut opened = false;
+        for unit in &section.units {
+            let gap = usize::from(!opened && !page.is_empty());
+            let header = if opened { 0 } else { 2 };
+            if !page.is_empty() && page.len() + gap + header + unit.len() > room {
+                pages.push(std::mem::take(&mut page));
+                opened = false;
+            }
+            if !opened {
+                if !page.is_empty() {
+                    page.push(String::new());
+                }
+                page.push(section.title.clone());
+                page.push(section.head.clone());
+                opened = true;
+            }
+            page.extend(unit.iter().cloned());
+        }
+    }
+    if !page.is_empty() {
+        pages.push(page);
+    }
+    pages
+}
+
+/// Largura máxima dos nomes que quebram embaixo de um grupo.
+const GROUP_NAMES_MAX: usize = 64;
+
+/// Pacotes com a mesma troca de versão juntos. Ordem: os de boot, os grupos
+/// maiores, e o resto pelo nome.
+fn same_version_change<'a>(nets: &[&'a NetChange]) -> Vec<Vec<&'a NetChange>> {
+    let mut sorted = nets.to_vec();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut units: Vec<Vec<&NetChange>> = Vec::new();
+    for net in sorted {
+        match units.iter_mut().find(|u| u[0].before == net.before && u[0].now == net.now) {
+            Some(unit) => unit.push(net),
+            None => units.push(vec![net]),
+        }
+    }
+    let boot = |u: &Vec<&NetChange>| u.iter().any(|n| pacman_log::is_boot_package(&n.name));
+    units.sort_by(|a, b| boot(b).cmp(&boot(a)).then(b.len().cmp(&a.len())).then(a[0].name.cmp(&b[0].name)));
+    units
+}
+
+/// `poppler, poppler-glib` para dois; `kcolorscheme +10` a partir de três.
+fn unit_label(unit: &[&NetChange]) -> String {
+    match unit {
+        [only] => only.name.clone(),
+        [a, b] => format!("{}, {}", a.name, b.name),
+        [first, rest @ ..] => format!("{} +{}", first.name, rest.len()),
+        [] => String::new(),
+    }
+}
+
+/// Linha de um grupo. Nas versões, o que as duas têm em comum fica apagado:
+/// sobra à vista o trecho que muda (`6.32.0` → `6.31.0`).
+fn unit_line(unit: &[&NetChange], name_col: usize, left_col: usize) -> String {
+    let net = unit[0];
+    let marker = match (&net.before, &net.now) {
+        _ if unit.iter().any(|n| pacman_log::is_boot_package(&n.name)) => style("●").yellow().to_string(),
+        (None, _) => style("−").red().to_string(),
+        (_, None) => style("+").green().to_string(),
+        _ => style("↺").dim().to_string(),
+    };
+    let name = crate::ui::term::ellipsize(&unit_label(unit), name_col);
+    let now = version(&net.now);
+    let before = version(&net.before);
+    let pad = " ".repeat(left_col.saturating_sub(now.chars().count()));
+    let (left, right) = match (&net.now, &net.before) {
+        (Some(now), Some(before)) => {
+            let (pre, now_mid, before_mid, post) = version_diff(now, before);
+            (
+                format!("{}{}{}", style(pre).dim(), now_mid, style(post).dim()),
+                format!("{}{}{}", style(pre).dim(), style(before_mid).bold(), style(post).dim()),
+            )
+        }
+        _ => (style(now).dim().to_string(), before),
+    };
+    format!("{marker} {name:<name_col$}   {left}{pad}   {right}")
+}
+
+/// Corta duas versões em começo comum, o trecho de cada uma que muda e fim
+/// comum. Os cortes caem num separador (`.`, `-`, `_`, `:`), para o trecho
+/// ser um número inteiro: `6.32.0-1.1` × `6.31.0-1.1` → `6.`, `32`, `31`, `.0-1.1`.
+fn version_diff<'a>(a: &'a str, b: &'a str) -> (&'a str, &'a str, &'a str, &'a str) {
+    let sep = |c: u8| matches!(c, b'.' | b'-' | b'_' | b':');
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    let mut pre = x.iter().zip(y).take_while(|(p, q)| p == q).count();
+    while pre > 0 && !sep(x[pre - 1]) {
+        pre -= 1;
+    }
+    let room = (x.len() - pre).min(y.len() - pre);
+    let mut post = x.iter().rev().zip(y.iter().rev()).take(room).take_while(|(p, q)| p == q).count();
+    while post > 0 && !sep(x[x.len() - post]) {
+        post -= 1;
+    }
+    // Versões do pacman são ASCII; um corte fora da fronteira de um caractere
+    // devolve as duas inteiras.
+    let cut = || Some((a.get(..pre)?, a.get(pre..a.len() - post)?, b.get(pre..b.len() - post)?, a.get(a.len() - post..)?));
+    cut().unwrap_or(("", a, b, ""))
+}
+
+/// Palavras em linhas de até `width` caracteres.
+fn wrap_words(words: &[&str], width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in words {
+        match lines.last_mut() {
+            Some(last) if last.chars().count() + 1 + word.chars().count() <= width => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// Resumo do checkpoint sob o cursor no seletor do restore, pelo que as
+/// transações dele fizeram: uma linha por origem (`Repositório 43`, `AUR 2`),
+/// com os de boot primeiro, os grupos com a mesma troca como `nome +N` e o que
+/// não couber em `+N`. Vazio para quem não veio do pacman.
+pub(crate) fn picker_summary(group: &Group, txs: &[Transaction], width: usize) -> Vec<String> {
+    let (local, repo): (Vec<&Transaction>, Vec<&Transaction>) = txs.iter().partition(|t| t.op == Some("-U"));
+    let compiled = match group::pacman_helper(group) {
+        Some("makepkg") => "makepkg",
+        Some(_) => "AUR",
+        None => "Arquivo",
+    };
+    let sections: Vec<(String, Vec<Change>)> = [("Repositório", repo), (compiled, local)]
         .into_iter()
-        .map(|n| {
-            let marker = match (&n.before, &n.now) {
-                _ if pacman_log::is_boot_package(&n.name) => style("●").yellow().to_string(),
-                (None, _) => style("−").red().to_string(),
-                (_, None) => style("+").green().to_string(),
-                _ => style("↺").dim().to_string(),
-            };
-            Row { marker, name: n.name.clone(), left: version(&n.now), right: version(&n.before) }
+        .map(|(name, txs)| (name, txs.iter().flat_map(|t| t.changes.clone()).collect::<Vec<Change>>()))
+        .filter(|(_, changes)| !changes.is_empty())
+        .map(|(name, changes)| (format!("{name} {}", changes.len()), changes))
+        .collect();
+    let label_col = sections.iter().map(|(label, _)| label.chars().count()).max().unwrap_or(0);
+    sections
+        .iter()
+        .map(|(label, changes)| {
+            let room = width.saturating_sub(label_col + 3);
+            format!("{}   {}", style(format!("{label:<label_col$}")).dim(), summary_items(changes, room))
         })
         .collect()
+}
+
+/// Os itens do resumo que cabem em `room`, com `+N` para o resto.
+fn summary_items(changes: &[Change], room: usize) -> String {
+    let mut sorted: Vec<&Change> = changes.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut units: Vec<Vec<&Change>> = Vec::new();
+    for change in sorted {
+        match units.iter_mut().find(|u| u[0].op == change.op && u[0].old == change.old && u[0].new == change.new) {
+            Some(unit) => unit.push(change),
+            None => units.push(vec![change]),
+        }
+    }
+    let boot = |u: &Vec<&Change>| u.iter().any(|c| pacman_log::is_boot_package(&c.name));
+    units.sort_by(|a, b| boot(b).cmp(&boot(a)).then(b.len().cmp(&a.len())).then(a[0].name.cmp(&b[0].name)));
+
+    let sep = " · ";
+    let total = changes.len();
+    let mut shown = 0;
+    let mut used = 0;
+    let mut parts: Vec<String> = Vec::new();
+    for unit in &units {
+        let (plain, styled) = summary_item(unit, boot(unit));
+        let left_after = total - shown - unit.len();
+        let tail = if left_after > 0 { sep.chars().count() + format!("+{left_after}").len() } else { 0 };
+        let gap = if parts.is_empty() { 0 } else { sep.chars().count() };
+        if used + gap + plain.chars().count() + tail > room {
+            break;
+        }
+        used += gap + plain.chars().count();
+        shown += unit.len();
+        parts.push(styled);
+    }
+    if shown < total {
+        parts.push(style(format!("+{}", total - shown)).dim().to_string());
+    }
+    parts.join(&style(sep).dim().to_string())
+}
+
+/// Um item do resumo, em texto puro (para medir) e pintado.
+fn summary_item(unit: &[&Change], boot: bool) -> (String, String) {
+    let change = unit[0];
+    let text = match (unit.len(), change.op) {
+        (1, Op::Installed) => format!("+{}", change.name),
+        (1, Op::Removed) => format!("−{}", change.name),
+        (1, Op::Upgraded | Op::Downgraded) => {
+            let (old, new) = short_versions(change.old.as_deref().unwrap_or("?"), change.new.as_deref().unwrap_or("?"));
+            format!("{} {old} → {new}", change.name)
+        }
+        (1, Op::Reinstalled) => change.name.clone(),
+        (n, _) => format!("{} +{}", change.name, n - 1),
+    };
+    if !boot {
+        return (text.clone(), style(text).dim().to_string());
+    }
+    (format!("● {text}"), format!("{} {}", style("●").yellow(), style(text).dim()))
+}
+
+/// Sem o pkgrel quando a versão em si muda (`12.9.6-1` → `12.9.6`); numa
+/// recompilação (`1.28.9-1.1` → `1.28.9-2`) o pkgrel é a diferença e fica.
+fn short_versions<'a>(old: &'a str, new: &'a str) -> (&'a str, &'a str) {
+    let base = |v: &'a str| v.rsplit_once('-').map_or(v, |(base, _)| base);
+    if base(old) == base(new) {
+        return (old, new);
+    }
+    (base(old), base(new))
 }
 
 fn boot_first(a: &str, b: &str) -> std::cmp::Ordering {
@@ -553,28 +797,36 @@ fn row_line(row: &Row, (name_col, left_col): (usize, usize)) -> String {
 
 /// Lista paginada com ←/→; Esc ou Enter volta. A primeira linha do corpo é o
 /// cabeçalho das colunas e se repete em toda página.
-fn page_lines(intro: &dyn Fn(), intro_lines: usize, body: &[String]) -> Result<()> {
-    let (head, rest) = body.split_first().map(|(h, r)| (h.as_str(), r)).unwrap_or(("", &[]));
+fn page_lines(intro: &dyn Fn(), intro_lines: usize, head: &str, rest: &[String]) -> Result<()> {
+    paged(intro, intro_lines, &|room| {
+        if rest.is_empty() {
+            return vec![vec![head.to_string(), style("  nenhum pacote").dim().to_string()]];
+        }
+        let rows = room.saturating_sub(1).max(1);
+        rest.chunks(rows).map(|chunk| std::iter::once(head.to_string()).chain(chunk.iter().cloned()).collect()).collect()
+    })
+}
+
+/// Mostra as páginas que `pages_for` monta para `room` linhas livres, que
+/// dependem da altura do terminal (recalculada a cada tecla).
+fn paged(intro: &dyn Fn(), intro_lines: usize, pages_for: &dyn Fn(usize) -> Vec<Vec<String>>) -> Result<()> {
     let mut page = 0usize;
     loop {
         let rows_on_screen = console::Term::stdout().size().0 as usize;
-        let page_size = rows_on_screen.saturating_sub(intro_lines + LIST_CHROME_LINES).max(3);
-        let pages = rest.len().div_ceil(page_size).max(1);
-        page = page.min(pages - 1);
+        let room = rows_on_screen.saturating_sub(intro_lines + LIST_FOOTER_LINES).max(4);
+        let pages = pages_for(room);
+        let count = pages.len().max(1);
+        page = page.min(count - 1);
 
         clear_screen();
         intro();
-        line(format_args!("{head}"));
-        if rest.is_empty() {
-            line(format_args!("{}", style("  nenhum pacote").dim()));
-        }
-        for text in rest.iter().skip(page * page_size).take(page_size) {
+        for text in pages.get(page).into_iter().flatten() {
             line(format_args!("{text}"));
         }
         println!();
         let back = "esc volta";
-        let footer = if pages > 1 {
-            format!("página {}/{} · ←/→ navega · {back}", page + 1, pages)
+        let footer = if count > 1 {
+            format!("página {}/{} · ←/→ navega · {back}", page + 1, count)
         } else {
             back.to_string()
         };
@@ -582,7 +834,7 @@ fn page_lines(intro: &dyn Fn(), intro_lines: usize, body: &[String]) -> Result<(
 
         match console::Term::stdout().read_key().context("aguardar tecla")? {
             Key::ArrowLeft => page = page.saturating_sub(1),
-            Key::ArrowRight => page = (page + 1).min(pages - 1),
+            Key::ArrowRight => page = (page + 1).min(count - 1),
             Key::Escape | Key::Enter => return Ok(()),
             _ => {}
         }
@@ -591,7 +843,100 @@ fn page_lines(intro: &dyn Fn(), intro_lines: usize, body: &[String]) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::{boot_rows_that_fit, shorten_after};
+    use super::{
+        Section, boot_rows_that_fit, same_version_change, section_pages, short_versions, shorten_after, summary_items,
+        unit_label, version_diff, wrap_words,
+    };
+    use crate::pacman_db::NetChange;
+    use crate::pacman_log::{Change, Op};
+
+    fn net(name: &str, before: &str, now: &str) -> NetChange {
+        NetChange { name: name.into(), before: Some(before.into()), now: Some(now.into()), built_here: false }
+    }
+
+    fn up(name: &str, old: &str, new: &str) -> Change {
+        Change { op: Op::Upgraded, name: name.into(), old: Some(old.into()), new: Some(new.into()) }
+    }
+
+    #[test]
+    fn version_cuts_fall_on_separators() {
+        assert_eq!(version_diff("6.32.0-1.1", "6.31.0-1.1"), ("6.", "32", "31", ".0-1.1"));
+        assert_eq!(version_diff("1.28.9-2", "1.28.9-1.1"), ("1.28.9-", "2", "1.1", ""));
+        assert_eq!(version_diff("12.10.0-1", "12.9.6-1"), ("12.", "10.0", "9.6", "-1"));
+        assert_eq!(version_diff("2:9.0.2-5", "2:9.0.2-3"), ("2:9.0.2-", "5", "3", ""));
+        // Uma é o começo da outra: o trecho a mais aparece inteiro.
+        assert_eq!(version_diff("4.1.1-1", "4.1-1"), ("4.", "1.1", "1", "-1"));
+        assert_eq!(version_diff("a", "b"), ("", "a", "b", ""));
+    }
+
+    #[test]
+    fn pkgrel_stays_only_when_it_is_the_change() {
+        assert_eq!(short_versions("12.9.6-1", "12.10.0-1"), ("12.9.6", "12.10.0"));
+        assert_eq!(short_versions("1:48.4-2.1", "1:48.5-1.1"), ("1:48.4", "1:48.5"));
+        assert_eq!(short_versions("1.28.9-1.1", "1.28.9-2"), ("1.28.9-1.1", "1.28.9-2"));
+    }
+
+    #[test]
+    fn same_change_groups_lead_with_boot_then_size() {
+        let nets = [
+            net("kconfig", "6.31.0-1.1", "6.32.0-1.1"),
+            net("btop", "1.4.7-1.1", "1.4.8-1.1"),
+            net("kcrash", "6.31.0-1.1", "6.32.0-1.1"),
+            net("ki18n", "6.31.0-1.1", "6.32.0-1.1"),
+            net("limine", "12.9.6-1", "12.10.0-1"),
+            net("poppler", "26.10.0-2.1", "26.11.0-1"),
+            net("poppler-glib", "26.10.0-2.1", "26.11.0-1"),
+        ];
+        let refs: Vec<&NetChange> = nets.iter().collect();
+        let labels: Vec<String> = same_version_change(&refs).iter().map(|u| unit_label(u)).collect();
+        assert_eq!(labels, ["limine", "kconfig +2", "poppler, poppler-glib", "btop"]);
+    }
+
+    #[test]
+    fn summary_cuts_with_the_count_of_what_is_left() {
+        console::set_colors_enabled(false);
+        let changes = [
+            up("kconfig", "6.31.0-1.1", "6.32.0-1.1"),
+            up("kcrash", "6.31.0-1.1", "6.32.0-1.1"),
+            up("ki18n", "6.31.0-1.1", "6.32.0-1.1"),
+            up("limine", "12.9.6-1", "12.10.0-1"),
+            up("btop", "1.4.7-1.1", "1.4.8-1.1"),
+            up("mpv", "1:0.41.0-7.1", "1:0.42.0-2.1"),
+        ];
+        assert_eq!(
+            summary_items(&changes, 200),
+            "● limine 12.9.6 → 12.10.0 · kconfig +2 · btop 1.4.7 → 1.4.8 · mpv 1:0.41.0 → 1:0.42.0"
+        );
+        // 45 colunas: o btop não cabe com o "+1" depois dele.
+        assert_eq!(summary_items(&changes, 45), "● limine 12.9.6 → 12.10.0 · kconfig +2 · +2");
+        assert_eq!(summary_items(&changes, 5), "+6");
+    }
+
+    fn section(title: &str, units: &[usize]) -> Section {
+        Section {
+            title: title.into(),
+            head: "cols".into(),
+            units: units.iter().map(|&n| (0..n).map(|i| format!("{title}{i}")).collect()).collect(),
+        }
+    }
+
+    #[test]
+    fn pages_repeat_the_header_and_keep_groups_whole() {
+        let sections = [section("R", &[1, 3, 1]), section("C", &[1])];
+        let pages = section_pages(&sections, 6);
+        assert_eq!(pages, [
+            vec!["R", "cols", "R0", "R0", "R1", "R2"],
+            // O "C" com cabeçalho e uma linha não cabe nas 3 que sobram.
+            vec!["R", "cols", "R0"],
+            vec!["C", "cols", "C0"],
+        ].map(|p| p.into_iter().map(String::from).collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn names_wrap_at_the_width() {
+        assert_eq!(wrap_words(&["aaa", "bb", "cccc", "d"], 7), ["aaa bb", "cccc d"]);
+        assert_eq!(wrap_words(&["longword"], 3), ["longword"]);
+    }
 
     #[test]
     fn boot_section_leaves_room_for_the_footer() {
