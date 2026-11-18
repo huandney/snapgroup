@@ -11,7 +11,7 @@ use crate::ui::checkpoints::picker_prompt;
 use crate::ui::snapshots::{count_text, member_badges};
 use crate::pacman_hooks::Status;
 use crate::ui::term::{
-    AltScreen, SELECT_MARKER, THEME, app_header, clear_screen, header, line, note, path,
+    AltScreen, SELECT_MARKER, THEME, clear_screen, header, hook_ok, line, note, path,
     picker_page_len, result, result_section, short_datetime, title, truncate_for_terminal, warn,
 };
 use anyhow::{Context, Result};
@@ -131,34 +131,72 @@ pub(crate) fn print_hook_switched(on: bool, status: &Status) {
     }
 }
 
-/// Saída do hook na transação do pacman: a marca e a versão abrem o bloco,
-/// para o checkpoint se destacar entre as linhas dos outros hooks.
+/// Saída do hook na transação do pacman: uma linha sob a do hook, com a marca
+/// abrindo para o checkpoint se destacar entre as linhas dos outros hooks.
 pub(crate) fn print_hook_saved(id: i64, desc: &str, mountpoints: &mut [String]) {
-    app_header();
-    result_section("Salvo");
-    result(format_args!(
-        "{}   {}",
+    hook_ok(format_args!(
+        "{}{}",
         style(desc).bold(),
-        style(format!("{} · #{id}", member_badges(mountpoints))).dim()
+        style(format!(" · {} · #{id}", member_badges(mountpoints))).dim()
     ));
 }
 
-/// Transação seguinte da mesma execução do paru/makepkg: nada novo é salvo.
-pub(crate) fn print_hook_covered(group: &Group, helper: &str) {
-    app_header();
-    result_section("Salvo");
-    result(format_args!(
-        "{}   {}",
-        style(group::description(group)).bold(),
-        style(format!("#{} · já cobre esta execução do {helper}", group.id)).dim()
-    ));
+/// Transação seguinte da mesma execução do paru/cachy-update: nada novo é salvo.
+pub(crate) fn print_hook_covered(group: &Group) {
+    hook_ok(format_args!("{}", style(format!("já salvo em #{} · {}", group.id, group::description(group))).dim()));
+}
+
+/// Erro que encerra o hook (a trava de outro snapg, uma config que falta):
+/// primeira linha como aviso, o resto embaixo dela.
+pub(crate) fn print_hook_failed(error: &anyhow::Error) {
+    let text = format!("{error:#}");
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    if let Some(first) = lines.next() {
+        warn(format_args!("{first}"));
+    }
+    for rest in lines {
+        crate::ui::term::warn_detail(format_args!("{rest}"));
+    }
+}
+
+/// `snapg boot-check`, no fim da transação: o `limine.conf` confere com o
+/// que está no /boot? Um hash que não bate, ou um arquivo que sumiu, faz o
+/// Limine recusar a entrada no próximo boot. Sem `limine.conf` (outro
+/// bootloader) não diz nada: a linha apareceria a cada kernel.
+pub(crate) fn print_boot_check(report: Option<&crate::boot::HashReport>) {
+    let Some(report) = report else {
+        return;
+    };
+    let bad = [(&report.missing, "o Limine não acha"), (&report.mismatched, "o Limine vai recusar")];
+    let mut warned = false;
+    for (files, what) in bad {
+        let Some(first) = files.first() else {
+            continue;
+        };
+        let more = match files.len() {
+            1 => String::new(),
+            n => format!(" (e mais {})", n - 1),
+        };
+        let why = if what.ends_with("recusar") { ": o hash não confere" } else { "" };
+        warn(format_args!("{}", style(format!("{what} {first}{more}{why}")).yellow()));
+        warned = true;
+    }
+    if warned {
+        crate::ui::term::warn_detail(format_args!("rode snapg doctor antes de reiniciar"));
+        return;
+    }
+    if report.checked == 0 {
+        crate::ui::term::hook_note(format_args!("nenhum hash no limine.conf: nada a conferir"));
+        return;
+    }
+    let files = count_text(report.checked, "arquivo", "arquivos");
+    hook_ok(format_args!("{}", style(format!("boot conferido · {files} do limine.conf, hashes ok")).dim()));
 }
 
 /// Aviso do hook quando o snap-pac também está ligado.
 pub(crate) fn print_snap_pac_active() {
-    warn(format_args!(
-        "snap-pac ligado: checkpoint do snapg não criado. Para o snapg assumir: snapg pacman on"
-    ));
+    warn(format_args!("snap-pac ligado: checkpoint não criado"));
+    crate::ui::term::warn_detail(format_args!("para o snapg assumir: snapg pacman on"));
 }
 
 pub(crate) fn print_no_pacman_groups() {

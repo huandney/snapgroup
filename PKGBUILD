@@ -27,5 +27,7 @@ package() {
     "$pkgdir/usr/share/libalpm/hooks/00-snapgroup-pending.hook"
   install -Dm644 "$startdir/pacman/05-snapgroup-pre.hook" \
     "$pkgdir/usr/share/libalpm/hooks/05-snapgroup-pre.hook"
+  install -Dm644 "$startdir/pacman/zz-snapgroup-boot.hook" \
+    "$pkgdir/usr/share/libalpm/hooks/zz-snapgroup-boot.hook"
   install -Dm644 "$startdir/snapgroup.conf" "$pkgdir/etc/snapgroup.conf"
 }

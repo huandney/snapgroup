@@ -47,9 +47,8 @@ pub(crate) fn prompt_save_name(
 }
 
 pub(crate) fn print_pacman_skipped_pending() {
-    warn(format_args!(
-        "restauração pendente: checkpoint do pacman não criado. Reinicie ou rode 'snapg restore' para cancelar."
-    ));
+    warn(format_args!("restauração pendente: transação segue sem checkpoint"));
+    crate::ui::term::warn_detail(format_args!("reinicie ou rode snapg restore para concluir ou cancelar"));
 }
 
 pub(crate) fn print_save_cancelled() {

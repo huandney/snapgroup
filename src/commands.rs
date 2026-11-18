@@ -127,17 +127,24 @@ pub fn save(description: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Checkpoint do hook do pacman (PreTransaction). Sem prompt, sem a espera do
-/// relatório de espaço e sem descartar o Regret: só o save manual é Highlander.
-/// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
-pub fn save_pacman() -> Result<()> {
-    let cfg = config::load();
-    // O pacman lê a saída do hook por um pipe: as cores seguem as dele.
+/// Hooks do pacman: as linhas saem recuadas sob a do hook e, como o pacman
+/// lê a saída por um pipe, as cores seguem as dele. Devolve a linha de
+/// comando do pacman, se ele for o pai.
+pub fn prepare_hook_output() -> Option<Vec<String>> {
+    crate::ui::term::set_hook_output();
     let cmdline = pacman::parent_cmdline();
     if cmdline.as_deref().is_some_and(pacman::pacman_shows_color) {
         console::set_colors_enabled(true);
         console::set_colors_enabled_stderr(true);
     }
+    cmdline
+}
+
+/// Checkpoint do hook do pacman (PreTransaction). Sem prompt, sem a espera do
+/// relatório de espaço e sem descartar o Regret: só o save manual é Highlander.
+/// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
+pub fn save_pacman(cmdline: Option<Vec<String>>) -> Result<()> {
+    let cfg = config::load();
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
@@ -165,7 +172,7 @@ pub fn save_pacman() -> Result<()> {
         && let Some(covering) = covering_checkpoint(&helper.session)?
     {
         count_session_transaction(&covering);
-        crate::ui::pacman::print_hook_covered(&covering, &helper.name);
+        crate::ui::pacman::print_hook_covered(&covering);
         return Ok(());
     }
 
@@ -2303,6 +2310,15 @@ fn probe_selections(map: &space::SpaceMap, configs: &[String], toplevel: &Path) 
 
 fn gib(bytes: u64) -> String {
     format!("{:.2} GiB", bytes as f64 / (1u64 << 30) as f64)
+}
+
+/// `snapg boot-check`, no fim de uma transação que mexeu no boot: avisa antes
+/// do reboot quando o Limine recusaria uma entrada. Nunca aborta: a transação
+/// já aconteceu, e o aviso aponta o `doctor`.
+pub fn boot_check() -> Result<()> {
+    let report = crate::boot::check_after_transaction()?;
+    crate::ui::pacman::print_boot_check(report.as_ref());
+    Ok(())
 }
 
 /// Chamado pelo hook do pacman antes de transações que mexem em kernel ou
