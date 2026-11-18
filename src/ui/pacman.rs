@@ -146,13 +146,13 @@ pub(crate) fn print_hook_covered(group: &Group) {
     hook_ok(format_args!("{}", style(format!("já salvo em #{} · {}", group.id, group::description(group))).dim()));
 }
 
-/// Erro que encerra o hook (a trava de outro snapg, uma config que falta):
-/// primeira linha como aviso, o resto embaixo dela.
+/// Erro que encerra o hook (a trava de outro snapg, o pending-check que
+/// aborta a transação): primeira linha como erro, o resto embaixo dela.
 pub(crate) fn print_hook_failed(error: &anyhow::Error) {
     let text = format!("{error:#}");
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     if let Some(first) = lines.next() {
-        warn(format_args!("{first}"));
+        crate::ui::term::fail(format_args!("{first}"));
     }
     for rest in lines {
         crate::ui::term::warn_detail(format_args!("{rest}"));
@@ -167,9 +167,14 @@ pub(crate) fn print_boot_check(report: Option<&crate::boot::HashReport>) {
     let Some(report) = report else {
         return;
     };
-    let bad = [(&report.missing, "o Limine não acha"), (&report.mismatched, "o Limine vai recusar")];
+    // O doctor refaz os hashes; um arquivo que sumiu ele não traz de volta:
+    // quem refaz as entradas é o limine-update.
+    let bad = [
+        (&report.missing, "o Limine não acha", "", "regenere as entradas com sudo limine-update antes de reiniciar"),
+        (&report.mismatched, "o Limine vai recusar", ": o hash não confere", "rode snapg doctor antes de reiniciar"),
+    ];
     let mut warned = false;
-    for (files, what) in bad {
+    for (files, what, why, fix) in bad {
         let Some(first) = files.first() else {
             continue;
         };
@@ -177,12 +182,11 @@ pub(crate) fn print_boot_check(report: Option<&crate::boot::HashReport>) {
             1 => String::new(),
             n => format!(" (e mais {})", n - 1),
         };
-        let why = if what.ends_with("recusar") { ": o hash não confere" } else { "" };
         warn(format_args!("{}", style(format!("{what} {first}{more}{why}")).yellow()));
+        crate::ui::term::warn_detail(format_args!("{fix}"));
         warned = true;
     }
     if warned {
-        crate::ui::term::warn_detail(format_args!("rode snapg doctor antes de reiniciar"));
         return;
     }
     if report.checked == 0 {

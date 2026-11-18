@@ -1452,8 +1452,25 @@ fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
             mismatched.push(boot_path);
         }
     }
-    let labels = |paths: Vec<PathBuf>| paths.iter().map(|p| boot_file_label(boot, p)).collect();
+    let labels = |paths: Vec<PathBuf>| boot_file_labels(boot, &paths);
     Ok(Some(HashReport { checked: hashes.len(), mismatched: labels(mismatched), missing: labels(missing) }))
+}
+
+/// Rótulos dos arquivos, sem a pasta do machine-id; dois que ficariam iguais
+/// (duas instalações no mesmo ESP) mantêm o caminho inteiro, para o aviso
+/// dizer qual é qual.
+fn boot_file_labels(boot: &Path, paths: &[PathBuf]) -> Vec<String> {
+    let short: Vec<String> = paths.iter().map(|p| boot_file_label(boot, p)).collect();
+    paths
+        .iter()
+        .zip(&short)
+        .map(|(path, label)| {
+            if short.iter().filter(|other| *other == label).count() == 1 {
+                return label.clone();
+            }
+            path.strip_prefix(boot).unwrap_or(path).display().to_string()
+        })
+        .collect()
 }
 
 /// `0262…3042/linux-cachyos/initramfs` → `linux-cachyos/initramfs`: a pasta do
@@ -2139,7 +2156,12 @@ mod tests {
             .collect();
         std::fs::write(base.join("limine.conf"), conf).unwrap();
         let report = limine_hash_report(&base).unwrap().unwrap();
-        assert_eq!(report, HashReport { checked: 2, mismatched: vec!["linux-cachyos/initramfs".to_string(); 2], missing: vec![] });
+        // Iguais sem o machine-id: o caminho inteiro diz qual é qual.
+        let mismatched = vec![
+            "0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs".to_string(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/linux-cachyos/initramfs".to_string(),
+        ];
+        assert_eq!(report, HashReport { checked: 2, mismatched, missing: vec![] });
         let _ = std::fs::remove_dir_all(&base);
     }
 

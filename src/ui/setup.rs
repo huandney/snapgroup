@@ -74,13 +74,26 @@ impl Item {
 /// O que a tela mostra, relido depois de cada mudança.
 struct Values {
     config: Config,
-    snapg_hook: bool,
+    /// Quem faz os checkpoints de fato: com os dois ligados o snapg recua.
+    hooks: HookOwner,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum HookOwner {
+    Snapg,
+    SnapPac,
+    Nobody,
 }
 
 impl Values {
     fn read() -> Self {
         let status = pacman_hooks::status(&Dirs::system_default());
-        Values { config: config::load(), snapg_hook: status.snapg_runs() && !status.snap_pac_runs() }
+        let hooks = match (status.snapg_runs(), status.snap_pac_runs()) {
+            (true, false) => HookOwner::Snapg,
+            (_, true) => HookOwner::SnapPac,
+            (false, false) => HookOwner::Nobody,
+        };
+        Values { config: config::load(), hooks }
     }
 
     fn number(&self, item: Item) -> u64 {
@@ -94,7 +107,12 @@ impl Values {
 
     fn text(&self, item: Item) -> String {
         match item {
-            Item::PacmanHook => if self.snapg_hook { "snapg" } else { "snap-pac" }.to_string(),
+            Item::PacmanHook => match self.hooks {
+                HookOwner::Snapg => "snapg",
+                HookOwner::SnapPac => "snap-pac",
+                HookOwner::Nobody => "nenhum",
+            }
+            .to_string(),
             Item::KeepGroups | Item::KeepPacman => keep_text(self.number(item)),
             Item::TrashDays => self.number(item).to_string(),
             Item::RestoreFilter => self.config.restore_filter.label().to_string(),
@@ -197,9 +215,12 @@ fn record(changes: &mut Vec<Change>, item: Item, before: String, after: String) 
 }
 
 /// Aplica ←/→ (ou enter nos que não são número). Devolve a linha de status.
+/// O lock do snapg vale só durante a gravação: segurado a tela inteira, uma
+/// tela aberta deixaria o hook do pacman sem checkpoint (ele espera 10 s).
 fn change(item: Item, values: &Values, forward: bool) -> Result<String> {
+    let _lock = crate::lock::acquire()?;
     match item {
-        Item::PacmanHook => switch_pacman(!values.snapg_hook),
+        Item::PacmanHook => switch_pacman(values.hooks != HookOwner::Snapg),
         Item::RestoreFilter => {
             let current = values.config.restore_filter;
             let next = if forward { current.next() } else { previous_filter(current) };
@@ -213,15 +234,13 @@ fn change(item: Item, values: &Values, forward: bool) -> Result<String> {
 }
 
 fn switch_pacman(on: bool) -> Result<String> {
-    let dirs = Dirs::system_default();
-    let before = pacman_hooks::status(&dirs);
-    if on {
-        pacman_hooks::enable(&dirs, &before)?;
-    } else {
-        pacman_hooks::disable(&dirs, &before)?;
+    let status = crate::commands::switch_pacman_hooks(on)?;
+    Ok(match (status.snapg_runs(), status.snap_pac_runs()) {
+        (true, false) => "gravado: o snapg faz os checkpoints",
+        (_, true) => "gravado: o snap-pac faz os checkpoints",
+        (false, false) => "gravado: nenhum dos dois faz checkpoints (snap-pac não instalado)",
     }
-    pacman_hooks::record_choice(on)?;
-    Ok(if on { "gravado: o snapg faz os checkpoints" } else { "gravado: o snap-pac faz os checkpoints" }.to_string())
+    .to_string())
 }
 
 fn save(item: Item, value: &str) -> Result<String> {
@@ -251,7 +270,8 @@ fn type_value(item: Item, values: &Values) -> Result<Option<Result<String>>> {
     if item == Item::TrashDays && number > config::MAX_PRUNE_DAYS {
         return Ok(Some(Err(anyhow::anyhow!("o máximo é {} dias", config::MAX_PRUNE_DAYS))));
     }
-    Ok(Some(save(item, &number.to_string())))
+    let saved = crate::lock::acquire().and_then(|_lock| save(item, &number.to_string()));
+    Ok(Some(saved))
 }
 
 fn render(values: &Values, cursor: usize, status: Option<&Result<String, String>>) {

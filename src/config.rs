@@ -79,7 +79,14 @@ impl Default for Config {
 /// não deixar o arquivo pela metade.
 pub fn set(key: &str, value: &str) -> anyhow::Result<()> {
     use anyhow::Context;
-    let current = fs::read_to_string(PATH).unwrap_or_default();
+    // Só um arquivo que não existe vale como vazio: qualquer outro erro de
+    // leitura (permissão, bytes que não são UTF-8) regravaria o arquivo só
+    // com esta chave, e as outras e os comentários se perderiam.
+    let current = match fs::read_to_string(PATH) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("ler {PATH}")),
+    };
     let tmp = format!("{PATH}.snapg-tmp");
     fs::write(&tmp, update_key(&current, key, value)).with_context(|| format!("gravar {tmp}"))?;
     fs::rename(&tmp, PATH).with_context(|| format!("substituir {PATH}"))

@@ -61,10 +61,8 @@ fn main() -> Result<()> {
         }
         cli::Command::List => commands::list(),
         cli::Command::Log => commands::log(),
-        cli::Command::Setup => {
-            let _lock = lock::acquire()?;
-            ui::setup::run()
-        }
+        // O lock vale em cada gravação, não na tela inteira (ver ui::setup::change).
+        cli::Command::Setup => ui::setup::run(),
         cli::Command::Pacman { action: None } => commands::pacman_status(),
         cli::Command::Pacman { action: Some(action) } => {
             let _lock = lock::acquire()?;
