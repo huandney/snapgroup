@@ -1,6 +1,9 @@
 # Proposta: pares de boot guardados no save (C′)
 
-- **Status:** proposta, não implementada.
+- **Status:** adiada (2026-11-18). Ver §8: com o teto de espaço calculado,
+  ela cobre só as últimas 3–4 semanas de kernels, e a reconstrução continua
+  necessária para o resto. Antes dela vêm o endurecimento da janela crítica
+  do sync e a conferência antes do reboot.
 - **Data:** 2026-11-18.
 - **Relacionado:** `docs/architecture/boot-and-standalone-decision.md` (B2.2),
   `docs/architecture/initramfs-stale-on-restore.md`,
@@ -48,10 +51,9 @@ O mapeamento dele (`limine_history/snapshots.json`, formato 1.3.0: número do
 snapshot → `fileHashName` de cada arquivo) é confiável, mas não resolve a
 cobertura.
 
-**Tamanho.** Cada kernel distinto custa ~330 MB (initramfs de 311 MB, com
-Nvidia/DKMS, e vmlinuz de 17 MB). A ESP tem 4 GiB, com 672 MiB em uso. Abaixo de
-85% de uso cabem uns 8 pares a mais: cerca de dois meses de atualizações de
-kernel no ritmo atual (7.3.0 → 7.3.4 entre 01/11 e 13/11).
+**Tamanho.** Cada kernel distinto custa ~314 MiB (initramfs de 297 MiB, com
+Nvidia/DKMS, e vmlinuz de 17 MiB). A ESP tem 4088 MiB, com 672 MiB em uso. O
+§3.6 calcula quantos pares cabem com margem: 5.
 
 **Tempo.** O hook `90-mkinitcpio-install` levou 13–16 s nas seis últimas
 atualizações de kernel (pacman.log). No restore, o sync ainda soma o backup de
@@ -113,8 +115,42 @@ o Limine lê. O `doctor` detecta o estado pelo hash e reroda o mesmo caminho, qu
   restore. A fonte da verdade é o manifesto.
 - Um arquivo sai quando nenhum grupo o usa mais. Grupos na lixeira ainda contam,
   porque podem ser restaurados; a remoção acontece no purge da lixeira.
-- Teto de uso da ESP (§5): passando dele, os pares dos checkpoints mais antigos
-  saem primeiro, e esses checkpoints voltam ao caminho de reconstrução.
+- Teto de uso da ESP (§3.6): passando dele, os pares dos checkpoints mais
+  antigos saem primeiro, e esses checkpoints voltam ao caminho de reconstrução.
+
+### 3.6 Teto de espaço
+
+Uso da ESP em 2026-11-18:
+
+| O que ocupa | MiB |
+|---|---|
+| Par do sistema atual (vmlinuz 17 + initramfs 297) | 314 |
+| Histórico do `limine-snapper-sync` (1 par, as 8 entradas compartilham) | 314 |
+| EFI (Limine + Windows), microcode, tema, `limine.conf` | ~45 |
+| **Total** | **672 de 4088** |
+
+A margem cobre o que precisa caber além dos pares guardados:
+
+- **Atualização de kernel em curso:** o `mkinitcpio` escreve o initramfs novo
+  ao lado antes de trocar; por um momento existe um par a mais. O restore com
+  par guardado faz o mesmo.
+- **Kernel novo no histórico do `limine-snapper-sync`:** por uns dias convivem
+  dois kernels lá.
+- **Crescimento:** o initramfs aumenta com o driver Nvidia e o firmware.
+- **O limite do `limine-snapper-sync`:** ele para de guardar acima de
+  `LIMIT_USAGE_PERCENT` (85%). O snapgroup não pode encostar nesse limite, ou
+  as entradas de snapshot do menu param de ser criadas.
+
+Recalculado a cada save, com o maior par conhecido:
+
+```
+orçamento = 85% da ESP − uso dos outros − 1 par (folga do limine-snapper-sync)
+            − 1 par (atualização em curso) − 10% da ESP (crescimento)
+          = 3475 − 672 − 314 − 314 − 409 ≈ 1766 MiB → 5 pares
+```
+
+No ritmo de novembro (7.3.1 em 01/11, 7.3.3 em 08/11, 7.3.4 em 13/11), 5
+kernels cobrem uns 20–25 dias de checkpoints.
 
 ### 3.5 Telas
 
@@ -143,9 +179,9 @@ As duas linhas que mais pesam:
 
 ## 5. Perguntas em aberto
 
-1. **Teto de espaço.** `BOOT_STAGE_LIMIT_PERCENT` próprio ou o mesmo 85% do
-   `limine-snapper-sync`? Os dois disputam a mesma ESP: o que o snapgroup ocupa
-   reduz o que o `limine-snapper-sync` aceita guardar antes de recusar entradas.
+1. **Teto de espaço.** O §3.6 usa o 85% do `limine-snapper-sync` como base.
+   Ler o valor do `/etc/limine-snapper-sync.conf` ou fixar? E sem o
+   `limine-snapper-sync` instalado, qual teto?
 2. **Dois kernels instalados** (`linux-cachyos` e `-lts`): guardar os dois pares
    por checkpoint dobra o custo. Guardar só o kernel padrão (`default_entry`)?
 3. **Primeiro save depois de uma atualização de kernel.** O par novo ainda não
@@ -173,3 +209,25 @@ As duas linhas que mais pesam:
   ele gera no menu.
 - Secure Boot: os arquivos ficam na mesma ESP e com os mesmos hashes que o
   `limine.conf` já registra.
+
+## 8. Por que adiada
+
+- **Cobertura:** com o teto do §3.6, só os checkpoints das últimas 3–4 semanas
+  têm par. Restaurar para um kernel mais antigo continua passando pelo
+  `mkinitcpio`, então a reconstrução não sai do código: a C′ acrescenta um
+  segundo caminho de restore, não substitui o primeiro.
+- **Custo:** manifesto na ESP, orçamento, retenção junto da lixeira, disputa de
+  espaço com o `limine-snapper-sync` e dois caminhos para testar no código mais
+  delicado do projeto.
+- **A reconstrução já está protegida:** backup prévio do `/boot`, conferência
+  que bloqueia o reboot, retomada pelo `doctor`, mutex do Limine certo (v0.14)
+  e conferência depois de cada transação. Um restore cross-version real bootou
+  limpo com ela (documento de decisão, 2026-05-28).
+- **Velocidade não pesa:** 13–16 s numa operação rara.
+- **O risco que sobra é a interrupção**, coberta por um item menor: bloquear
+  Ctrl-C e segurar suspend/desligamento durante o sync. Junto com a conferência
+  antes do reboot, ataca a causa dos incidentes em qualquer checkpoint.
+
+Reavaliar se a reconstrução voltar a falhar depois desses dois itens. O que a
+C′ dá e eles não dão continua valendo: o initramfs conferível pelo hash e igual
+ao que bootou naquele dia.
