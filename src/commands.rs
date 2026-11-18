@@ -224,6 +224,14 @@ pub fn pacman_status() -> Result<()> {
 
 /// `snapg pacman on|off`.
 pub fn pacman_switch(on: bool) -> Result<()> {
+    let status = switch_pacman_hooks(on)?;
+    crate::ui::pacman::print_hook_switched(on, &status);
+    Ok(())
+}
+
+/// Liga (`on`: snapg) ou desliga (snap-pac) os hooks e grava a escolha. É o
+/// `snapg pacman on/off` e o item do `snapg setup`; devolve o estado depois.
+pub fn switch_pacman_hooks(on: bool) -> Result<pacman_hooks::Status> {
     let dirs = pacman_hooks::Dirs::system_default();
     let before = pacman_hooks::status(&dirs);
     if on {
@@ -232,8 +240,7 @@ pub fn pacman_switch(on: bool) -> Result<()> {
         pacman_hooks::disable(&dirs, &before)?;
     }
     pacman_hooks::record_choice(on)?;
-    crate::ui::pacman::print_hook_switched(on, &pacman_hooks::status(&dirs));
-    Ok(())
+    Ok(pacman_hooks::status(&dirs))
 }
 
 /// `snapg log`: só leitura, como o `list`.

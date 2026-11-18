@@ -279,6 +279,11 @@ pub fn warn(args: fmt::Arguments<'_>) {
 
 /// Erro no stderr: `✗` vermelho, alinhado ao conteúdo.
 pub fn fail(args: fmt::Arguments<'_>) {
+    if hook_output() {
+        let brand = style("SnapGroup").for_stderr().color256(BRAND_COLOR).bold();
+        eprintln!("{HOOK_INDENT}{brand} {} {args}", style("✗").for_stderr().red().bold());
+        return;
+    }
     eprintln!("{CONTENT_INDENT}{} {args}", style("✗").for_stderr().red().bold());
     set_screen(Screen::Content);
 }
