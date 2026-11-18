@@ -264,6 +264,13 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<bool> {
     doctor_ui::print_spacer();
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
     doctor_ui::print_report(target, &diagnosis);
+    // O sync se conferiu contra o root alvo; o boot vai subir o root que o
+    // Limine aponta. De um snapshot de resgate, ou com --root, os dois podem
+    // não ser o mesmo, que foi o incidente de junho. Fora do /boot deste
+    // sistema (recuperação por Live-USB) a conferência não se aplica.
+    if target.boot == Path::new("/boot") {
+        crate::commands::boot_blocks_reboot();
+    }
     Ok(true)
 }
 

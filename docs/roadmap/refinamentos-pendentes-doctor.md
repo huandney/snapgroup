@@ -21,13 +21,20 @@ bootou limpo.
   root participa. O doctor também oferece a ação quando detecta restore
   pendente de reboot.
 
+- **Backstop antes do reboot** (Fase 3, branch `feature/boot-safety`).
+  `boot::reboot_blockers` confere o `/boot` contra o root que vai bootar (o
+  `subvol=` da entrada do Limine, senão o fstab) com o mesmo `diagnose_boot` do
+  doctor, mais arquivos citados que sumiram e o fstab daquele root. Roda antes
+  de todo reboot que o snapg faz ou recomenda.
+- **Janela crítica endurecida** (branch `feature/boot-safety`).
+  `proc::critical_window` adia Ctrl-C/kill/SIGHUP durante o sync do `/boot`,
+  põe o `mkinitcpio` em grupo de processos próprio e segura um inibidor do
+  logind. A flag de debug para reprodução ficou de fora: não houve uso que a
+  pedisse.
+
 ## Pendente
 
 ### Desenhado na proposta, não construído
-3. **Backstop antes do reboot** (Fase 3) — invariante "subvol padrão casa com
-   `/boot`" como rede universal, independente de como o mismatch surgiu.
-4. **Endurecer a janela crítica** — bloquear Ctrl+C / `systemd-inhibit` durante o
-   sync, com flag de debug para reprodução.
 5. **Recibo `.snapg_boot_sync.json`** (Parte 1 Fase 2) — opcional, baixa
    prioridade.
 

@@ -974,6 +974,32 @@ pub(crate) fn confirm_reboot_now() -> Result<bool> {
     confirm("Reiniciar agora?")
 }
 
+/// Resultado da conferência antes do reboot: o que faria o próximo boot falhar
+/// (o snapg não reinicia) e os avisos que não impedem, cada um com o que fazer.
+/// Sem nada a dizer, não imprime.
+pub(crate) fn print_reboot_check(check: &crate::boot::RebootCheck) {
+    if !check.blocks.is_empty() {
+        result_section("Reboot barrado");
+    }
+    for block in &check.blocks {
+        crate::ui::term::fail(format_args!("{}", block.problem));
+        crate::ui::term::warn_detail(format_args!("{}", style(block.fix).dim()));
+    }
+    for warning in &check.warnings {
+        crate::ui::term::warn(format_args!("{}", warning.problem));
+        crate::ui::term::warn_detail(format_args!("{}", style(warning.fix).dim()));
+    }
+}
+
+pub(crate) fn print_reboot_check_failed(error: &anyhow::Error) {
+    result_section("Reboot barrado");
+    crate::ui::term::fail(format_args!("não deu para conferir o boot antes de reiniciar: {error:#}"));
+    crate::ui::term::warn_detail(format_args!(
+        "{}",
+        style("rode snapg doctor; reinicie à mão só se tiver certeza de que o /boot está certo").dim()
+    ));
+}
+
 pub(crate) fn print_manual_reboot() {
     result_section("Restaurado");
     result(format_args!(

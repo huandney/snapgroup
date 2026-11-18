@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Restore
+- **Feature**: Before snapg reboots, or tells you to reboot by hand, and after `snapg doctor` syncs this system's `/boot`, it checks `/boot` against the root that will actually boot (the `subvol=` of this filesystem's Limine entry, preferring the one the fstab also names), not only against the root the sync wrote for: kernel and modules (with the `/boot` kernel version read from the `vmlinuz` itself), `limine.conf` hashes, and that root's own fstab. Anything that would fail the next boot blocks the reboot with the reason and the fix; a referenced file that is missing from another entry only warns. It holds the Limine mutex and applies only with `/boot` on FAT32. It covers the June incident, where a doctor run from a rescue snapshot synced `/boot` to the rescue kernel while `@` had another.
+- **Feature**: While the `/boot` sync rewrites files (copy, `mkinitcpio`, hashes, verify), Ctrl-C, kill and a closed terminal are deferred instead of killing snapg halfway: a notice says snapg finishes `/boot` first, and the signal is delivered as soon as the window closes. Cancelling a pending restore keeps one window over the sync and the subvolume swap, so the signal never lands between them. `mkinitcpio` runs in its own process group, with stdin from `/dev/null`, so the terminal's Ctrl-C cannot reach it, and a logind block inhibitor holds shutdown, reboot, suspend, lid and power key for the same window.
+
 ## [0.14.0-beta] - 2026-11-18
 > Commits: `eeb7c7b`, `43a3fc8`, `0748100`, `937608f`, `3ab9301`, `3de03d8`, `f353940`, `0e5c348`
 
