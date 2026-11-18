@@ -2,7 +2,6 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// True se /boot está montado em FAT32 (vfat).
 pub fn is_fat32() -> bool {
@@ -16,7 +15,7 @@ pub fn is_fat32_path(boot: &Path) -> bool {
 }
 
 pub fn boot_fstype(boot: &Path) -> Result<String> {
-    Command::new("findmnt")
+    crate::proc::command("findmnt")
         .args(["-no", "FSTYPE", "--target"])
         .arg(boot)
         .output()
@@ -235,8 +234,15 @@ impl CancelBootSync {
     }
 }
 
+/// `/boot` é FAT32? Erro do `findmnt` vira erro, não "não": no cancelamento,
+/// um "não" por engano pularia o sync e deixaria o `/boot` no kernel do
+/// sistema que sai, sem pendência que avise.
+pub(crate) fn boot_is_fat32() -> Result<bool> {
+    Ok(boot_fstype(Path::new("/boot"))?.eq_ignore_ascii_case("vfat"))
+}
+
 pub(crate) fn sync_fat32_before_cancel(remaining_root: &Path) -> Result<Option<CancelBootSync>> {
-    if !is_fat32() {
+    if !boot_is_fat32()? {
         return Ok(None);
     }
     let mut panel = crate::ui::boot_sync::BootSyncPanel::cancel_before_btrfs();
@@ -540,7 +546,7 @@ pub fn detect_rescue_boot() -> Result<Option<RescueContext>> {
 }
 
 fn findmnt_field(field: &str, target: &Path) -> Result<String> {
-    let out = Command::new("findmnt")
+    let out = crate::proc::command("findmnt")
         .args(["-no", field, "--target"])
         .arg(target)
         .output()
@@ -613,8 +619,11 @@ pub fn running_kernel() -> Option<String> {
 /// `/boot` com o do kernel rodando. `?` se não casar (ex: `/boot` tem outro
 /// kernel que não o em execução) — o nome só sai de uma comparação byte-a-byte,
 /// já que o arquivo não traz a versão.
+/// O kernel do /boot: o em execução quando o `vmlinuz` é o dele; senão a
+/// versão gravada no próprio `vmlinuz` (o caso de um /boot descasado, que é
+/// quando a versão mais importa).
 pub fn boot_kernel_label(boot: &Path) -> String {
-    boot_kernel_version(boot).unwrap_or_else(|| "?".to_string())
+    boot_kernel_version(boot).unwrap_or_else(|| boot_vmlinuz_versions(boot))
 }
 
 fn boot_kernel_version(boot: &Path) -> Option<String> {
@@ -841,13 +850,9 @@ fn regen_initramfs(
     // que o temp seja classificado como artefato de boot por `scan_boot_dir`.
     let tmp = tmp_sibling(out)?;
 
-    // Grupo de processos próprio: o Ctrl-C do terminal vai para o grupo da
-    // frente e mataria o mkinitcpio no meio, mesmo com o snapg adiando o sinal.
-    // Fora do grupo da frente, ler o terminal pararia o processo (SIGTTIN) com
-    // o snapg esperando e o Ctrl-C adiado: o stdin vem do /dev/null.
-    use std::os::unix::process::CommandExt;
-    let mut cmd = Command::new("mkinitcpio");
-    cmd.process_group(0).stdin(std::process::Stdio::null());
+    // Dentro da janela crítica: `proc::command` tira o mkinitcpio do grupo do
+    // terminal (o Ctrl-C não o mata no meio) e dá a ele o stdin do /dev/null.
+    let mut cmd = crate::proc::command("mkinitcpio");
     cmd.args(["--nopost", "-c"])
         .arg(config)
         .args(["-k", kver, "-r"])
@@ -1410,7 +1415,14 @@ const FIX_DOCTOR: &str = "rode snapg doctor antes de reiniciar";
 pub fn check_before_reboot() -> Result<RebootCheck> {
     let boot = Path::new("/boot");
     let uuid = crate::btrfs::fs_uuid("/")?;
-    let conf = fs::read_to_string(limine_conf_path(boot)).unwrap_or_default();
+    // Antes de ler o limine.conf: lido no meio de uma reescrita, ele não traria
+    // a entrada do root, e a conferência cairia no fstab do sistema em execução.
+    let _limine = lock_limine_mutex()?;
+    let conf = match fs::read_to_string(limine_conf_path(boot)) {
+        Ok(conf) => conf,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).context("ler o limine.conf"),
+    };
     let fstab = default_root_subvol();
     let Some(subvol) = limine_root_subvol(&conf, &uuid, fstab.as_deref()).or(fstab) else {
         return Ok(RebootCheck::default()); // root fora de subvolume: nada a casar
@@ -1422,7 +1434,6 @@ pub fn check_before_reboot() -> Result<RebootCheck> {
         if !is_fat32_path(boot) && !fstab_declares_vfat_boot(&root, boot) {
             return Ok(RebootCheck::default());
         }
-        let _limine = lock_limine_mutex()?;
         check_root_against_boot(&root, &subvol, boot)
     })();
     let _ = crate::btrfs::umount_toplevel(&mount);
@@ -1452,8 +1463,7 @@ fn check_root_against_boot(root: &Path, subvol: &str, boot: &Path) -> Result<Reb
         BootHealth::NativeBoot | BootHealth::Synced => None,
         BootHealth::NeedsSync(BootIssue::KernelMismatch) => Some(format!(
             "o / que vai bootar ({subvol}, kernel {}) não casa com o kernel do /boot ({})",
-            diagnosis.root_kernel,
-            boot_vmlinuz_versions(boot)
+            diagnosis.root_kernel, diagnosis.boot_kernel
         )),
         BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
             Some("um sync do /boot foi interrompido e não terminou".to_string())
@@ -1486,11 +1496,19 @@ fn check_root_against_boot(root: &Path, subvol: &str, boot: &Path) -> Result<Reb
 
 /// Versões dos kernels no /boot, lidas de dentro de cada `vmlinuz`.
 fn boot_vmlinuz_versions(boot: &Path) -> String {
+    // A string da versão fica nos primeiros KB: ler o vmlinuz inteiro seriam
+    // ~15 MB do FAT32 por kernel.
+    let header = |path: &PathBuf| -> Option<Vec<u8>> {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        fs::File::open(path).ok()?.take(VMLINUZ_HEADER_BYTES).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
     let mut versions: Vec<String> = discover_kernel_groups(boot)
         .unwrap_or_default()
         .iter()
         .flat_map(|g| &g.vmlinuz_paths)
-        .filter_map(|p| fs::read(p).ok())
+        .filter_map(header)
         .filter_map(|bytes| vmlinuz_version(&bytes))
         .collect();
     versions.sort();
@@ -1500,6 +1518,10 @@ fn boot_vmlinuz_versions(boot: &Path) -> String {
     }
     versions.join(", ")
 }
+
+/// Onde a string da versão de um bzImage cabe com folga (o setup do kernel tem
+/// poucos KB).
+const VMLINUZ_HEADER_BYTES: u64 = 64 * 1024;
 
 /// A versão gravada no cabeçalho de boot de um bzImage x86: o campo
 /// `kernel_version` (0x20E) aponta, a partir de 0x200, para a string
@@ -1524,7 +1546,10 @@ fn limine_root_subvol(conf: &str, uuid: &str, fstab: Option<&str>) -> Option<Str
     let ours = format!("root=UUID={uuid}");
     let candidates: Vec<String> = conf
         .lines()
-        .filter_map(|line| line.trim().strip_prefix("cmdline:"))
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("cmdline:").or_else(|| line.strip_prefix("kernel_cmdline:"))
+        })
         .filter(|cmdline| {
             let args: Vec<&str> = cmdline.split_whitespace().collect();
             !args.iter().any(|a| a.starts_with("root=UUID=")) || args.contains(&ours.as_str())
@@ -1702,7 +1727,7 @@ fn limine_boot_path_from_line(boot: &Path, line: &str) -> Option<PathBuf> {
 }
 
 fn blake2b_hex(path: &Path) -> Result<String> {
-    let out = Command::new("b2sum")
+    let out = crate::proc::command("b2sum")
         .arg(path)
         .output()
         .with_context(|| format!("calcular BLAKE2B de {}", path.display()))?;
@@ -2371,6 +2396,9 @@ mod tests {
         let two = "cmdline: rootflags=subvol=@old\ncmdline: rootflags=subvol=@\n";
         assert_eq!(limine_root_subvol(two, "28b7", Some("@")).as_deref(), Some("@"));
         assert_eq!(limine_root_subvol("cmdline: quiet root=/dev/sda2\n", "28b7", None), None);
+        // O alias antigo do Limine.
+        let alias = "KERNEL_CMDLINE: x\n  kernel_cmdline: rw rootflags=subvol=@ root=UUID=28b7\n";
+        assert_eq!(limine_root_subvol(alias, "28b7", None).as_deref(), Some("@"));
     }
 
     #[test]

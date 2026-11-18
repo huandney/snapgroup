@@ -61,17 +61,25 @@ const TERMINATION_SIGNALS: [libc::c_int; 4] =
 /// processo do mesmo jeito. O sinal recebido durante a seção é descartado, não
 /// adiado — a seção dura milissegundos.
 pub struct SignalShield {
-    previous: [libc::sighandler_t; 4],
+    /// `None` dentro de uma janela crítica: lá os sinais já ficam guardados,
+    /// e ignorar aqui descartaria um Ctrl-C que a janela prometeu entregar.
+    previous: Option<[libc::sighandler_t; 4]>,
 }
 
 pub fn shield_termination_signals() -> SignalShield {
+    if window_open() {
+        return SignalShield { previous: None };
+    }
     let previous = TERMINATION_SIGNALS.map(|sig| unsafe { libc::signal(sig, libc::SIG_IGN) });
-    SignalShield { previous }
+    SignalShield { previous: Some(previous) }
 }
 
 impl Drop for SignalShield {
     fn drop(&mut self) {
-        for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(self.previous) {
+        let Some(previous) = self.previous else {
+            return;
+        };
+        for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(previous) {
             unsafe { libc::signal(sig, handler) };
         }
     }
@@ -83,9 +91,15 @@ impl Drop for SignalShield {
 /// vive:
 ///
 /// - Ctrl-C, kill e fechamento do terminal ficam adiados, não descartados: um
-///   aviso diz que o snapg termina o `/boot` primeiro, e o sinal é entregue
-///   quando a janela fecha. Ignorar em silêncio, como o `SignalShield`, serve
-///   para milissegundos; aqui o usuário apertaria Ctrl-C sem resposta.
+///   aviso diz que o snapg termina o `/boot` primeiro. O sinal não é entregue
+///   quando a janela fecha, mas no próximo ponto seguro
+///   (`deliver_deferred_signal`): o chamador ainda precisa dizer se o sync
+///   deu certo e armar a limpeza. Ignorar em silêncio, como o `SignalShield`,
+///   serve para milissegundos; aqui o usuário apertaria Ctrl-C sem resposta.
+/// - Todo processo filho criado com `command()` enquanto a janela está aberta
+///   vai para um grupo de processos próprio, com o stdin do `/dev/null`: o
+///   handler não passa para o filho no `exec`, e o Ctrl-C do terminal vai para
+///   o grupo da frente inteiro (um `b2sum` morto no meio faria o sync falhar).
 /// - O terminal que fecha (SIGHUP) passa o stdin/stdout/stderr para
 ///   `/dev/null`: a próxima linha da tela falharia e o `println!` derrubaria o
 ///   processo no meio do sync.
@@ -147,6 +161,41 @@ struct DeferredSignals {
 static DEFERRED_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 static WINDOW_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+fn window_open() -> bool {
+    WINDOW_DEPTH.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+/// `Command::new` para tudo que o snapg roda: dentro de uma janela crítica, o
+/// filho fica fora do grupo de processos do terminal e não lê dele (ver
+/// `CriticalWindow`).
+pub fn command(program: &str) -> Command {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(program);
+    if window_open() {
+        cmd.process_group(0).stdin(Stdio::null());
+    }
+    cmd
+}
+
+/// Há um sinal guardado esperando o ponto seguro?
+pub fn signal_pending() -> bool {
+    DEFERRED_SIGNAL.load(std::sync::atomic::Ordering::SeqCst) != 0
+}
+
+/// Ponto seguro: fora de qualquer janela, entrega o sinal que ficou guardado
+/// nela. Os handlers de antes já voltaram, então o efeito é o de sempre
+/// (desmontar o top-level e sair com o status do sinal). Chamado antes de
+/// perguntar algo, antes de reiniciar e no fim do comando.
+pub fn deliver_deferred_signal() {
+    if window_open() {
+        return;
+    }
+    let pending = DEFERRED_SIGNAL.swap(0, std::sync::atomic::Ordering::SeqCst);
+    if pending != 0 {
+        unsafe { libc::raise(pending) };
+    }
+}
+
 fn defer_termination_signals() -> DeferredSignals {
     if WINDOW_DEPTH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
         return DeferredSignals { previous: None };
@@ -156,7 +205,7 @@ fn defer_termination_signals() -> DeferredSignals {
 }
 
 const DEFERRED_NOTICE: &[u8] =
-    "\n   ! o snapg sai assim que o /boot estiver pronto: interromper agora deixaria o boot pela metade\n".as_bytes();
+    "\n   ! o Ctrl-C vale assim que o /boot estiver pronto: interromper agora deixaria o boot pela metade\n".as_bytes();
 
 /// Só chamadas async-signal-safe: atômicos, `write`, `open` e `dup2`.
 extern "C" fn on_deferred(sig: libc::c_int) {
@@ -187,12 +236,7 @@ impl Drop for DeferredSignals {
         for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(previous) {
             unsafe { libc::signal(sig, handler) };
         }
-        let pending = DEFERRED_SIGNAL.swap(0, std::sync::atomic::Ordering::SeqCst);
-        if pending != 0 {
-            // O handler de antes faz a limpeza de sempre (desmontar o
-            // top-level) e encerra com o status do sinal.
-            unsafe { libc::raise(pending) };
-        }
+        // O sinal guardado fica para `deliver_deferred_signal`.
     }
 }
 
@@ -213,8 +257,10 @@ mod tests {
             unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
             let window = defer_termination_signals();
             unsafe { libc::raise(libc::SIGINT) };
-            unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) };
             drop(window);
+            // Fechar a janela não entrega: o chamador ainda tem o que dizer.
+            unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) };
+            deliver_deferred_signal();
             unsafe { libc::_exit(0) };
         }
         unsafe { libc::close(fds[1]) };
@@ -223,6 +269,22 @@ mod tests {
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
         assert!(libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGINT);
+    }
+
+    #[test]
+    fn children_started_in_a_window_leave_the_terminal_group() {
+        // A janela é do processo inteiro: confere num filho.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            let _window = defer_termination_signals();
+            let mut child = command("sh").args(["-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$$\" ]"]).spawn().unwrap();
+            let ok = child.wait().unwrap().success();
+            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+        }
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "o filho ficou no grupo do pai");
     }
 
     #[test]
@@ -239,8 +301,14 @@ mod tests {
             let inner = defer_termination_signals();
             unsafe { libc::raise(libc::SIGINT) };
             drop(inner);
+            // Dentro da de fora, o ponto seguro ainda não é seguro.
+            deliver_deferred_signal();
+            // E o escudo da troca de subvolumes não descarta o sinal guardado.
+            let shield = shield_termination_signals();
+            drop(shield);
             unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) };
             drop(outer);
+            deliver_deferred_signal();
             unsafe { libc::_exit(0) };
         }
         unsafe { libc::close(fds[1]) };

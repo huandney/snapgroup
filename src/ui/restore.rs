@@ -1000,6 +1000,21 @@ pub(crate) fn print_reboot_check_failed(error: &anyhow::Error) {
     ));
 }
 
+/// "Reiniciar depois" com a conferência barrando: o restore está aplicado e
+/// pendente, e reiniciar agora falharia.
+pub(crate) fn print_restored_reboot_blocked() {
+    result_section("Restaurado");
+    result(format_args!(
+        "{} {}",
+        style("!").yellow().bold(),
+        style("restauração aplicada, pendente de reboot: não reinicie até resolver o boot acima").bold()
+    ));
+    result(format_args!(
+        "{}",
+        style("depois do snapg doctor, reinicie; ou desista com snapg restore (cancelar)").dim()
+    ));
+}
+
 pub(crate) fn print_manual_reboot() {
     result_section("Restaurado");
     result(format_args!(

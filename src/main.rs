@@ -30,7 +30,19 @@ fn main() -> Result<()> {
     // decidir qual binário o root executa. Único thread neste ponto.
     unsafe { std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin") };
     btrfs::unmount_on_termination();
-    match cli.command {
+    let result = dispatch(cli.command);
+    // Ponto seguro de último caso: um Ctrl-C guardado numa janela crítica que
+    // nenhum ponto anterior entregou vale aqui, com o comando já terminado.
+    proc::deliver_deferred_signal();
+    // O reboot barrado já disse o motivo na tela; falta o status de saída.
+    if result.as_ref().is_err_and(|e| e.is::<commands::RebootBlocked>()) {
+        std::process::exit(1);
+    }
+    result
+}
+
+fn dispatch(command: cli::Command) -> Result<()> {
+    match command {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
         cli::Command::Save { description: _, pacman: true } => {
