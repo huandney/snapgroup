@@ -88,14 +88,28 @@ fn lock_limine_mutex() -> Result<Option<fs::File>> {
             return Err(err).with_context(|| format!("flock {LIMINE_LOCK_PATH}"));
         }
         if std::time::Instant::now() >= deadline {
-            bail!(
-                "outro processo segura o lock do limine ({LIMINE_LOCK_PATH}) há mais de 30s \
-                 (pacman/mkinitcpio em andamento?). Aguarde ele terminar e tente de novo."
-            );
+            return Err(LimineBusy.into());
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }
+
+/// O mutex do limine não saiu em 30 s. Tipo próprio para quem chama dizer o
+/// que ficou sem fazer (o sync, a conferência do boot).
+#[derive(Debug)]
+struct LimineBusy;
+
+impl std::fmt::Display for LimineBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "outro processo segura o lock do limine ({LIMINE_LOCK_PATH}) há mais de 30s \
+             (pacman/mkinitcpio em andamento?). Aguarde ele terminar e tente de novo."
+        )
+    }
+}
+
+impl std::error::Error for LimineBusy {}
 
 /// Uma UKI empacota kernel + initramfs + cmdline num único `.efi`. O sync só
 /// sabe copiar o vmlinuz e regenerar o initramfs; aplicado a uma UKI, trocaria
@@ -1356,12 +1370,13 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
 }
 
 /// O que a conferência do `limine.conf` achou: quantos arquivos com hash
-/// registrado foram conferidos e quais não batem (caminho sob o /boot, sem a
-/// pasta do machine-id).
+/// registrado foram conferidos, quais não batem e quais o `limine.conf` cita
+/// mas não existem (caminhos sob o /boot, sem a pasta do machine-id).
 #[derive(Debug, PartialEq)]
 pub struct HashReport {
     pub checked: usize,
     pub mismatched: Vec<String>,
+    pub missing: Vec<String>,
 }
 
 /// Verifica que cada entrada do limine.conf com hash registrado bate com o
@@ -1374,14 +1389,21 @@ fn limine_hashes_match(boot: &Path) -> Result<bool> {
 /// com o mutex do limine: os hooks dele podem estar reescrevendo o
 /// `limine.conf`. `None`: sem `limine.conf`, nada a conferir.
 pub fn check_after_transaction() -> Result<Option<HashReport>> {
-    let _limine = lock_limine_mutex()?;
+    let _limine = match lock_limine_mutex() {
+        Err(e) if e.is::<LimineBusy>() => bail!(
+            "boot não conferido: outro processo segura a trava do Limine há mais de 30 s\n\
+             rode snapg doctor antes de reiniciar"
+        ),
+        other => other?,
+    };
     limine_hash_report(Path::new("/boot"))
 }
 
-/// Só conta linhas que têm `#hash` E cujo arquivo existe: hash ausente não é
-/// validado pelo Limine, e arquivo ausente já é pego pelo scan de kernels. O
-/// mesmo arquivo em várias entradas (os snapshots do limine-snapper-sync
-/// repetem o initramfs) é lido uma vez.
+/// Só confere hash nas linhas que têm `#hash`: hash ausente não é validado
+/// pelo Limine. Um arquivo citado que não existe vai para `missing` (o gate do
+/// sync o ignora: lá o scan de kernels já pega). O mesmo arquivo em várias
+/// entradas (os snapshots do limine-snapper-sync repetem o initramfs) é lido
+/// uma vez e aparece uma vez.
 fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
     let path = limine_conf_path(boot);
     if !path.exists() {
@@ -1390,7 +1412,8 @@ fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
     let content = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
     let mut current_protocol = String::new();
     let mut hashes: HashMap<PathBuf, String> = HashMap::new();
-    let mut mismatched = Vec::new();
+    let mut mismatched: Vec<PathBuf> = Vec::new();
+    let mut missing: Vec<PathBuf> = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1405,15 +1428,18 @@ fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
             continue;
         }
 
-        let Some(recorded) = limine_recorded_hash(line) else {
-            continue;
-        };
         let Some(boot_path) = limine_boot_path_from_line(boot, line) else {
             continue;
         };
         if !boot_path.exists() {
+            if !missing.contains(&boot_path) {
+                missing.push(boot_path);
+            }
             continue;
         }
+        let Some(recorded) = limine_recorded_hash(line) else {
+            continue;
+        };
         let actual = match hashes.get(&boot_path) {
             Some(hash) => hash.clone(),
             None => {
@@ -1422,12 +1448,12 @@ fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
                 hash
             }
         };
-        let shown = boot_file_label(boot, &boot_path);
-        if actual != recorded && !mismatched.contains(&shown) {
-            mismatched.push(shown);
+        if actual != recorded && !mismatched.contains(&boot_path) {
+            mismatched.push(boot_path);
         }
     }
-    Ok(Some(HashReport { checked: hashes.len(), mismatched }))
+    let labels = |paths: Vec<PathBuf>| paths.iter().map(|p| boot_file_label(boot, p)).collect();
+    Ok(Some(HashReport { checked: hashes.len(), mismatched: labels(mismatched), missing: labels(missing) }))
 }
 
 /// `0262…3042/linux-cachyos/initramfs` → `linux-cachyos/initramfs`: a pasta do
@@ -2072,17 +2098,61 @@ mod tests {
 ";
         std::fs::write(base.join("limine.conf"), conf).unwrap();
         refresh_limine_boot_hashes(&base).unwrap();
-        assert_eq!(limine_hash_report(&base).unwrap(), Some(HashReport { checked: 2, mismatched: vec![] }));
+        assert_eq!(limine_hash_report(&base).unwrap(), Some(HashReport { checked: 2, mismatched: vec![], missing: vec![] }));
 
         // Um initramfs regenerado sem o limine.conf acompanhar.
         std::fs::write(entry.join("initramfs"), "initramfs novo").unwrap();
         assert_eq!(
             limine_hash_report(&base).unwrap(),
-            Some(HashReport { checked: 2, mismatched: vec!["linux-cachyos/initramfs".to_string()] })
+            Some(HashReport { checked: 2, mismatched: vec!["linux-cachyos/initramfs".to_string()], missing: vec![] })
+        );
+
+        // O kernel sumiu e o limine.conf ainda aponta para ele.
+        std::fs::remove_file(entry.join("vmlinuz")).unwrap();
+        assert_eq!(
+            limine_hash_report(&base).unwrap(),
+            Some(HashReport {
+                checked: 1,
+                mismatched: vec!["linux-cachyos/initramfs".to_string()],
+                missing: vec!["linux-cachyos/vmlinuz".to_string()],
+            })
         );
 
         std::fs::remove_file(base.join("limine.conf")).unwrap();
         assert_eq!(limine_hash_report(&base).unwrap(), None);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn same_label_in_two_machine_ids_counts_twice() {
+        use super::{HashReport, limine_hash_report};
+        let base = std::env::temp_dir().join(format!("snapg_test_hash_mids_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let conf: String = ["0262533c4ca04359a5f379b8e3f83042", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+            .iter()
+            .map(|mid| {
+                let dir = base.join(mid).join("linux-cachyos");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("initramfs"), mid).unwrap();
+                format!("/+{mid}\n  protocol: linux\n  module_path: boot():/{mid}/linux-cachyos/initramfs#00\n")
+            })
+            .collect();
+        std::fs::write(base.join("limine.conf"), conf).unwrap();
+        let report = limine_hash_report(&base).unwrap().unwrap();
+        assert_eq!(report, HashReport { checked: 2, mismatched: vec!["linux-cachyos/initramfs".to_string(); 2], missing: vec![] });
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn boot_hook_triggers_cover_the_pending_ones() {
+        // Tudo que faz o pending-check barrar a transação reescreve o /boot:
+        // a conferência do boot tem de rodar nos mesmos casos.
+        let targets = |hook: &str| -> Vec<String> {
+            hook.lines().filter_map(|l| l.strip_prefix("Target = ")).map(str::to_string).collect()
+        };
+        let boot = targets(include_str!("../pacman/zz-snapgroup-boot.hook"));
+        for target in targets(include_str!("../pacman/00-snapgroup-pending.hook")) {
+            assert!(boot.contains(&target), "zz-snapgroup-boot.hook sem o gatilho {target}");
+        }
     }
 }

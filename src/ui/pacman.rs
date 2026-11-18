@@ -160,24 +160,37 @@ pub(crate) fn print_hook_failed(error: &anyhow::Error) {
 }
 
 /// `snapg boot-check`, no fim da transação: o `limine.conf` confere com o
-/// que está no /boot? Um hash que não bate faz o Limine recusar a entrada no
-/// próximo boot.
+/// que está no /boot? Um hash que não bate, ou um arquivo que sumiu, faz o
+/// Limine recusar a entrada no próximo boot. Sem `limine.conf` (outro
+/// bootloader) não diz nada: a linha apareceria a cada kernel.
 pub(crate) fn print_boot_check(report: Option<&crate::boot::HashReport>) {
     let Some(report) = report else {
-        hook_ok(format_args!("{}", style("sem limine.conf: nada a conferir").dim()));
         return;
     };
-    let Some(first) = report.mismatched.first() else {
-        let files = count_text(report.checked, "arquivo", "arquivos");
-        hook_ok(format_args!("{}", style(format!("boot conferido · {files} do limine.conf, hashes ok")).dim()));
+    let bad = [(&report.missing, "o Limine não acha"), (&report.mismatched, "o Limine vai recusar")];
+    let mut warned = false;
+    for (files, what) in bad {
+        let Some(first) = files.first() else {
+            continue;
+        };
+        let more = match files.len() {
+            1 => String::new(),
+            n => format!(" (e mais {})", n - 1),
+        };
+        let why = if what.ends_with("recusar") { ": o hash não confere" } else { "" };
+        warn(format_args!("{}", style(format!("{what} {first}{more}{why}")).yellow()));
+        warned = true;
+    }
+    if warned {
+        crate::ui::term::warn_detail(format_args!("rode snapg doctor antes de reiniciar"));
         return;
-    };
-    let more = match report.mismatched.len() {
-        1 => String::new(),
-        n => format!(" (e mais {})", n - 1),
-    };
-    warn(format_args!("{}", style(format!("o Limine vai recusar {first}{more}: o hash não confere")).yellow()));
-    crate::ui::term::warn_detail(format_args!("rode snapg doctor antes de reiniciar"));
+    }
+    if report.checked == 0 {
+        crate::ui::term::hook_note(format_args!("nenhum hash no limine.conf: nada a conferir"));
+        return;
+    }
+    let files = count_text(report.checked, "arquivo", "arquivos");
+    hook_ok(format_args!("{}", style(format!("boot conferido · {files} do limine.conf, hashes ok")).dim()));
 }
 
 /// Aviso do hook quando o snap-pac também está ligado.

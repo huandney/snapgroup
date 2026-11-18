@@ -203,6 +203,11 @@ fn hook_output() -> bool {
     HOOK_OUTPUT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Linha neutra do hook, sem símbolo: nada aconteceu, nada a temer.
+pub fn hook_note(args: fmt::Arguments<'_>) {
+    println!("{HOOK_INDENT}{} {}", style("SnapGroup").color256(BRAND_COLOR).bold(), style(args.to_string()).dim());
+}
+
 /// Linha de resultado do hook: `SnapGroup ✓ Antes de paru -Syu · …`.
 pub fn hook_ok(args: fmt::Arguments<'_>) {
     println!("{HOOK_INDENT}{} {} {args}", style("SnapGroup").color256(BRAND_COLOR).bold(), style("✓").green().bold());

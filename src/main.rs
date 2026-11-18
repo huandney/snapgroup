@@ -34,8 +34,9 @@ fn main() -> Result<()> {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
         cli::Command::Save { description: _, pacman: true } => {
-            commands::prepare_hook_output();
-            let saved = lock::acquire_waiting(std::time::Duration::from_secs(10)).and_then(|_lock| commands::save_pacman());
+            let cmdline = commands::prepare_hook_output();
+            let saved =
+                lock::acquire_waiting(std::time::Duration::from_secs(10)).and_then(|_lock| commands::save_pacman(cmdline));
             hook_exit(saved)
         }
         cli::Command::Save { description, pacman: false } => {
@@ -70,7 +71,11 @@ fn main() -> Result<()> {
             commands::pacman_switch(matches!(action, cli::PacmanAction::On))
         }
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
-        cli::Command::PendingCheck => commands::pending_check(),
+        // Com AbortOnFail: o código de saída 1 do hook_exit aborta a transação.
+        cli::Command::PendingCheck => {
+            commands::prepare_hook_output();
+            hook_exit(commands::pending_check())
+        }
         // Só lê: sem o lock do snapg, uma tela do snapg aberta não atrasa o pacman.
         cli::Command::BootCheck => {
             commands::prepare_hook_output();
@@ -94,5 +99,5 @@ fn hook_exit(result: Result<()>) -> Result<()> {
         ui::pacman::print_hook_failed(error);
         std::process::exit(1);
     }
-    result
+    Ok(())
 }
