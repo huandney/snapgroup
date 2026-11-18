@@ -1,6 +1,9 @@
 # Proposta: `snapg migrate boot`
 
-- **Status:** proposta futura, não implementada.
+- **Status:** proposta futura, não implementada. Desde 2026-11-18: com o
+  Limine, `/boot` em Btrfs não é possível (ele lê só FAT e ISO9660); esta
+  migração pressupõe trocar de bootloader. Ver
+  `docs/proposals/staged-boot-pairs.md`.
 - **Data:** 2026-06-09.
 - **Relacionado:** `docs/architecture/boot-and-standalone-decision.md`,
   `docs/architecture/initramfs-stale-on-restore.md`,
