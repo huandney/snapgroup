@@ -50,12 +50,14 @@ pub fn boot_fstype(boot: &Path) -> Result<String> {
 /// (um `pacman -Syu` sem reboot deixa kernel novo no FAT32 e antigo
 /// rodando; pular sync nesse caso quebra o boot seguinte).
 const LIMINE_MUTEX_LIB: &str = "/usr/lib/limine/limine-mutex";
-const LIMINE_LOCK_PATH: &str = "/tmp/limine-global.lock";
+/// O `BOOT_PARTITION_LOCK` do `limine-mutex` (limine-snapper-sync 1.32): o
+/// `/tmp/limine-global.lock` de antes não é mais usado por ninguém.
+const LIMINE_LOCK_PATH: &str = "/run/lock/boot-partition.lock";
 
 /// Adquire o mutex global do ecossistema limine antes de escrever em /boot.
 ///
 /// Os pacman hooks, o limine-entry-tool e os scripts de mkinitcpio serializam
-/// escritas no /boot com `flock` em /tmp/limine-global.lock (timeout de 30s).
+/// escritas no /boot com `flock` em /run/lock/boot-partition.lock (timeout de 30s).
 /// O lock próprio do snapg só serializa instâncias do snapg; sem este, snapg e
 /// um hook de pacman podiam escrever no /boot ao mesmo tempo. `Ok(None)`
 /// quando o limine não está instalado — não cria lixo em /tmp.
@@ -65,6 +67,7 @@ fn lock_limine_mutex() -> Result<Option<fs::File>> {
     }
     // Sem truncate: o arquivo é compartilhado com o tooling do limine e o
     // lock é no inode, não no conteúdo.
+    fs::create_dir_all("/run/lock").context("criar /run/lock")?;
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
