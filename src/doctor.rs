@@ -164,6 +164,9 @@ pub fn handle_boot_sync_failure(
     doctor_ui::print_boot_sync_failure(&error, recovery);
 
     print_diagnosis(root, boot)?;
+    // Ponto seguro: o "não reinicie" já está na tela. Um Ctrl-C guardado no
+    // sync que falhou vale aqui, antes de perguntar se tenta de novo.
+    crate::proc::deliver_deferred_signal();
 
     if !confirm("Tentar sincronizar /boot novamente agora?")? {
         bail!("restauração incompleta: /boot dessincronizado, reboot bloqueado");
@@ -268,8 +271,8 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<bool> {
     // Limine aponta. De um snapshot de resgate, ou com --root, os dois podem
     // não ser o mesmo, que foi o incidente de junho. Fora do /boot deste
     // sistema (recuperação por Live-USB) a conferência não se aplica.
-    if target.boot == Path::new("/boot") {
-        crate::commands::boot_blocks_reboot();
+    if target.boot == Path::new("/boot") && crate::commands::boot_blocks_reboot() {
+        return Err(crate::commands::RebootBlocked.into());
     }
     Ok(true)
 }

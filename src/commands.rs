@@ -2380,20 +2380,34 @@ fn finish_restore_with_undo(
     done: &[rollback::Done],
     mount_path: &Path,
 ) -> Result<()> {
+    // Ctrl-C guardado durante o sync: o usuário quer sair. Sai como no
+    // "reiniciar depois" (cleanup armado, restore pendente explicado), sem
+    // abrir o menu.
+    if crate::proc::signal_pending() {
+        let later = reboot_later(done, mount_path);
+        crate::proc::deliver_deferred_signal();
+        return later;
+    }
     match crate::ui::restore::select_post_restore_action()? {
         PostRestoreAction::Undo => undo_restore_before_reboot(done, mount_path),
         PostRestoreAction::RebootNow => {
             arm_cleanup_for_restore(done, mount_path)?;
             reboot_now()
         }
-        PostRestoreAction::RebootLater => {
-            arm_cleanup_for_restore(done, mount_path)?;
-            if !boot_blocks_reboot() {
-                crate::ui::restore::print_manual_reboot();
-            }
-            Ok(())
-        }
+        PostRestoreAction::RebootLater => reboot_later(done, mount_path),
     }
+}
+
+/// "Reiniciar depois": o restore está aplicado e pendente de reboot. Com a
+/// conferência barrando, a tela diz isso e que não é para reiniciar ainda.
+fn reboot_later(done: &[rollback::Done], mount_path: &Path) -> Result<()> {
+    arm_cleanup_for_restore(done, mount_path)?;
+    if boot_blocks_reboot() {
+        crate::ui::restore::print_restored_reboot_blocked();
+        return Err(RebootBlocked.into());
+    }
+    crate::ui::restore::print_manual_reboot();
+    Ok(())
 }
 
 fn undo_restore_before_reboot(
@@ -2408,8 +2422,13 @@ fn undo_restore_before_reboot(
     // Uma janela só para o sync e a troca de subvolumes: um Ctrl-C adiado que
     // valesse no fim do sync mataria o snapg com o /boot já no kernel do
     // sistema que fica e o `@` ainda no restaurado. O sync abre a dele por
-    // dentro; o sinal espera esta fechar.
-    let _window = crate::proc::critical_window();
+    // dentro; o sinal espera o ponto seguro. Sem /boot a reescrever (restore
+    // só do /home, /boot no Btrfs), o escudo da troca basta.
+    let root_member = done.iter().find(|d| d.mountpoint == "/");
+    let _window = match root_member {
+        Some(_) if boot::boot_is_fat32()? => Some(crate::proc::critical_window()),
+        _ => None,
+    };
 
     // Sincroniza o /boot com o sistema que vai permanecer ANTES do swap dos
     // subvols: o backup_subvol é o chão vivo, o mesmo conteúdo que ocupará o
@@ -2418,7 +2437,7 @@ fn undo_restore_before_reboot(
     // inversa (swap primeiro), uma interrupção aqui deixava o /boot
     // dessincronizado já sem pending — invisível para o gate, só um doctor
     // explícito detectava.
-    let cancel_boot_sync = if let Some(root) = done.iter().find(|d| d.mountpoint == "/") {
+    let cancel_boot_sync = if let Some(root) = root_member {
         let remaining_root = mount_path.join(&root.backup_subvol);
         boot::sync_fat32_before_cancel(&remaining_root)
             .context("sincronizar /boot com o sistema atual; nada foi desfeito")?
@@ -2472,9 +2491,23 @@ fn done_is_regret_undo(done: &rollback::Done) -> bool {
         .starts_with(&rollback::undo_prefix(&done.current_subvol))
 }
 
+/// Reboot barrado pela conferência: o motivo já está na tela, e o `main` só
+/// sai com status 1 (um `snapg restore && reboot` não pode seguir em frente).
+#[derive(Debug)]
+pub struct RebootBlocked;
+
+impl std::fmt::Display for RebootBlocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("reboot barrado: o próximo boot falharia")
+    }
+}
+
+impl std::error::Error for RebootBlocked {}
+
 fn prompt_reboot() -> Result<()> {
+    crate::proc::deliver_deferred_signal();
     if boot_blocks_reboot() {
-        return Ok(());
+        return Err(RebootBlocked.into());
     }
     if !crate::ui::restore::confirm_reboot_now()? {
         crate::ui::restore::print_manual_reboot();
@@ -2484,8 +2517,9 @@ fn prompt_reboot() -> Result<()> {
 }
 
 fn reboot_now() -> Result<()> {
+    crate::proc::deliver_deferred_signal();
     if boot_blocks_reboot() {
-        return Ok(());
+        return Err(RebootBlocked.into());
     }
     reboot_unchecked()
 }
