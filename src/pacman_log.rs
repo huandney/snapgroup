@@ -132,19 +132,28 @@ fn known_op(op: &str) -> Option<&'static str> {
 /// Rótulo da coluna Origem: `pacman ↑14` (pacotes da transação do grupo) ou
 /// `manual`. Vazio quando nenhum grupo veio do pacman: a coluna não aparece.
 pub fn origin_labels(groups: &[Group]) -> HashMap<GroupId, String> {
+    origin_labels_from(groups, &runs(groups))
+}
+
+/// As transações de cada checkpoint do pacman, lidas uma vez: quem precisa da
+/// coluna Origem e de mais alguma coisa do log (o resumo do restore) parte daqui.
+pub fn runs(groups: &[Group]) -> HashMap<GroupId, Vec<Transaction>> {
+    groups.iter().filter(|g| group::is_pacman(g)).filter_map(|g| Some((g.id, of_group(g)?))).collect()
+}
+
+pub fn origin_labels_from(groups: &[Group], runs: &HashMap<GroupId, Vec<Transaction>>) -> HashMap<GroupId, String> {
     if !groups.iter().any(group::is_pacman) {
         return HashMap::new();
     }
-    groups.iter().map(|g| (g.id, origin_label(g))).collect()
+    groups.iter().map(|g| (g.id, origin_label(g, runs.get(&g.id)))).collect()
 }
 
-fn origin_label(group: &Group) -> String {
+fn origin_label(group: &Group, transactions: Option<&Vec<Transaction>>) -> String {
     if !group::is_pacman(group) {
         return "manual".to_string();
     }
-    let count = of_group(group).map(|txs| txs.iter().map(|tx| tx.changes.len()).sum::<usize>());
-    match count {
-        Some(n) => format!("pacman ↑{n}"),
+    match transactions {
+        Some(txs) => format!("pacman ↑{}", txs.iter().map(|tx| tx.changes.len()).sum::<usize>()),
         None => "pacman".to_string(),
     }
 }

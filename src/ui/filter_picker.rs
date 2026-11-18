@@ -3,7 +3,7 @@
 //! isso este é próprio; fora o Tab, ele se comporta igual (setas, enter, esc).
 
 use crate::config::RestoreFilter;
-use crate::ui::term::{CONTENT_INDENT, clear_screen, header, line};
+use crate::ui::term::{CONTENT_INDENT, clear_screen, content_width, header, line};
 use anyhow::{Context, Result};
 use console::{Key, style};
 
@@ -11,6 +11,8 @@ pub(crate) struct Item {
     /// Linha pronta, já cortada para a largura do terminal.
     pub(crate) text: String,
     pub(crate) pacman: bool,
+    /// Resumo mostrado embaixo da lista quando o cursor está no item.
+    pub(crate) detail: Vec<String>,
 }
 
 /// O que o seletor lembra entre uma abertura e outra no mesmo restore: voltar
@@ -21,7 +23,7 @@ pub(crate) struct PickState {
 }
 
 /// Linhas acima da lista (cabeçalho de 2, pergunta, filtro, colunas) e abaixo
-/// (branco, dica, cursor).
+/// (branco, dica, cursor), fora o resumo do item.
 const CHROME_LINES: usize = 8;
 
 /// Índice do item escolhido em `items`, ou `None` com Esc. Sem item do pacman
@@ -48,7 +50,12 @@ pub(crate) fn pick(
         let filter = state.filter;
         let visible = visible(items, filter);
         cursor = cursor.min(visible.len().saturating_sub(1));
-        let page = (term.size().0 as usize).saturating_sub(CHROME_LINES).max(1);
+        // O espaço do resumo é fixo dentro do recorte: a lista não pula quando
+        // o cursor passa de um checkpoint do pacman para um manual, e some
+        // quando nada à vista tem resumo (o filtro Manuais).
+        let detail_lines = visible.iter().map(|&i| items[i].detail.len()).max().unwrap_or(0);
+        let detail_chrome = if detail_lines > 0 { detail_lines + 1 } else { 0 };
+        let page = (term.size().0 as usize).saturating_sub(CHROME_LINES + detail_chrome).max(1);
         offset = scroll(offset, cursor, page);
 
         clear_screen();
@@ -64,6 +71,17 @@ pub(crate) fn pick(
         for (row, &index) in visible.iter().enumerate().skip(offset).take(page) {
             let marker = if row == cursor { ">" } else { " " };
             println!("{CONTENT_INDENT}{marker} {}", items[index].text);
+        }
+        if detail_lines > 0 {
+            println!();
+            let detail = visible.get(cursor).map(|&i| items[i].detail.as_slice()).unwrap_or_default();
+            for row in 0..detail_lines {
+                match detail.get(row) {
+                    // Na largura de agora: o resumo foi montado na da abertura.
+                    Some(text) => line(format_args!("{}", console::truncate_str(text, content_width(), "…"))),
+                    None => println!(),
+                }
+            }
         }
         println!();
         let tab = if has_pacman { " · tab filtra" } else { "" };
@@ -128,7 +146,7 @@ mod tests {
     use crate::config::RestoreFilter;
 
     fn items(kinds: &[bool]) -> Vec<Item> {
-        kinds.iter().map(|&pacman| Item { text: String::new(), pacman }).collect()
+        kinds.iter().map(|&pacman| Item { text: String::new(), pacman, detail: Vec::new() }).collect()
     }
 
     #[test]

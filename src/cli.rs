@@ -28,6 +28,8 @@ pub enum Command {
     List,
     /// Mostra o que cada checkpoint do pacman instalou, atualizou ou removeu
     Log,
+    /// Ajustes do snapgroup numa tela: retenção, lixeira, restore e o hook do pacman
+    Setup,
     /// Quem faz os checkpoints do pacman: sem argumento mostra; on = snapg, off = snap-pac
     Pacman {
         #[command(subcommand)]
@@ -70,6 +72,9 @@ pub enum Command {
     /// Uso interno: falha se há restauração pendente. Chamado pelo hook do pacman.
     #[command(hide = true)]
     PendingCheck,
+    /// Uso interno: confere os hashes do limine.conf no fim de uma transação. Chamado pelo hook do pacman.
+    #[command(hide = true)]
+    BootCheck,
     /// Diagnóstico: mede a estimativa exata de espaço liberado.
     #[command(hide = true)]
     SpaceProbe,

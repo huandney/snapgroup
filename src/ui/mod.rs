@@ -7,6 +7,7 @@ pub(crate) mod filter_picker;
 pub(crate) mod pacman;
 pub(crate) mod rename;
 pub(crate) mod restore;
+pub(crate) mod setup;
 pub(crate) mod rollback;
 pub(crate) mod snapshots;
 pub(crate) mod term;

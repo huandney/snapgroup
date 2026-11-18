@@ -1,0 +1,48 @@
+# Confere o /boot no fim de uma transação que mexeu no kernel, no initramfs,
+# no microcode ou no Limine: um hash do limine.conf que não bate com o arquivo,
+# ou um arquivo que sumiu, faz o Limine recusar a entrada no próximo boot. Os
+# gatilhos juntam os dos hooks que reescrevem o /boot (90-mkinitcpio-install,
+# 60-mkinitcpio-remove, 80-limine-efi-deploy, 90-limine-mkinitcpio-remove-post)
+# e o zz roda depois de todos eles. Só avisa: sem AbortOnFail, e fora do
+# `snapg pacman on/off`, que só decide quem faz os checkpoints.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/modules/*/extramodules/
+Target = usr/lib/modules/*/modules.builtin
+Target = usr/lib/initcpio/*
+Target = usr/lib/firmware/*
+Target = usr/src/*/dkms.conf
+Target = usr/lib/systemd/systemd
+Target = usr/lib/systemd/systemd-udevd
+Target = usr/lib/modprobe.d/
+Target = usr/bin/cryptsetup
+Target = usr/bin/lvm
+Target = usr/bin/mdadm
+Target = usr/bin/pdata_tools
+Target = usr/lib/libcryptsetup.so
+Target = usr/lib/libp11-kit.so
+Target = usr/lib/libpcsclite.so
+Target = boot/*
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = mkinitcpio
+Target = mkinitcpio-git
+Target = limine
+Target = limine-git
+Target = limine-dev
+Target = limine-mkinitcpio-hook
+Target = limine-mkinitcpio-hook-git
+Target = limine-snapper-sync
+
+[Action]
+Description = Conferindo o boot do snapgroup...
+When = PostTransaction
+Exec = /usr/bin/snapg boot-check

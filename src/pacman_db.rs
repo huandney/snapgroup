@@ -18,11 +18,33 @@ pub struct NetChange {
     pub name: String,
     pub before: Option<String>,
     pub now: Option<String>,
+    /// Compilado nesta máquina (AUR, makepkg): o pacote não tem assinatura.
+    pub built_here: bool,
 }
 
 /// O que muda nos pacotes se o root voltar para `snapshot_root`.
 pub fn changes_since(snapshot_root: &Path) -> Result<Vec<NetChange>> {
-    Ok(diff(&installed(snapshot_root)?, &installed(Path::new("/"))?))
+    let mut nets = diff(&installed(snapshot_root)?, &installed(Path::new("/"))?);
+    for net in &mut nets {
+        // A versão instalada agora decide; um pacote que só o snapshot tem, a de lá.
+        let (root, version) = match (&net.now, &net.before) {
+            (Some(now), _) => (Path::new("/"), now),
+            (None, Some(before)) => (snapshot_root, before),
+            (None, None) => continue,
+        };
+        let desc = root.join(LOCAL_DB).join(format!("{}-{version}", net.name)).join("desc");
+        net.built_here = fs::read_to_string(desc).is_ok_and(|text| unsigned(&text));
+    }
+    Ok(nets)
+}
+
+/// O `desc` do banco local diz como o pacman validou o pacote: `pgp` ou
+/// `sha256` quando veio de um repositório, `none` quando foi um `-U` de um
+/// pacote sem assinatura, que é o que o makepkg gera.
+fn unsigned(desc: &str) -> bool {
+    let mut lines = desc.lines();
+    lines.by_ref().find(|line| *line == "%VALIDATION%").is_some()
+        && lines.take_while(|line| !line.is_empty()).any(|line| line == "none")
 }
 
 /// Nome → versão (`1:1.11.0-1`, com epoch e release) dos pacotes em `root`.
@@ -59,13 +81,14 @@ fn diff(before: &BTreeMap<String, String>, now: &BTreeMap<String, String>) -> Ve
             name: name.clone(),
             before: before.get(name).cloned(),
             now: now.get(name).cloned(),
+            built_here: false,
         })
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NetChange, diff, split_entry};
+    use super::{NetChange, diff, split_entry, unsigned};
     use std::collections::BTreeMap;
 
     #[test]
@@ -87,6 +110,7 @@ mod tests {
             name: name.into(),
             before: before.map(Into::into),
             now: now.map(Into::into),
+            built_here: false,
         };
         assert_eq!(
             diff(&snapshot, &live),
@@ -96,5 +120,15 @@ mod tests {
                 net("snap-pac", Some("3.0.1-3"), None),
             ]
         );
+    }
+
+    #[test]
+    fn unsigned_packages_were_built_here() {
+        let desc = |validation: &str| format!("%NAME%\nlimine\n\n%VALIDATION%\n{validation}\n\n%DEPENDS%\nnone\n");
+        assert!(unsigned(&desc("none")));
+        assert!(!unsigned(&desc("pgp")));
+        assert!(!unsigned(&desc("sha256")));
+        // O `none` de outro campo não conta.
+        assert!(!unsigned("%NAME%\nx\n\n%DEPENDS%\nnone\n"));
     }
 }
