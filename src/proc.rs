@@ -92,16 +92,26 @@ impl Drop for SignalShield {
 /// - Um inibidor do logind segura desligar, reiniciar e suspender pelo menu ou
 ///   pela tampa. Ele vive num `cat` com o stdin ligado ao snapg: se o snapg
 ///   morrer de vez (SIGKILL), o pipe fecha e o inibidor some junto.
+///
+/// Janelas podem se aninhar (o cancelamento de um restore envolve o sync e a
+/// troca de subvolumes numa só, e o sync abre a dele): só a de fora instala os
+/// handlers, segura o inibidor e entrega o sinal ao fechar.
 pub struct CriticalWindow {
     _signals: DeferredSignals,
     inhibitor: Option<std::process::Child>,
 }
 
 pub fn critical_window() -> CriticalWindow {
+    let signals = defer_termination_signals();
+    let inhibitor = if signals.previous.is_some() { hold_inhibitor() } else { None };
+    CriticalWindow { _signals: signals, inhibitor }
+}
+
+fn hold_inhibitor() -> Option<std::process::Child> {
     // Grupo de processos próprio: o Ctrl-C do terminal vai para o grupo da
     // frente e soltaria o inibidor.
     use std::os::unix::process::CommandExt;
-    let inhibitor = Command::new("systemd-inhibit")
+    Command::new("systemd-inhibit")
         .args([
             "--what=shutdown:sleep:handle-lid-switch:handle-power-key:handle-suspend-key",
             "--who=snapgroup",
@@ -114,8 +124,7 @@ pub fn critical_window() -> CriticalWindow {
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()
-        .ok();
-    CriticalWindow { _signals: defer_termination_signals(), inhibitor }
+        .ok()
 }
 
 impl Drop for CriticalWindow {
@@ -127,18 +136,23 @@ impl Drop for CriticalWindow {
     }
 }
 
-/// Os sinais de término ficam guardados em vez de agir; `Drop` devolve os
-/// handlers de antes e entrega o primeiro que chegou.
+/// Os sinais de término ficam guardados em vez de agir; `Drop` da janela de
+/// fora devolve os handlers de antes e entrega o primeiro que chegou. As de
+/// dentro (`previous` vazio) só contam a profundidade: o sinal que chegou na
+/// de fora continua guardado.
 struct DeferredSignals {
-    previous: [libc::sighandler_t; 4],
+    previous: Option<[libc::sighandler_t; 4]>,
 }
 
 static DEFERRED_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+static WINDOW_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn defer_termination_signals() -> DeferredSignals {
-    DEFERRED_SIGNAL.store(0, std::sync::atomic::Ordering::SeqCst);
+    if WINDOW_DEPTH.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0 {
+        return DeferredSignals { previous: None };
+    }
     let previous = TERMINATION_SIGNALS.map(|sig| unsafe { libc::signal(sig, on_deferred as *const () as libc::sighandler_t) });
-    DeferredSignals { previous }
+    DeferredSignals { previous: Some(previous) }
 }
 
 const DEFERRED_NOTICE: &[u8] =
@@ -166,7 +180,11 @@ extern "C" fn on_deferred(sig: libc::c_int) {
 
 impl Drop for DeferredSignals {
     fn drop(&mut self) {
-        for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(self.previous) {
+        WINDOW_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let Some(previous) = self.previous else {
+            return;
+        };
+        for (sig, handler) in TERMINATION_SIGNALS.into_iter().zip(previous) {
             unsafe { libc::signal(sig, handler) };
         }
         let pending = DEFERRED_SIGNAL.swap(0, std::sync::atomic::Ordering::SeqCst);
@@ -197,6 +215,32 @@ mod tests {
             unsafe { libc::raise(libc::SIGINT) };
             unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) };
             drop(window);
+            unsafe { libc::_exit(0) };
+        }
+        unsafe { libc::close(fds[1]) };
+        let mut byte = 0u8;
+        assert_eq!(unsafe { libc::read(fds[0], (&mut byte as *mut u8).cast(), 1) }, 1);
+        let mut status = 0;
+        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
+        assert!(libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGINT);
+    }
+
+    #[test]
+    fn an_inner_window_keeps_the_signal_for_the_outer_one() {
+        // O cancelamento: Ctrl-C no meio do sync (janela de dentro) só pode
+        // valer depois da troca de subvolumes (janela de fora).
+        let mut fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+            let outer = defer_termination_signals();
+            let inner = defer_termination_signals();
+            unsafe { libc::raise(libc::SIGINT) };
+            drop(inner);
+            unsafe { libc::write(fds[1], b"x".as_ptr().cast(), 1) };
+            drop(outer);
             unsafe { libc::_exit(0) };
         }
         unsafe { libc::close(fds[1]) };

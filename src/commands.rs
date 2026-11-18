@@ -2388,7 +2388,7 @@ fn finish_restore_with_undo(
         }
         PostRestoreAction::RebootLater => {
             arm_cleanup_for_restore(done, mount_path)?;
-            if !boot_blocks_reboot()? {
+            if !boot_blocks_reboot() {
                 crate::ui::restore::print_manual_reboot();
             }
             Ok(())
@@ -2404,6 +2404,12 @@ fn undo_restore_before_reboot(
     if any_undo && !done.iter().all(done_is_regret_undo) {
         bail!("pending misto entre undo de Regret e restore normal; abortando cancelamento");
     }
+
+    // Uma janela só para o sync e a troca de subvolumes: um Ctrl-C adiado que
+    // valesse no fim do sync mataria o snapg com o /boot já no kernel do
+    // sistema que fica e o `@` ainda no restaurado. O sync abre a dele por
+    // dentro; o sinal espera esta fechar.
+    let _window = crate::proc::critical_window();
 
     // Sincroniza o /boot com o sistema que vai permanecer ANTES do swap dos
     // subvols: o backup_subvol é o chão vivo, o mesmo conteúdo que ocupará o
@@ -2467,7 +2473,7 @@ fn done_is_regret_undo(done: &rollback::Done) -> bool {
 }
 
 fn prompt_reboot() -> Result<()> {
-    if boot_blocks_reboot()? {
+    if boot_blocks_reboot() {
         return Ok(());
     }
     if !crate::ui::restore::confirm_reboot_now()? {
@@ -2478,26 +2484,25 @@ fn prompt_reboot() -> Result<()> {
 }
 
 fn reboot_now() -> Result<()> {
-    if boot_blocks_reboot()? {
+    if boot_blocks_reboot() {
         return Ok(());
     }
     reboot_unchecked()
 }
 
-/// A conferência antes do reboot (`boot::reboot_blockers`): `true` quando o
-/// próximo boot falharia, com o motivo já na tela. Uma conferência que não
-/// consegue rodar também barra: reiniciar sem saber é o que ela existe para
-/// evitar, e o usuário ainda pode reiniciar à mão.
-fn boot_blocks_reboot() -> Result<bool> {
-    match boot::reboot_blockers() {
-        Ok(blocks) if blocks.is_empty() => Ok(false),
-        Ok(blocks) => {
-            crate::ui::restore::print_reboot_blocked(&blocks);
-            Ok(true)
+/// A conferência antes do reboot (`boot::check_before_reboot`): `true` quando
+/// o próximo boot falharia, com o motivo já na tela; os avisos saem sem barrar.
+/// Uma conferência que não consegue rodar também barra: reiniciar sem saber é
+/// o que ela existe para evitar, e o usuário ainda pode reiniciar à mão.
+pub(crate) fn boot_blocks_reboot() -> bool {
+    match boot::check_before_reboot() {
+        Ok(check) => {
+            crate::ui::restore::print_reboot_check(&check);
+            !check.blocks.is_empty()
         }
         Err(e) => {
             crate::ui::restore::print_reboot_check_failed(&e);
-            Ok(true)
+            true
         }
     }
 }
