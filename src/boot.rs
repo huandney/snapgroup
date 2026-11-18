@@ -289,6 +289,10 @@ fn sync_fat32_paths_with_panel(
         panel.reuse_backup();
     }
 
+    // Daqui até a verificação (ou a volta do backup) o /boot está sendo
+    // reescrito: Ctrl-C, kill, terminal fechado e desligar ficam para depois.
+    // O backup acima ainda não mexeu em nada e pode ser interrompido.
+    let _window = crate::proc::critical_window();
     if let Err(e) = sync_inner(restored_root, boot, &groups, panel) {
         panel.fail_current("sincronização falhou");
         restore_backup_after_failure(boot);
@@ -837,7 +841,11 @@ fn regen_initramfs(
     // que o temp seja classificado como artefato de boot por `scan_boot_dir`.
     let tmp = tmp_sibling(out)?;
 
+    // Grupo de processos próprio: o Ctrl-C do terminal vai para o grupo da
+    // frente e mataria o mkinitcpio no meio, mesmo com o snapg adiando o sinal.
+    use std::os::unix::process::CommandExt;
     let mut cmd = Command::new("mkinitcpio");
+    cmd.process_group(0);
     cmd.args(["--nopost", "-c"])
         .arg(config)
         .args(["-k", kver, "-r"])
@@ -1367,6 +1375,99 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     fs::write(&tmp, updated).context("escrever limine.conf temporário")?;
     fs::rename(&tmp, &path).with_context(|| format!("substituir {}", path.display()))?;
     Ok(())
+}
+
+/// Algo que faria o próximo boot falhar, achado antes de o snapg reiniciar: o
+/// que está errado e como resolver.
+#[derive(Debug, PartialEq)]
+pub struct RebootBlock {
+    pub problem: String,
+    pub fix: &'static str,
+}
+
+const FIX_DOCTOR: &str = "rode snapg doctor antes de reiniciar";
+
+/// Conferência antes de qualquer reboot que o snapg ofereça. O sync do /boot
+/// confere contra o root que recebeu o sync; esta confere contra o root que
+/// vai bootar de fato (o `subvol=` da entrada do Limine, ou o do fstab), venha
+/// o descasamento de onde vier. No incidente de junho, o doctor rodado de um
+/// snapshot de resgate sincronizou o /boot para o kernel do resgate, e o `@`
+/// que bootava tinha outro: o sync se conferiu e passou; esta teria barrado.
+/// Vazio: pode reiniciar. Só lê (monta o top-level para olhar o `@`).
+pub fn reboot_blockers() -> Result<Vec<RebootBlock>> {
+    let boot = Path::new("/boot");
+    let cmdline_subvol = fs::read_to_string(limine_conf_path(boot)).ok().and_then(|conf| limine_root_subvol(&conf));
+    let Some(subvol) = cmdline_subvol.or_else(default_root_subvol) else {
+        return Ok(Vec::new()); // root fora de subvolume: nada a casar
+    };
+    let uuid = crate::btrfs::fs_uuid("/")?;
+    let mount = crate::rollback::toplevel_mount_path(&uuid);
+    crate::btrfs::mount_toplevel(&uuid, &mount).context("montar o top-level para conferir o boot")?;
+    let blockers = blockers_for(&mount.join(&subvol), &subvol, boot);
+    let _ = crate::btrfs::umount_toplevel(&mount);
+    blockers
+}
+
+fn blockers_for(root: &Path, subvol: &str, boot: &Path) -> Result<Vec<RebootBlock>> {
+    let mut blocks = Vec::new();
+    if !root.exists() {
+        blocks.push(RebootBlock {
+            problem: format!("o subvolume que vai bootar ({subvol}) não existe"),
+            fix: FIX_DOCTOR,
+        });
+        return Ok(blocks);
+    }
+    let fstab = fs::read_to_string(root.join("etc/fstab")).ok().and_then(|f| parse_fstab_root_subvol(&f));
+    if let Some(fstab) = fstab.map(|f| normalize_subvol(&f))
+        && fstab != subvol
+    {
+        blocks.push(RebootBlock {
+            problem: format!("o Limine boota o subvolume {subvol}, mas o fstab dele monta {fstab} como /"),
+            fix: "confira o rootflags=subvol= do limine.conf e o /etc/fstab antes de reiniciar",
+        });
+    }
+    let diagnosis = diagnose_boot(root, boot)?;
+    let problem = match diagnosis.health {
+        BootHealth::NativeBoot | BootHealth::Synced => None,
+        BootHealth::NeedsSync(BootIssue::KernelMismatch) => Some(format!(
+            "o / que vai bootar ({subvol}, kernel {}) não casa com o kernel do /boot ({})",
+            diagnosis.root_kernel, diagnosis.boot_kernel
+        )),
+        BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
+            Some("um sync do /boot foi interrompido e não terminou".to_string())
+        }
+        BootHealth::NeedsSync(BootIssue::HashMismatch) => {
+            Some("os hashes do limine.conf não conferem com os arquivos do /boot".to_string())
+        }
+        BootHealth::Unmounted => Some("o /boot não está montado".to_string()),
+    };
+    if let Some(problem) = problem {
+        blocks.push(RebootBlock { problem, fix: FIX_DOCTOR });
+    }
+    if diagnosis.health != BootHealth::NativeBoot
+        && let Some(report) = limine_hash_report(boot)?
+        && let Some(first) = report.missing.first()
+    {
+        blocks.push(RebootBlock {
+            problem: format!("o limine.conf cita {first}, que não existe no /boot"),
+            fix: "regenere as entradas com sudo limine-update antes de reiniciar",
+        });
+    }
+    Ok(blocks)
+}
+
+/// O `subvol=` do root na linha de comando das entradas do Limine, sem as de
+/// snapshot (`/.snapshots/`): é o que o initramfs monta como /. Aceita
+/// `rootflags=subvol=/@` e `rootflags=compress=zstd,subvol=@`.
+fn limine_root_subvol(conf: &str) -> Option<String> {
+    conf.lines()
+        .filter_map(|line| line.trim().strip_prefix("cmdline:"))
+        .flat_map(|cmdline| cmdline.split_whitespace())
+        .filter_map(|arg| arg.strip_prefix("rootflags="))
+        .flat_map(|flags| flags.split(','))
+        .filter_map(|flag| flag.strip_prefix("subvol="))
+        .find(|subvol| !subvol.contains(".snapshots"))
+        .map(normalize_subvol)
 }
 
 /// O que a conferência do `limine.conf` achou: quantos arquivos com hash
@@ -2176,5 +2277,39 @@ mod tests {
         for target in targets(include_str!("../pacman/00-snapgroup-pending.hook")) {
             assert!(boot.contains(&target), "zz-snapgroup-boot.hook sem o gatilho {target}");
         }
+    }
+
+    #[test]
+    fn the_root_subvol_comes_from_the_main_entry() {
+        use super::limine_root_subvol;
+        let conf = "\
+/+CachyOS
+  //linux-cachyos
+  cmdline: quiet rw rootflags=subvol=/@ root=UUID=28b7
+     //Snapshots
+     ///1628
+     cmdline: quiet rw rootflags=subvol=/@/.snapshots/1628/snapshot root=UUID=28b7
+";
+        assert_eq!(limine_root_subvol(conf).as_deref(), Some("@"));
+        // Snapshot primeiro no arquivo, opções antes do subvol.
+        let conf = "cmdline: rootflags=subvol=@/.snapshots/9/snapshot\ncmdline: rootflags=compress=zstd,subvol=@root rw\n";
+        assert_eq!(limine_root_subvol(conf).as_deref(), Some("@root"));
+        assert_eq!(limine_root_subvol("cmdline: quiet root=/dev/sda2\n"), None);
+    }
+
+    #[test]
+    fn a_root_that_is_gone_blocks_the_reboot() {
+        use super::blockers_for;
+        let base = std::env::temp_dir().join(format!("snapg_test_reboot_{}", std::process::id()));
+        let blocks = blockers_for(&base.join("@"), "@", &base).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].problem.contains("não existe"));
+    }
+
+    #[test]
+    #[ignore = "precisa de root: confere o boot do sistema real, como antes de um reboot"]
+    fn this_system_can_reboot() {
+        let blocks = super::reboot_blockers().unwrap();
+        assert!(blocks.is_empty(), "{blocks:?}");
     }
 }

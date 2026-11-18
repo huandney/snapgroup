@@ -2388,7 +2388,9 @@ fn finish_restore_with_undo(
         }
         PostRestoreAction::RebootLater => {
             arm_cleanup_for_restore(done, mount_path)?;
-            crate::ui::restore::print_manual_reboot();
+            if !boot_blocks_reboot()? {
+                crate::ui::restore::print_manual_reboot();
+            }
             Ok(())
         }
     }
@@ -2465,14 +2467,42 @@ fn done_is_regret_undo(done: &rollback::Done) -> bool {
 }
 
 fn prompt_reboot() -> Result<()> {
+    if boot_blocks_reboot()? {
+        return Ok(());
+    }
     if !crate::ui::restore::confirm_reboot_now()? {
         crate::ui::restore::print_manual_reboot();
         return Ok(());
     }
-    reboot_now()
+    reboot_unchecked()
 }
 
 fn reboot_now() -> Result<()> {
+    if boot_blocks_reboot()? {
+        return Ok(());
+    }
+    reboot_unchecked()
+}
+
+/// A conferência antes do reboot (`boot::reboot_blockers`): `true` quando o
+/// próximo boot falharia, com o motivo já na tela. Uma conferência que não
+/// consegue rodar também barra: reiniciar sem saber é o que ela existe para
+/// evitar, e o usuário ainda pode reiniciar à mão.
+fn boot_blocks_reboot() -> Result<bool> {
+    match boot::reboot_blockers() {
+        Ok(blocks) if blocks.is_empty() => Ok(false),
+        Ok(blocks) => {
+            crate::ui::restore::print_reboot_blocked(&blocks);
+            Ok(true)
+        }
+        Err(e) => {
+            crate::ui::restore::print_reboot_check_failed(&e);
+            Ok(true)
+        }
+    }
+}
+
+fn reboot_unchecked() -> Result<()> {
     // -i ignora inhibitors (ex: sessão GNOME bloqueando reboot).
     // Sem isso, o reboot falha silenciosamente e o utilizador fica
     // rodando no subvolume antigo sem saber.

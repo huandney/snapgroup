@@ -974,6 +974,25 @@ pub(crate) fn confirm_reboot_now() -> Result<bool> {
     confirm("Reiniciar agora?")
 }
 
+/// A conferência antes do reboot achou o que faria o próximo boot falhar: o
+/// snapg não reinicia, e cada motivo vem com o que fazer.
+pub(crate) fn print_reboot_blocked(blocks: &[crate::boot::RebootBlock]) {
+    result_section("Reboot barrado");
+    for block in blocks {
+        crate::ui::term::fail(format_args!("{}", block.problem));
+        crate::ui::term::warn_detail(format_args!("{}", style(block.fix).dim()));
+    }
+}
+
+pub(crate) fn print_reboot_check_failed(error: &anyhow::Error) {
+    result_section("Reboot barrado");
+    crate::ui::term::fail(format_args!("não deu para conferir o boot antes de reiniciar: {error:#}"));
+    crate::ui::term::warn_detail(format_args!(
+        "{}",
+        style("rode snapg doctor; reinicie à mão só se tiver certeza de que o /boot está certo").dim()
+    ));
+}
+
 pub(crate) fn print_manual_reboot() {
     result_section("Restaurado");
     result(format_args!(
