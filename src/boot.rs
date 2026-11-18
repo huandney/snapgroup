@@ -1355,18 +1355,42 @@ fn refresh_limine_boot_hashes(boot: &Path) -> Result<()> {
     Ok(())
 }
 
+/// O que a conferência do `limine.conf` achou: quantos arquivos com hash
+/// registrado foram conferidos e quais não batem (caminho sob o /boot, sem a
+/// pasta do machine-id).
+#[derive(Debug, PartialEq)]
+pub struct HashReport {
+    pub checked: usize,
+    pub mismatched: Vec<String>,
+}
+
 /// Verifica que cada entrada do limine.conf com hash registrado bate com o
-/// BLAKE2B do arquivo referenciado — o mesmo check que o Limine faz no boot. Só
-/// conta linhas que têm `#hash` E cujo arquivo existe: hash ausente não é
-/// validado pelo Limine, e arquivo ausente já é pego pelo scan de kernels.
-/// `limine.conf` ausente → `Ok(true)` (nada a verificar / sistema sem limine).
+/// BLAKE2B do arquivo referenciado — o mesmo check que o Limine faz no boot.
 fn limine_hashes_match(boot: &Path) -> Result<bool> {
+    Ok(limine_hash_report(boot)?.is_none_or(|report| report.mismatched.is_empty()))
+}
+
+/// Confere o /boot no fim de uma transação do pacman (`snapg boot-check`),
+/// com o mutex do limine: os hooks dele podem estar reescrevendo o
+/// `limine.conf`. `None`: sem `limine.conf`, nada a conferir.
+pub fn check_after_transaction() -> Result<Option<HashReport>> {
+    let _limine = lock_limine_mutex()?;
+    limine_hash_report(Path::new("/boot"))
+}
+
+/// Só conta linhas que têm `#hash` E cujo arquivo existe: hash ausente não é
+/// validado pelo Limine, e arquivo ausente já é pego pelo scan de kernels. O
+/// mesmo arquivo em várias entradas (os snapshots do limine-snapper-sync
+/// repetem o initramfs) é lido uma vez.
+fn limine_hash_report(boot: &Path) -> Result<Option<HashReport>> {
     let path = limine_conf_path(boot);
     if !path.exists() {
-        return Ok(true);
+        return Ok(None);
     }
     let content = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
     let mut current_protocol = String::new();
+    let mut hashes: HashMap<PathBuf, String> = HashMap::new();
+    let mut mismatched = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim();
@@ -1390,11 +1414,33 @@ fn limine_hashes_match(boot: &Path) -> Result<bool> {
         if !boot_path.exists() {
             continue;
         }
-        if blake2b_hex(&boot_path)? != recorded {
-            return Ok(false);
+        let actual = match hashes.get(&boot_path) {
+            Some(hash) => hash.clone(),
+            None => {
+                let hash = blake2b_hex(&boot_path)?;
+                hashes.insert(boot_path.clone(), hash.clone());
+                hash
+            }
+        };
+        let shown = boot_file_label(boot, &boot_path);
+        if actual != recorded && !mismatched.contains(&shown) {
+            mismatched.push(shown);
         }
     }
-    Ok(true)
+    Ok(Some(HashReport { checked: hashes.len(), mismatched }))
+}
+
+/// `0262…3042/linux-cachyos/initramfs` → `linux-cachyos/initramfs`: a pasta do
+/// machine-id não diz nada a quem lê.
+fn boot_file_label(boot: &Path, path: &Path) -> String {
+    let relative = path.strip_prefix(boot).unwrap_or(path);
+    let mut parts = relative.components();
+    let first = parts.clone().next().map(|c| c.as_os_str().to_string_lossy().into_owned());
+    let machine_id = first.is_some_and(|f| f.len() == 32 && f.bytes().all(|b| b.is_ascii_hexdigit()));
+    if machine_id {
+        parts.next();
+    }
+    parts.as_path().display().to_string()
 }
 
 /// Hash registrado após o `#` numa linha de path do limine.conf, se houver. A URI
@@ -2002,6 +2048,41 @@ mod tests {
         assert!(updated.contains("path: boot():/EFI/Microsoft/Boot/bootmgfw.efi\n") || updated.ends_with("path: boot():/EFI/Microsoft/Boot/bootmgfw.efi"));
         assert!(!updated.contains("bootmgfw.efi#"));
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn hash_report_names_each_bad_file_once() {
+        use super::{HashReport, limine_hash_report, refresh_limine_boot_hashes};
+        let base = std::env::temp_dir().join(format!("snapg_test_hash_report_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let entry = base.join("0262533c4ca04359a5f379b8e3f83042/linux-cachyos");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("vmlinuz"), "kernel").unwrap();
+        std::fs::write(entry.join("initramfs"), "initramfs").unwrap();
+        // A entrada de snapshot repete o mesmo initramfs.
+        let conf = "\
+/+CachyOS
+  protocol: linux
+  path: boot():/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/vmlinuz
+  module_path: boot():/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs
+//Snapshot 1
+  protocol: linux
+  module_path: boot():/0262533c4ca04359a5f379b8e3f83042/linux-cachyos/initramfs
+";
+        std::fs::write(base.join("limine.conf"), conf).unwrap();
+        refresh_limine_boot_hashes(&base).unwrap();
+        assert_eq!(limine_hash_report(&base).unwrap(), Some(HashReport { checked: 2, mismatched: vec![] }));
+
+        // Um initramfs regenerado sem o limine.conf acompanhar.
+        std::fs::write(entry.join("initramfs"), "initramfs novo").unwrap();
+        assert_eq!(
+            limine_hash_report(&base).unwrap(),
+            Some(HashReport { checked: 2, mismatched: vec!["linux-cachyos/initramfs".to_string()] })
+        );
+
+        std::fs::remove_file(base.join("limine.conf")).unwrap();
+        assert_eq!(limine_hash_report(&base).unwrap(), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

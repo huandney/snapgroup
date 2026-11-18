@@ -186,6 +186,28 @@ enum Screen {
 
 static SCREEN: std::sync::Mutex<Screen> = std::sync::Mutex::new(Screen::Empty);
 
+/// Saída de dentro de um hook do pacman: as linhas ficam sob a do hook
+/// (`(1/2) Criando checkpoint do snapgroup...`), alinhadas ao texto depois do
+/// `(1/2) `, sem títulos de seção nem linhas em branco.
+static HOOK_OUTPUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Recuo das linhas do hook: o texto depois de `(1/2) `.
+const HOOK_INDENT: &str = "      ";
+/// Continuação sob o texto do resultado, depois de `SnapGroup ✓ `.
+const HOOK_DETAIL_INDENT: &str = "                  ";
+
+pub fn set_hook_output() {
+    HOOK_OUTPUT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn hook_output() -> bool {
+    HOOK_OUTPUT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Linha de resultado do hook: `SnapGroup ✓ Antes de paru -Syu · …`.
+pub fn hook_ok(args: fmt::Arguments<'_>) {
+    println!("{HOOK_INDENT}{} {} {args}", style("SnapGroup").color256(BRAND_COLOR).bold(), style("✓").green().bold());
+}
+
 fn screen() -> Screen {
     *SCREEN.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -200,6 +222,9 @@ fn set_screen(state: Screen) {
 /// próximo resultado reabre o título. Algo já impresso acima ganha uma linha
 /// em branco antes.
 pub fn result_section(name: &'static str) {
+    if hook_output() {
+        return;
+    }
     let mut screen = SCREEN.lock().unwrap_or_else(|e| e.into_inner());
     if *screen == Screen::Result(name) {
         return;
@@ -214,6 +239,10 @@ pub fn result_section(name: &'static str) {
 /// Linha de resultado sem símbolo, sob a seção aberta. A única que mantém a
 /// seção aberta para o próximo resultado do mesmo tipo.
 pub fn result(args: fmt::Arguments<'_>) {
+    if hook_output() {
+        println!("{HOOK_DETAIL_INDENT}{}", style(args.to_string()).dim());
+        return;
+    }
     println!("{CONTENT_INDENT}{args}");
 }
 
@@ -234,6 +263,11 @@ pub fn note_apart(args: fmt::Arguments<'_>) {
 
 /// Aviso no stderr: `!` amarelo, alinhado ao conteúdo.
 pub fn warn(args: fmt::Arguments<'_>) {
+    if hook_output() {
+        let brand = style("SnapGroup").for_stderr().color256(BRAND_COLOR).bold();
+        eprintln!("{HOOK_INDENT}{brand} {} {args}", style("!").for_stderr().yellow().bold());
+        return;
+    }
     eprintln!("{CONTENT_INDENT}{} {args}", style("!").for_stderr().yellow().bold());
     set_screen(Screen::Content);
 }
@@ -246,6 +280,10 @@ pub fn fail(args: fmt::Arguments<'_>) {
 
 /// Continuação de aviso/erro no stderr, sob o texto (depois do símbolo).
 pub fn warn_detail(args: fmt::Arguments<'_>) {
+    if hook_output() {
+        eprintln!("{HOOK_DETAIL_INDENT}{}", style(args.to_string()).for_stderr().dim());
+        return;
+    }
     eprintln!("{CONTENT_INDENT}  {args}");
     set_screen(Screen::Content);
 }

@@ -130,14 +130,19 @@ pub fn save(description: Option<String>) -> Result<()> {
 /// Checkpoint do hook do pacman (PreTransaction). Sem prompt, sem a espera do
 /// relatório de espaço e sem descartar o Regret: só o save manual é Highlander.
 /// Um erro aqui não aborta a transação (o hook não usa `AbortOnFail`).
-pub fn save_pacman() -> Result<()> {
-    let cfg = config::load();
-    // O pacman lê a saída do hook por um pipe: as cores seguem as dele.
-    let cmdline = pacman::parent_cmdline();
-    if cmdline.as_deref().is_some_and(pacman::pacman_shows_color) {
+/// Hooks do pacman: as linhas saem recuadas sob a do hook e, como o pacman
+/// lê a saída por um pipe, as cores seguem as dele.
+pub fn prepare_hook_output() {
+    crate::ui::term::set_hook_output();
+    if pacman::parent_cmdline().as_deref().is_some_and(pacman::pacman_shows_color) {
         console::set_colors_enabled(true);
         console::set_colors_enabled_stderr(true);
     }
+}
+
+pub fn save_pacman() -> Result<()> {
+    let cfg = config::load();
+    let cmdline = pacman::parent_cmdline();
     let configs = snapper::list_configs()?;
     if configs.is_empty() {
         bail!("nenhuma config snapper encontrada: checkpoint do pacman não criado");
@@ -165,7 +170,7 @@ pub fn save_pacman() -> Result<()> {
         && let Some(covering) = covering_checkpoint(&helper.session)?
     {
         count_session_transaction(&covering);
-        crate::ui::pacman::print_hook_covered(&covering, &helper.name);
+        crate::ui::pacman::print_hook_covered(&covering);
         return Ok(());
     }
 
@@ -2309,6 +2314,15 @@ fn gib(bytes: u64) -> String {
 /// initramfs. Com uma restauração pendente, o kernel novo iria para o /boot
 /// e os módulos para o root antigo; o reboot subiria o root restaurado com um
 /// kernel que ele não tem. Falha de diagnóstico não bloqueia o pacman.
+/// `snapg boot-check`, no fim de uma transação que mexeu no boot: avisa antes
+/// do reboot quando o Limine recusaria uma entrada. Nunca aborta: a transação
+/// já aconteceu, e o aviso aponta o `doctor`.
+pub fn boot_check() -> Result<()> {
+    let report = crate::boot::check_after_transaction()?;
+    crate::ui::pacman::print_boot_check(report.as_ref());
+    Ok(())
+}
+
 pub fn pending_check() -> Result<()> {
     if !pending_restore_swaps_root().unwrap_or(false) {
         return Ok(());

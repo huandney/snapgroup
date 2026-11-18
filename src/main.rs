@@ -34,8 +34,9 @@ fn main() -> Result<()> {
         // Comandos mutantes usam lock global. List é read-only; boot-clean
         // pula limpo se houver contenção e tenta de novo no próximo boot.
         cli::Command::Save { description: _, pacman: true } => {
-            let _lock = lock::acquire_waiting(std::time::Duration::from_secs(10))?;
-            commands::save_pacman()
+            commands::prepare_hook_output();
+            let saved = lock::acquire_waiting(std::time::Duration::from_secs(10)).and_then(|_lock| commands::save_pacman());
+            hook_exit(saved)
         }
         cli::Command::Save { description, pacman: false } => {
             let _lock = lock::acquire()?;
@@ -70,6 +71,11 @@ fn main() -> Result<()> {
         }
         cli::Command::Doctor { root, boot, apply } => doctor::run(root, boot, apply),
         cli::Command::PendingCheck => commands::pending_check(),
+        // Só lê: sem o lock do snapg, uma tela do snapg aberta não atrasa o pacman.
+        cli::Command::BootCheck => {
+            commands::prepare_hook_output();
+            hook_exit(commands::boot_check())
+        }
         cli::Command::SpaceProbe => commands::space_probe(),
         cli::Command::BootClean => match lock::try_acquire()? {
             Some(_lock) => commands::boot_clean(),
@@ -79,4 +85,14 @@ fn main() -> Result<()> {
             }
         },
     }
+}
+
+/// O erro de um hook do pacman sai no formato das outras linhas dele, não no
+/// `Error:` do anyhow; o código de saída continua dizendo que falhou.
+fn hook_exit(result: Result<()>) -> Result<()> {
+    if let Err(error) = &result {
+        ui::pacman::print_hook_failed(error);
+        std::process::exit(1);
+    }
+    result
 }

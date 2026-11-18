@@ -72,6 +72,9 @@ pub enum Command {
     /// Uso interno: falha se há restauração pendente. Chamado pelo hook do pacman.
     #[command(hide = true)]
     PendingCheck,
+    /// Uso interno: confere os hashes do limine.conf no fim de uma transação. Chamado pelo hook do pacman.
+    #[command(hide = true)]
+    BootCheck,
     /// Diagnóstico: mede a estimativa exata de espaço liberado.
     #[command(hide = true)]
     SpaceProbe,
