@@ -31,14 +31,21 @@ fn main() -> Result<()> {
     unsafe { std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/bin") };
     btrfs::unmount_on_termination();
     let result = dispatch(cli.command);
+    // O erro sai antes do sinal: entregue primeiro, o Ctrl-C guardado mataria
+    // o processo sem dizer por que o comando falhou. O reboot barrado já disse
+    // o motivo na tela; falta só o status de saída.
+    if let Err(e) = &result
+        && !e.is::<commands::RebootBlocked>()
+    {
+        eprintln!("Error: {e:?}");
+    }
     // Ponto seguro de último caso: um Ctrl-C guardado numa janela crítica que
     // nenhum ponto anterior entregou vale aqui, com o comando já terminado.
     proc::deliver_deferred_signal();
-    // O reboot barrado já disse o motivo na tela; falta o status de saída.
-    if result.as_ref().is_err_and(|e| e.is::<commands::RebootBlocked>()) {
+    if result.is_err() {
         std::process::exit(1);
     }
-    result
+    Ok(())
 }
 
 fn dispatch(command: cli::Command) -> Result<()> {

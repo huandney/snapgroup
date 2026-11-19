@@ -2507,6 +2507,7 @@ impl std::error::Error for RebootBlocked {}
 fn prompt_reboot() -> Result<()> {
     crate::proc::deliver_deferred_signal();
     if boot_blocks_reboot() {
+        crate::ui::restore::print_restored_reboot_blocked();
         return Err(RebootBlocked.into());
     }
     if !crate::ui::restore::confirm_reboot_now()? {
@@ -2519,6 +2520,7 @@ fn prompt_reboot() -> Result<()> {
 fn reboot_now() -> Result<()> {
     crate::proc::deliver_deferred_signal();
     if boot_blocks_reboot() {
+        crate::ui::restore::print_restored_reboot_blocked();
         return Err(RebootBlocked.into());
     }
     reboot_unchecked()

@@ -273,18 +273,24 @@ mod tests {
 
     #[test]
     fn children_started_in_a_window_leave_the_terminal_group() {
-        // A janela é do processo inteiro: confere num filho.
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0);
-        if pid == 0 {
+        // A janela é do processo inteiro: confere noutro processo de teste, com
+        // uma thread só. Um fork daqui não pode: depois dele o filho alocaria e
+        // criaria processos com o alocador possivelmente travado por outra
+        // thread de teste.
+        const CHILD: &str = "SNAPG_TEST_WINDOW_CHILD";
+        if std::env::var_os(CHILD).is_some() {
             let _window = defer_termination_signals();
             let mut child = command("sh").args(["-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = \"$$\" ]"]).spawn().unwrap();
-            let ok = child.wait().unwrap().success();
-            unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+            assert!(child.wait().unwrap().success(), "o filho ficou no grupo do pai");
+            return;
         }
-        let mut status = 0;
-        assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);
-        assert!(libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0, "o filho ficou no grupo do pai");
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "proc::tests::children_started_in_a_window_leave_the_terminal_group", "--test-threads=1"])
+            .env(CHILD, "1")
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "o filho ficou no grupo do pai");
     }
 
     #[test]
