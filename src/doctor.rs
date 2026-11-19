@@ -38,6 +38,9 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
     // Loop para que ESC dentro do restore (opção "outras") volte a este menu em
     // vez de encerrar o doctor. ESC no próprio menu (None) é que sai.
     loop {
+        // Ponto seguro: um Ctrl-C guardado no sync de um restore que voltou
+        // ao menu vale aqui, antes de perguntar de novo.
+        crate::proc::deliver_deferred_signal();
         let mount = match mount_default_subvol_ro(&ctx) {
             Ok(m) => m,
             Err(e) => {
@@ -75,6 +78,7 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                 .with_root_display(format!("/{}", ctx.default_subvol));
                 diagnose_and_apply(&target, apply)?;
                 drop(mount);
+                crate::proc::deliver_deferred_signal();
                 match doctor_ui::wait_done_action()? {
                     doctor_ui::UndoDoneAction::Exit => return Ok(()),
                     doctor_ui::UndoDoneAction::ShowDiagnosis => {
@@ -174,6 +178,10 @@ pub fn handle_boot_sync_failure(
 
     boot::sync_fat32_paths(root, boot)?;
     print_diagnosis(root, boot)?;
+    if boot == Path::new("/boot") && crate::commands::boot_blocks_reboot() {
+        crate::ui::restore::print_restored_reboot_blocked();
+        return Err(crate::commands::RebootBlocked.into());
+    }
     Ok(())
 }
 

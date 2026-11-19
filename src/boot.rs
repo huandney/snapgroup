@@ -272,6 +272,7 @@ fn sync_fat32_paths_with_panel(
     }
 
     let interrupted = boot_backup_remnant(boot);
+    set_verified_leftover(None);
 
     let critical = critical_boot_files(boot, &groups);
     // No resync de interrupção NÃO recriar o backup: o remanescente é o último
@@ -329,6 +330,7 @@ fn sync_fat32_paths_with_panel(
     pb.finish_and_clear();
     if let Err(e) = cleanup {
         crate::ui::boot_sync::print_backup_cleanup_failed(&e);
+        set_verified_leftover(Some(boot));
     }
     panel.finish_synced();
     Ok(())
@@ -349,6 +351,20 @@ fn restore_backup_after_failure(boot: &Path) {
 /// sobrevive a um reboot, ao contrário de qualquer estado em memória.
 fn boot_backup_remnant(boot: &Path) -> bool {
     boot_backup_dir(boot).exists()
+}
+
+/// O /boot cujo sync este processo verificou, mas cujo backup não conseguiu
+/// apagar. Esse backup não é de sync interrompido: a conferência antes do
+/// reboot não o cobra. Em outro processo o backup volta a valer como
+/// interrupção, e o doctor reroda o sync, que o apaga.
+static VERIFIED_LEFTOVER: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+fn set_verified_leftover(boot: Option<&Path>) {
+    *VERIFIED_LEFTOVER.lock().unwrap_or_else(|e| e.into_inner()) = boot.map(Path::to_path_buf);
+}
+
+fn is_verified_leftover(boot: &Path) -> bool {
+    VERIFIED_LEFTOVER.lock().unwrap_or_else(|e| e.into_inner()).as_deref() == Some(boot)
 }
 
 fn sync_inner(
@@ -615,32 +631,10 @@ pub fn running_kernel() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
-/// Versão do kernel no `/boot` ativo, identificada comparando o `vmlinuz` de
-/// `/boot` com o do kernel rodando. `?` se não casar (ex: `/boot` tem outro
-/// kernel que não o em execução) — o nome só sai de uma comparação byte-a-byte,
-/// já que o arquivo não traz a versão.
-/// O kernel do /boot: o em execução quando o `vmlinuz` é o dele; senão a
-/// versão gravada no próprio `vmlinuz` (o caso de um /boot descasado, que é
-/// quando a versão mais importa).
+/// Os kernels do /boot, pela versão gravada em cada `vmlinuz`; `?` se nenhum
+/// cabeçalho for legível.
 pub fn boot_kernel_label(boot: &Path) -> String {
-    boot_kernel_version(boot).unwrap_or_else(|| boot_vmlinuz_versions(boot))
-}
-
-fn boot_kernel_version(boot: &Path) -> Option<String> {
-    let kver = running_kernel()?;
-    let running_vmlinuz = Path::new("/usr/lib/modules").join(&kver).join("vmlinuz");
-    let running_bytes = fs::read(&running_vmlinuz).ok()?;
-    let groups = discover_kernel_groups(boot).ok()?;
-    for group in groups {
-        for vmlinuz_path in group.vmlinuz_paths {
-            if let Ok(boot_bytes) = fs::read(&vmlinuz_path)
-                && boot_bytes == running_bytes
-            {
-                return Some(kver);
-            }
-        }
-    }
-    None
+    boot_vmlinuz_versions(boot)
 }
 
 /// Kernels presentes em `<root>/usr/lib/modules`, ordenados e juntos por
@@ -1414,6 +1408,11 @@ const FIX_DOCTOR: &str = "rode snapg doctor antes de reiniciar";
 /// podem estar reescrevendo o `limine.conf` logo depois de um restore.
 pub fn check_before_reboot() -> Result<RebootCheck> {
     let boot = Path::new("/boot");
+    // Antes de travar, ler e montar: onde a conferência não se aplica, uma
+    // falha nesses passos não pode barrar o reboot.
+    if !is_fat32_path(boot) && !fstab_declares_vfat_boot(Path::new("/"), boot) {
+        return Ok(RebootCheck::default());
+    }
     let uuid = crate::btrfs::fs_uuid("/")?;
     // Antes de ler o limine.conf: lido no meio de uma reescrita, ele não traria
     // a entrada do root, e a conferência cairia no fstab do sistema em execução.
@@ -1429,13 +1428,7 @@ pub fn check_before_reboot() -> Result<RebootCheck> {
     };
     let mount = crate::rollback::toplevel_mount_path(&uuid);
     crate::btrfs::mount_toplevel(&uuid, &mount).context("montar o top-level para conferir o boot")?;
-    let check = (|| {
-        let root = mount.join(&subvol);
-        if !is_fat32_path(boot) && !fstab_declares_vfat_boot(&root, boot) {
-            return Ok(RebootCheck::default());
-        }
-        check_root_against_boot(&root, &subvol, boot)
-    })();
+    let check = check_root_against_boot(&mount.join(&subvol), &subvol, boot);
     let _ = crate::btrfs::umount_toplevel(&mount);
     check
 }
@@ -1458,30 +1451,48 @@ fn check_root_against_boot(root: &Path, subvol: &str, boot: &Path) -> Result<Reb
             fix: "confira o rootflags=subvol= do limine.conf e o /etc/fstab antes de reiniciar",
         });
     }
-    let diagnosis = diagnose_boot(root, boot)?;
-    let problem = match diagnosis.health {
-        BootHealth::NativeBoot | BootHealth::Synced => None,
-        BootHealth::NeedsSync(BootIssue::KernelMismatch) => Some(format!(
-            "o / que vai bootar ({subvol}, kernel {}) não casa com o kernel do /boot ({})",
-            diagnosis.root_kernel, diagnosis.boot_kernel
-        )),
-        BootHealth::NeedsSync(BootIssue::InterruptedSync) => {
-            Some("um sync do /boot foi interrompido e não terminou".to_string())
-        }
-        BootHealth::NeedsSync(BootIssue::HashMismatch) => {
-            Some("os hashes do limine.conf não conferem com os arquivos do /boot".to_string())
-        }
-        BootHealth::Unmounted => Some("o /boot não está montado".to_string()),
-    };
-    if let Some(problem) = problem {
-        check.blocks.push(RebootBlock { problem, fix: FIX_DOCTOR });
+    // Os passos do diagnose_boot, com duas diferenças: o backup que sobrou de
+    // um sync que este processo verificou não barra (a limpeza que falha não
+    // pode bloquear o reboot), e os hashes saem de um relatório só, que também
+    // traz os arquivos ausentes.
+    if !is_fat32_path(boot) {
+        check.blocks.push(RebootBlock { problem: "o /boot não está montado".to_string(), fix: FIX_DOCTOR });
+        return Ok(check);
     }
-    // Um kernel principal que sumiu já barra acima (o diagnóstico não acha o
+    let groups = discover_kernel_groups(boot)?;
+    if groups.is_empty() {
+        check.blocks.push(RebootBlock { problem: "nenhum vmlinuz/initramfs ativo no /boot".to_string(), fix: FIX_DOCTOR });
+        return Ok(check);
+    }
+    if boot_backup_remnant(boot) && !is_verified_leftover(boot) {
+        check.blocks.push(RebootBlock {
+            problem: "um sync do /boot foi interrompido e não terminou".to_string(),
+            fix: FIX_DOCTOR,
+        });
+    }
+    if !boot_matches_snapshot(root, &groups)? {
+        check.blocks.push(RebootBlock {
+            problem: format!(
+                "o / que vai bootar ({subvol}, kernel {}) não casa com o kernel do /boot ({})",
+                kernel_label(root),
+                boot_vmlinuz_versions(boot)
+            ),
+            fix: FIX_DOCTOR,
+        });
+    }
+    let Some(report) = limine_hash_report(boot)? else {
+        return Ok(check);
+    };
+    if !report.mismatched.is_empty() {
+        check.blocks.push(RebootBlock {
+            problem: "os hashes do limine.conf não conferem com os arquivos do /boot".to_string(),
+            fix: FIX_DOCTOR,
+        });
+    }
+    // Um kernel principal que sumiu já barra acima (o scan não acha o
     // vmlinuz). O que sobra é de outras entradas, em geral de snapshot: o boot
     // padrão não depende delas, e o doctor também não as cobra.
-    if let Some(report) = limine_hash_report(boot)?
-        && let Some(first) = report.missing.first()
-    {
+    if let Some(first) = report.missing.first() {
         let more = match report.missing.len() {
             1 => String::new(),
             n => format!(" (e mais {})", n - 1),
@@ -1543,17 +1554,22 @@ fn vmlinuz_version(bytes: &[u8]) -> Option<String> {
 /// `@snapshots/N`). Entre os que sobram, vale o que o fstab também declara;
 /// senão, o primeiro. Aceita `subvol=/@` e `compress=zstd,subvol=@`.
 fn limine_root_subvol(conf: &str, uuid: &str, fstab: Option<&str>) -> Option<String> {
-    let ours = format!("root=UUID={uuid}");
+    // Um `root=` que não é `UUID=` deste filesystem (`PARTUUID=`, `/dev/…`, o
+    // UUID de outro disco) é de outro sistema. Sem `root=`, a entrada fica.
+    let ours = |cmdline: &str| {
+        cmdline
+            .split_whitespace()
+            .filter_map(|arg| arg.strip_prefix("root="))
+            .all(|root| root.strip_prefix("UUID=").is_some_and(|u| u.eq_ignore_ascii_case(uuid)))
+    };
     let candidates: Vec<String> = conf
         .lines()
         .filter_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("cmdline:").or_else(|| line.strip_prefix("kernel_cmdline:"))
+            let (key, value) = line.trim().split_once(':')?;
+            let key = key.trim();
+            (key.eq_ignore_ascii_case("cmdline") || key.eq_ignore_ascii_case("kernel_cmdline")).then_some(value)
         })
-        .filter(|cmdline| {
-            let args: Vec<&str> = cmdline.split_whitespace().collect();
-            !args.iter().any(|a| a.starts_with("root=UUID=")) || args.contains(&ours.as_str())
-        })
+        .filter(|cmdline| ours(cmdline))
         .flat_map(|cmdline| cmdline.split_whitespace())
         .filter_map(|arg| arg.strip_prefix("rootflags="))
         .flat_map(|flags| flags.split(','))
@@ -2399,6 +2415,12 @@ mod tests {
         // O alias antigo do Limine.
         let alias = "KERNEL_CMDLINE: x\n  kernel_cmdline: rw rootflags=subvol=@ root=UUID=28b7\n";
         assert_eq!(limine_root_subvol(alias, "28b7", None).as_deref(), Some("@"));
+        // Outro sistema com root= que não é UUID, listado antes.
+        let partuuid = "cmdline: rw rootflags=subvol=@arch root=PARTUUID=1234\ncmdline: rw rootflags=subvol=@ root=UUID=28b7\n";
+        assert_eq!(limine_root_subvol(partuuid, "28b7", None).as_deref(), Some("@"));
+        // Chave e UUID em maiúsculas.
+        let upper = "CMDLINE: rw rootflags=subvol=@ root=UUID=28B7\n";
+        assert_eq!(limine_root_subvol(upper, "28b7", None).as_deref(), Some("@"));
     }
 
     #[test]
