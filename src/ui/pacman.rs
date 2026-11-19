@@ -194,7 +194,7 @@ pub(crate) fn print_boot_check(report: Option<&crate::boot::HashReport>) {
         return;
     }
     let files = count_text(report.checked, "arquivo", "arquivos");
-    hook_ok(format_args!("{}", style(format!("boot conferido · {files} do limine.conf, hashes ok")).dim()));
+    hook_ok(format_args!("{}", style(format!("{files} do limine.conf, hashes ok")).dim()));
 }
 
 /// Aviso do hook quando o snap-pac também está ligado.
