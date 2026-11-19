@@ -127,7 +127,7 @@ pub fn save(description: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// Hooks do pacman: as linhas saem recuadas sob a do hook e, como o pacman
+/// Hooks do pacman: as linhas saem na margem, sob a do hook, e, como o pacman
 /// lê a saída por um pipe, as cores seguem as dele. Devolve a linha de
 /// comando do pacman, se ele for o pai.
 pub fn prepare_hook_output() -> Option<Vec<String>> {
