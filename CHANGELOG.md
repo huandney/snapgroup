@@ -5,7 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0-beta] - 2026-11-20
+> Commits: `cb7f5ca`, `12e095b`, `a5a920a`, `6cbf8ab`, `407a508`
 
 ### Restore
 - **Feature**: Before snapg reboots, or tells you to reboot by hand, and after `snapg doctor` syncs this system's `/boot`, it checks `/boot` against the root that will actually boot (the `subvol=` of this filesystem's Limine entry, preferring the one the fstab also names), not only against the root the sync wrote for: kernel and modules (with the `/boot` kernel version read from the `vmlinuz` itself), `limine.conf` hashes, and that root's own fstab. Anything that would fail the next boot blocks the reboot with the reason and the fix, and snapg exits with status 1; a referenced file that is missing from another entry only warns. Whenever the check blocks, the screen says the restore is applied and pending, and not to reboot yet. A backup left behind by a sync that passed verification does not block. It holds the Limine mutex and applies only with `/boot` on FAT32, which it checks before locking or mounting anything. It covers the June incident, where a doctor run from a rescue snapshot synced `/boot` to the rescue kernel while `@` had another.
