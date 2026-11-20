@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 /// Monta o subvolume top-level (subvolid=5) num path temporário.
@@ -11,7 +10,7 @@ pub fn mount_toplevel(uuid: &str, target: &Path) -> Result<()> {
     create_private_mount_dir(target).context("criar diretório de mount")?;
     // nosuid/nodev: o top-level expõe regret/undo/discard, cópias antigas do
     // root com binários setuid que não devem ser executáveis por este mount.
-    let out = Command::new("mount")
+    let out = crate::proc::command("mount")
         .args(["-o", "subvolid=5,nosuid,nodev", "-U", uuid])
         .arg(target)
         .output()
@@ -43,7 +42,7 @@ pub fn create_private_mount_dir(target: &Path) -> Result<()> {
 }
 
 pub fn umount_toplevel(target: &Path) -> Result<()> {
-    let out = Command::new("umount")
+    let out = crate::proc::command("umount")
         .arg(target)
         .output()
         .context("umount falhou")?;
@@ -102,7 +101,7 @@ extern "C" fn on_termination(sig: libc::c_int) {
 }
 
 pub fn create_snapshot(source: &Path, dest: &Path) -> Result<()> {
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "snapshot"])
         .arg(source)
         .arg(dest)
@@ -120,7 +119,7 @@ pub fn create_snapshot(source: &Path, dest: &Path) -> Result<()> {
 }
 
 pub fn create_readonly_snapshot(source: &Path, dest: &Path) -> Result<()> {
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "snapshot", "-r"])
         .arg(source)
         .arg(dest)
@@ -138,7 +137,7 @@ pub fn create_readonly_snapshot(source: &Path, dest: &Path) -> Result<()> {
 }
 
 pub fn delete_subvolume(path: &Path) -> Result<()> {
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "delete"])
         .arg(path)
         .output()
@@ -195,7 +194,7 @@ pub fn nested_with_data(toplevel: &Path, subvol: &str) -> Result<Option<std::pat
 /// Ex: "/home" -> "@home"; "/home/.snapshots/22/snapshot" -> "@home_snapshots/22/snapshot".
 /// A primeira linha de `btrfs subvolume show` é exatamente essa string.
 pub fn subvol_relative_path(any_path: &Path) -> Result<String> {
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "show"])
         .arg(any_path)
         .output()
@@ -220,7 +219,7 @@ pub fn subvol_relative_path(any_path: &Path) -> Result<String> {
 /// que vive dentro de um aninhado acompanha o pai num rename.
 pub fn nested_subvolumes(toplevel: &Path, subvol: &str) -> Result<Vec<std::path::PathBuf>> {
     let path = toplevel.join(subvol);
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "list", "-o"])
         .arg(&path)
         .output()
@@ -276,7 +275,7 @@ pub fn subvol_id(path: &Path) -> Result<u64> {
 
 /// True se o path é um subvolume btrfs (não só diretório).
 pub fn is_subvolume(path: &Path) -> bool {
-    Command::new("btrfs")
+    crate::proc::command("btrfs")
         .args(["subvolume", "show"])
         .arg(path)
         .output()
@@ -287,7 +286,7 @@ pub fn is_subvolume(path: &Path) -> bool {
 /// Timestamp local formatado pra naming de backup.
 /// Ex: "2026-04-26_19:57:24". Usa `date` pra evitar dep de chrono.
 pub fn now_local_label() -> Result<String> {
-    let out = Command::new("date")
+    let out = crate::proc::command("date")
         .arg("+%Y-%m-%d_%H:%M:%S")
         .output()
         .context("date falhou")?;
@@ -300,7 +299,7 @@ pub fn now_local_label() -> Result<String> {
 /// Extrai o campo `Creation time` da saída de `btrfs subvolume show`.
 /// Retorna a string bruta (ex: "2026-04-30 17:32:41 -0400").
 pub fn subvol_creation_time(path: &Path) -> Result<String> {
-    let out = Command::new("btrfs")
+    let out = crate::proc::command("btrfs")
         .args(["subvolume", "show"])
         .arg(path)
         .output()
@@ -327,7 +326,7 @@ pub fn subvol_creation_time(path: &Path) -> Result<String> {
 
 /// Dispositivo do btrfs montado em `mountpoint`, sem o sufixo `[/subvol]`.
 pub fn fs_device(mountpoint: &str) -> Result<String> {
-    let out = Command::new("findmnt")
+    let out = crate::proc::command("findmnt")
         .args(["-no", "SOURCE", mountpoint])
         .output()
         .context("findmnt falhou")?;
@@ -343,7 +342,7 @@ pub fn fs_device(mountpoint: &str) -> Result<String> {
 }
 
 pub fn fs_uuid(mountpoint: &str) -> Result<String> {
-    let out = Command::new("findmnt")
+    let out = crate::proc::command("findmnt")
         .args(["-no", "UUID", mountpoint])
         .output()
         .context("findmnt falhou")?;

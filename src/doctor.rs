@@ -38,6 +38,9 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
     // Loop para que ESC dentro do restore (opção "outras") volte a este menu em
     // vez de encerrar o doctor. ESC no próprio menu (None) é que sai.
     loop {
+        // Ponto seguro: um Ctrl-C guardado no sync de um restore que voltou
+        // ao menu vale aqui, antes de perguntar de novo.
+        crate::proc::deliver_deferred_signal();
         let mount = match mount_default_subvol_ro(&ctx) {
             Ok(m) => m,
             Err(e) => {
@@ -75,6 +78,7 @@ fn resolve_rescue(ctx: boot::RescueContext, apply: bool) -> Result<()> {
                 .with_root_display(format!("/{}", ctx.default_subvol));
                 diagnose_and_apply(&target, apply)?;
                 drop(mount);
+                crate::proc::deliver_deferred_signal();
                 match doctor_ui::wait_done_action()? {
                     doctor_ui::UndoDoneAction::Exit => return Ok(()),
                     doctor_ui::UndoDoneAction::ShowDiagnosis => {
@@ -164,6 +168,9 @@ pub fn handle_boot_sync_failure(
     doctor_ui::print_boot_sync_failure(&error, recovery);
 
     print_diagnosis(root, boot)?;
+    // Ponto seguro: o "não reinicie" já está na tela. Um Ctrl-C guardado no
+    // sync que falhou vale aqui, antes de perguntar se tenta de novo.
+    crate::proc::deliver_deferred_signal();
 
     if !confirm("Tentar sincronizar /boot novamente agora?")? {
         bail!("restauração incompleta: /boot dessincronizado, reboot bloqueado");
@@ -171,6 +178,10 @@ pub fn handle_boot_sync_failure(
 
     boot::sync_fat32_paths(root, boot)?;
     print_diagnosis(root, boot)?;
+    if boot == Path::new("/boot") && crate::commands::boot_blocks_reboot() {
+        crate::ui::restore::print_restored_reboot_blocked();
+        return Err(crate::commands::RebootBlocked.into());
+    }
     Ok(())
 }
 
@@ -264,6 +275,13 @@ fn diagnose_and_apply(target: &DoctorTarget, apply: bool) -> Result<bool> {
     doctor_ui::print_spacer();
     let diagnosis = diagnosis_for(&target.root, &target.boot)?;
     doctor_ui::print_report(target, &diagnosis);
+    // O sync se conferiu contra o root alvo; o boot vai subir o root que o
+    // Limine aponta. De um snapshot de resgate, ou com --root, os dois podem
+    // não ser o mesmo, que foi o incidente de junho. Fora do /boot deste
+    // sistema (recuperação por Live-USB) a conferência não se aplica.
+    if target.boot == Path::new("/boot") && crate::commands::boot_blocks_reboot() {
+        return Err(crate::commands::RebootBlocked.into());
+    }
     Ok(true)
 }
 

@@ -187,13 +187,15 @@ enum Screen {
 static SCREEN: std::sync::Mutex<Screen> = std::sync::Mutex::new(Screen::Empty);
 
 /// Saída de dentro de um hook do pacman: as linhas ficam sob a do hook
-/// (`(1/2) Criando checkpoint do snapgroup...`), alinhadas ao texto depois do
-/// `(1/2) `, sem títulos de seção nem linhas em branco.
+/// (`(1/2) Criando checkpoint do snapgroup...`) na coluna 0, sem títulos de
+/// seção nem linhas em branco. Na margem e não sob o texto da descrição: o
+/// pacman alarga o contador com o total de hooks (`(1/3) ` tem 6 colunas,
+/// `(18/18) ` tem 8) e o hook não sabe nem a posição nem o total.
 static HOOK_OUTPUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Recuo das linhas do hook: o texto depois de `(1/2) `.
-const HOOK_INDENT: &str = "      ";
-/// Continuação sob o texto do resultado, depois de `SnapGroup ✓ `.
-const HOOK_DETAIL_INDENT: &str = "                  ";
+/// Continuação sob o texto do resultado, depois de `SnapGroup `.
+const HOOK_DETAIL_INDENT: &str = "          ";
+/// Continuação sob o texto do aviso/erro, depois de `SnapGroup ! `.
+const HOOK_WARN_DETAIL_INDENT: &str = "            ";
 
 pub fn set_hook_output() {
     HOOK_OUTPUT.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -203,14 +205,15 @@ fn hook_output() -> bool {
     HOOK_OUTPUT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Linha neutra do hook, sem símbolo: nada aconteceu, nada a temer.
+/// Linha neutra do hook: nada aconteceu, nada a temer.
 pub fn hook_note(args: fmt::Arguments<'_>) {
-    println!("{HOOK_INDENT}{} {}", style("SnapGroup").color256(BRAND_COLOR).bold(), style(args.to_string()).dim());
+    println!("{} {}", style("SnapGroup").color256(BRAND_COLOR).bold(), style(args.to_string()).dim());
 }
 
-/// Linha de resultado do hook: `SnapGroup ✓ Antes de paru -Syu · …`.
+/// Linha de resultado do hook: `SnapGroup Antes de paru -Syu · …`. Sem
+/// símbolo: só aviso (`!`) e erro (`✗`) ganham um, para saltarem na saída.
 pub fn hook_ok(args: fmt::Arguments<'_>) {
-    println!("{HOOK_INDENT}{} {} {args}", style("SnapGroup").color256(BRAND_COLOR).bold(), style("✓").green().bold());
+    println!("{} {args}", style("SnapGroup").color256(BRAND_COLOR).bold());
 }
 
 fn screen() -> Screen {
@@ -270,7 +273,7 @@ pub fn note_apart(args: fmt::Arguments<'_>) {
 pub fn warn(args: fmt::Arguments<'_>) {
     if hook_output() {
         let brand = style("SnapGroup").for_stderr().color256(BRAND_COLOR).bold();
-        eprintln!("{HOOK_INDENT}{brand} {} {args}", style("!").for_stderr().yellow().bold());
+        eprintln!("{brand} {} {args}", style("!").for_stderr().yellow().bold());
         return;
     }
     eprintln!("{CONTENT_INDENT}{} {args}", style("!").for_stderr().yellow().bold());
@@ -281,7 +284,7 @@ pub fn warn(args: fmt::Arguments<'_>) {
 pub fn fail(args: fmt::Arguments<'_>) {
     if hook_output() {
         let brand = style("SnapGroup").for_stderr().color256(BRAND_COLOR).bold();
-        eprintln!("{HOOK_INDENT}{brand} {} {args}", style("✗").for_stderr().red().bold());
+        eprintln!("{brand} {} {args}", style("✗").for_stderr().red().bold());
         return;
     }
     eprintln!("{CONTENT_INDENT}{} {args}", style("✗").for_stderr().red().bold());
@@ -291,7 +294,7 @@ pub fn fail(args: fmt::Arguments<'_>) {
 /// Continuação de aviso/erro no stderr, sob o texto (depois do símbolo).
 pub fn warn_detail(args: fmt::Arguments<'_>) {
     if hook_output() {
-        eprintln!("{HOOK_DETAIL_INDENT}{}", style(args.to_string()).for_stderr().dim());
+        eprintln!("{HOOK_WARN_DETAIL_INDENT}{}", style(args.to_string()).for_stderr().dim());
         return;
     }
     eprintln!("{CONTENT_INDENT}  {args}");

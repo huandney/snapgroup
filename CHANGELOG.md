@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0-beta] - 2026-11-20
+> Commits: `cb7f5ca`, `12e095b`, `a5a920a`, `6cbf8ab`, `407a508`
+
+### Restore
+- **Feature**: Before snapg reboots, or tells you to reboot by hand, and after `snapg doctor` syncs this system's `/boot`, it checks `/boot` against the root that will actually boot (the `subvol=` of this filesystem's Limine entry, preferring the one the fstab also names), not only against the root the sync wrote for: kernel and modules (with the `/boot` kernel version read from the `vmlinuz` itself), `limine.conf` hashes, and that root's own fstab. Anything that would fail the next boot blocks the reboot with the reason and the fix, and snapg exits with status 1; a referenced file that is missing from another entry only warns. Whenever the check blocks, the screen says the restore is applied and pending, and not to reboot yet. A backup left behind by a sync that passed verification does not block. It holds the Limine mutex and applies only with `/boot` on FAT32, which it checks before locking or mounting anything. It covers the June incident, where a doctor run from a rescue snapshot synced `/boot` to the rescue kernel while `@` had another.
+- **Feature**: While the `/boot` sync rewrites files (copy, `mkinitcpio`, hashes, verify), Ctrl-C, kill and a closed terminal are deferred instead of killing snapg halfway: a notice says the Ctrl-C takes effect once `/boot` is ready, and the signal is delivered at the next safe point, after snapg has reported the result and armed the cleanup, before any question or reboot. Every command snapg starts inside that window (`mkinitcpio`, `b2sum`, `findmnt`, `btrfs`) runs in its own process group with stdin from `/dev/null`, so the terminal's Ctrl-C cannot reach it. Cancelling a pending restore keeps one window over the sync and the subvolume swap, so the signal never lands between them, and the swap's own signal shield keeps it instead of dropping it. A logind block inhibitor holds shutdown, reboot, suspend, lid and power key for the same window.
+
+### Pacman checkpoints
+- **Refine**: The hook lines start at column 0, under pacman's own hook line: `SnapGroup Antes de paru -Syu · …`, `SnapGroup 4 arquivos do limine.conf, hashes ok`. They sat 6 columns in, which only matched pacman's counter while it had one digit (`(1/3) `), so after a transaction with 10 or more hooks (`(18/18) `) they ran 2 columns short. A result no longer carries the green `✓`: only warnings (`!`) and errors (`✗`) get a mark, and the boot line drops "boot conferido", which repeated the hook's own description.
+
 ## [0.14.0-beta] - 2026-11-18
 > Commits: `eeb7c7b`, `43a3fc8`, `0748100`, `937608f`, `3ab9301`, `3de03d8`, `f353940`, `0e5c348`
 

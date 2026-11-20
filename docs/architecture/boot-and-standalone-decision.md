@@ -1,6 +1,8 @@
 # ADR: Arquitetura de Boot e Gestão de Snapshot (dois eixos)
 
 - **Status:** Proposto (não decidido) — registra o quadro de decisão.
+  Corrigido em 2026-11-18: o Limine não lê Btrfs (ver "Correção de
+  2026-11-18" abaixo).
 - **Data:** 2026-05-28
 - **Relacionado:** `docs/proposals/standalone-btrfs.md`,
   `docs/incidents/2026-05-01-limine-fat32-rollback/postmortem.md`,
@@ -74,7 +76,9 @@ módulos), confirma que sobe, e só então commita.
 ### B2.3 — `/boot` em BTRFS (Opção A da proposta) — *recomendado*
 
 Kernel e initramfs vivem dentro de `@`. A ESP só guarda o binário do
-bootloader (Limine com driver BTRFS — já é o caso aqui).
+bootloader. **Exige um bootloader que leia Btrfs (GRUB, rEFInd com driver
+Btrfs): o Limine não lê.** A versão original deste texto dizia "Limine com
+driver BTRFS — já é o caso aqui", e estava errado (ver a correção abaixo).
 
 - **(+)** Rollback **verdadeiramente atômico**: kernel, initramfs, módulos
   e sistema revertem juntos no swap. **`boot::sync_fat32` deixa de
@@ -93,7 +97,17 @@ bootloader (Limine com driver BTRFS — já é o caso aqui).
   arriscada.
 - **(−)** Secure Boot padrão fica mais complicado (kernel fora da ESP).
 
-**Recomendação do Eixo 2:** B2.3 (`/boot` em BTRFS). É a única opção em que
+> **Correção de 2026-11-18.** O Limine lê só FAT e ISO9660, por decisão de
+> projeto (`/usr/share/doc/limine/FAQ.md`, Limine 12.10: "remove the
+> responsibility of parsing filesystems … aside from the bare minimum
+> necessities (eg: FAT*, ISO9660)"). Com o Limine, kernel e initramfs
+> precisam estar numa partição FAT, então a B2.3 implica trocar de
+> bootloader, além da migração do `/boot`. A recomendação abaixo foi escrita
+> sem saber disso. O caminho que mantém o Limine é a B2.2, feita pelo próprio
+> snapgroup e não delegada ao `limine-snapper-sync`, cujo histórico só cobre
+> as 8 entradas mais novas: `docs/proposals/staged-boot-pairs.md`.
+
+**Recomendação original do Eixo 2 (2026-05-28):** B2.3 (`/boot` em BTRFS). É a única opção em que
 o rollback é atômico de ponta a ponta e a lógica de boot do snapgroup
 encolhe a quase nada. Manter B2.1 só enquanto a migração não acontecer
 (com o fail-safe da branch atual). B2.2 só se Secure Boot / compat
@@ -185,8 +199,9 @@ destrava o boot.
 ## Pendências que destravam a decisão
 
 - **(Eixo 2, bloqueador real)** Viabilidade/segurança da migração
-  FAT32→BTRFS. PoC: Limine com driver BTRFS, kernels dentro de `@`,
-  validar boot e um rollback atômico de ponta a ponta.
+  FAT32→BTRFS. PoC: ~~Limine com driver BTRFS~~ (não existe; ver a correção
+  de 2026-11-18), kernels dentro de `@`, validar boot e um rollback atômico
+  de ponta a ponta. Com o Limine, a B2.3 depende de trocar de bootloader.
 - **(Eixo 2)** Como o `limine.conf` referencia o kernel com `/boot` em
   BTRFS (`subvol=@/boot/...`) e se o hash BLAKE2B precisa de refresh
   pós-swap — decide se sobra alguma lógica de boot ou zero.
@@ -198,5 +213,8 @@ destrava o boot.
 ## Status
 
 Não decidido. A ADR fixa os dois eixos, suas opções e a recomendação
-(A1.1 + B2.3). O bloqueador concreto é a PoC de migração `/boot`→BTRFS
+(A1.1 + B2.3). Desde 2026-11-18, mantido o Limine, a proposta em análise
+para o Eixo 2 é a B2.2 feita pelo snapgroup
+(`docs/proposals/staged-boot-pairs.md`); a B2.3 fica condicionada a trocar de
+bootloader. O bloqueador concreto é a PoC de migração `/boot`→BTRFS
 (Eixo 2); o Eixo 1 pode permanecer como está sem custo.
