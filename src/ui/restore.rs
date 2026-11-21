@@ -247,11 +247,12 @@ pub(crate) fn select_restore_action(
             kernel_col = columns.kernel,
             members_col = "Membros".len(),
         );
-        // O Regret é o lugar que o próximo restore substitui: não fixo.
+        // O Regret é o lugar que o próximo restore substitui: não fixo. Guardado,
+        // a linha dele é a do checkpoint fixo, que saiu da lista de grupos.
         items.push(filter_picker::Item {
             text: truncate_for_terminal(&text, prefix_len),
             pacman: false,
-            fixed: false,
+            fixed: r.saved,
             detail: Vec::new(),
         });
         actions.push(RestoreAction::Regret);

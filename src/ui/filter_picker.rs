@@ -64,7 +64,7 @@ pub(crate) fn pick(
         header(title);
         line(format_args!("{}", style(prompt).bold()));
         if has_split {
-            line(format_args!("{}", filter_line(filter)));
+            line(format_args!("{}", filter_line(items, filter)));
         }
         line(format_args!("  {}", style(columns_header).bold()));
         if visible.is_empty() {
@@ -98,7 +98,7 @@ pub(crate) fn pick(
             Key::Home => cursor = 0,
             Key::End => cursor = visible.len().saturating_sub(1),
             Key::Tab if has_split => {
-                state.filter = filter.next();
+                state.filter = next_filter(items, filter);
                 cursor = 0;
                 offset = 0;
             }
@@ -127,6 +127,16 @@ fn opening_filter(items: &[Item], wanted: RestoreFilter) -> RestoreFilter {
     wanted
 }
 
+/// Próximo recorte que mostra algo: Todos nunca está vazio quando há o que
+/// separar, então o laço sempre para.
+fn next_filter(items: &[Item], current: RestoreFilter) -> RestoreFilter {
+    let mut next = current.next();
+    while visible(items, next).is_empty() {
+        next = next.next();
+    }
+    next
+}
+
 /// Algum recorte mostra só parte da lista? Como Fixos, Saves e Pacman não se
 /// sobrepõem, isso é a lista ocupar pelo menos dois deles.
 fn splits(items: &[Item]) -> bool {
@@ -149,9 +159,11 @@ fn scroll(offset: usize, cursor: usize, page: usize) -> usize {
 }
 
 /// `Mostrar  Todos · [Fixos] · Saves · Pacman`, com o recorte ativo em destaque.
-fn filter_line(active: RestoreFilter) -> String {
+/// Recorte vazio fica fora da linha, como fica fora do Tab.
+fn filter_line(items: &[Item], active: RestoreFilter) -> String {
     let options: Vec<String> = RestoreFilter::ORDER
         .iter()
+        .filter(|f| !visible(items, **f).is_empty())
         .map(|f| {
             if *f == active {
                 return style(format!("[{}]", f.label())).bold().to_string();
@@ -164,7 +176,7 @@ fn filter_line(active: RestoreFilter) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Item, opening_filter, scroll, splits, visible};
+    use super::{Item, next_filter, opening_filter, scroll, splits, visible};
     use crate::config::RestoreFilter;
 
     /// `(pacman, fixo)` de cada item.
@@ -213,6 +225,16 @@ mod tests {
         let fixed_pacman = items(&[(false, false), (true, true)]);
         assert_eq!(opening_filter(&fixed_pacman, RestoreFilter::Pacman), RestoreFilter::All);
         assert_eq!(opening_filter(&fixed_pacman, RestoreFilter::Saves), RestoreFilter::Saves);
+    }
+
+    #[test]
+    fn tab_skips_empty_filters() {
+        // Saves e um pacman renomeado: Pacman está vazio.
+        let list = items(&[(false, false), (true, true)]);
+        assert_eq!(next_filter(&list, RestoreFilter::Fixed), RestoreFilter::Saves);
+        assert_eq!(next_filter(&list, RestoreFilter::Saves), RestoreFilter::All);
+        let full = items(&[(false, false), (true, true), (true, false)]);
+        assert_eq!(next_filter(&full, RestoreFilter::Saves), RestoreFilter::Pacman);
     }
 
     #[test]
