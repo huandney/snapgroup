@@ -27,8 +27,8 @@ impl Item {
     fn name(self) -> &'static str {
         match self {
             Item::PacmanHook => "Checkpoints do pacman",
-            Item::KeepGroups => "Automáticos mantidos",
-            Item::KeepPacman => "Do pacman mantidos",
+            Item::KeepGroups => "Não fixos do save",
+            Item::KeepPacman => "Não fixos do pacman",
             Item::TrashDays => "Dias na lixeira",
             Item::RestoreFilter => "Filtro do restore",
         }
@@ -136,13 +136,10 @@ fn step(steps: &[u64], current: u64, forward: bool) -> u64 {
 fn filter_value(filter: RestoreFilter) -> &'static str {
     match filter {
         RestoreFilter::All => "todos",
-        RestoreFilter::Manual => "manuais",
+        RestoreFilter::Fixed => "fixos",
+        RestoreFilter::Saves => "saves",
         RestoreFilter::Pacman => "pacman",
     }
-}
-
-fn previous_filter(filter: RestoreFilter) -> RestoreFilter {
-    filter.next().next()
 }
 
 /// Uma mudança feita, para o resumo ao sair: nome, antes e agora.
@@ -223,7 +220,7 @@ fn change(item: Item, values: &Values, forward: bool) -> Result<String> {
         Item::PacmanHook => switch_pacman(values.hooks != HookOwner::Snapg),
         Item::RestoreFilter => {
             let current = values.config.restore_filter;
-            let next = if forward { current.next() } else { previous_filter(current) };
+            let next = if forward { current.next() } else { current.prev() };
             save(item, filter_value(next))
         }
         _ => {

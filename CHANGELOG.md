@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0-beta] - 2026-11-21
+> Commits: `6b697a7`, `00713fa`, `b609bca`, `90853d8`, `f141181`
+
+### Restore
+- **Refine**: Tab in the restore picker cycles through `Todos · Fixos · Saves · Pacman` instead of `Todos · Manuais · Pacman`, and each checkpoint shows under exactly one of the three. Fixos are the checkpoints outside retention (a chosen name, renamed, or saved from the Regret), from any origin, which only `snapg delete` removes; Saves are the ones `snapg save` took with the default name, which retention sends to the trash, plus the Regret not yet kept, which the next restore replaces (a kept Regret is fixed and shows under Fixos); Pacman are the ones the hook took with the default name, and a renamed one moves to Fixos. "Manuais" mixed checkpoints that stay with ones that rotate out, and the pacman ones no longer crowd the few saves out of view. The filter line and Tab show whenever a filter would leave something out, no longer only when there are pacman checkpoints, a starting filter that would show nothing opens on Todos, and an empty filter is left out of the line and skipped by Tab. `RESTORE_FILTER` takes `todos`, `fixos`, `saves` or `pacman`; the old `manuais` still works and opens on Todos, since Fixos would hide the Regret it used to show.
+
+### Delete and setup
+- **Refine**: Checkpoints with the default name are called "não fixos" instead of "automáticos", which read like checkpoints taken on a schedule: `n não fixos` marks them in `snapg delete` (the key was `a`), the freed space reads "… GiB não fixos", the `save` retention line says "não fixos mantidos", and `snapg setup` names the two retention settings "Não fixos do save" (`KEEP_GROUPS`) and "Não fixos do pacman" (`KEEP_PACMAN`).
+
 ## [0.15.0-beta] - 2026-11-20
 > Commits: `cb7f5ca`, `12e095b`, `a5a920a`, `6cbf8ab`, `407a508`
 

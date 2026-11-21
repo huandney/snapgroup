@@ -247,7 +247,14 @@ pub(crate) fn select_restore_action(
             kernel_col = columns.kernel,
             members_col = "Membros".len(),
         );
-        items.push(filter_picker::Item { text: truncate_for_terminal(&text, prefix_len), pacman: false, detail: Vec::new() });
+        // O Regret é o lugar que o próximo restore substitui: não fixo. Guardado,
+        // a linha dele é a do checkpoint fixo, que saiu da lista de grupos.
+        items.push(filter_picker::Item {
+            text: truncate_for_terminal(&text, prefix_len),
+            pacman: false,
+            fixed: r.saved,
+            detail: Vec::new(),
+        });
         actions.push(RestoreAction::Regret);
     }
 
@@ -256,6 +263,7 @@ pub(crate) fn select_restore_action(
         items.push(filter_picker::Item {
             text: truncate_for_terminal(&text, prefix_len),
             pacman: group::is_pacman(g),
+            fixed: !group::is_auto(g),
             detail: summaries.get(&g.id).cloned().unwrap_or_default(),
         });
         actions.push(RestoreAction::Checkpoint(g.id));

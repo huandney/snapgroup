@@ -26,36 +26,50 @@ pub struct Config {
     pub restore_filter: RestoreFilter,
 }
 
-/// Recorte do seletor do restore. O Regret conta como manual.
+/// Recorte do seletor do restore. Fora Todos, os recortes não se sobrepõem:
+/// Fixos leva os fixos de qualquer origem, e o resto se divide pela origem,
+/// Saves (do `snapg save`) e Pacman (do hook). O Regret (o lugar único que o
+/// próximo restore substitui) não é fixo nem do pacman, então cai em Saves.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RestoreFilter {
     All,
-    Manual,
+    Fixed,
+    Saves,
     Pacman,
 }
 
 impl RestoreFilter {
-    pub const ORDER: [RestoreFilter; 3] = [RestoreFilter::All, RestoreFilter::Manual, RestoreFilter::Pacman];
+    pub const ORDER: [RestoreFilter; 4] =
+        [RestoreFilter::All, RestoreFilter::Fixed, RestoreFilter::Saves, RestoreFilter::Pacman];
 
     pub fn label(self) -> &'static str {
         match self {
             RestoreFilter::All => "Todos",
-            RestoreFilter::Manual => "Manuais",
+            RestoreFilter::Fixed => "Fixos",
+            RestoreFilter::Saves => "Saves",
             RestoreFilter::Pacman => "Pacman",
         }
     }
 
-    pub fn shows(self, pacman: bool) -> bool {
+    pub fn shows(self, pacman: bool, fixed: bool) -> bool {
         match self {
             RestoreFilter::All => true,
-            RestoreFilter::Manual => !pacman,
-            RestoreFilter::Pacman => pacman,
+            RestoreFilter::Fixed => fixed,
+            RestoreFilter::Saves => !fixed && !pacman,
+            RestoreFilter::Pacman => !fixed && pacman,
         }
     }
 
     pub fn next(self) -> RestoreFilter {
-        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
-        Self::ORDER[(i + 1) % Self::ORDER.len()]
+        Self::ORDER[(self.index() + 1) % Self::ORDER.len()]
+    }
+
+    pub fn prev(self) -> RestoreFilter {
+        Self::ORDER[(self.index() + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+
+    fn index(self) -> usize {
+        Self::ORDER.iter().position(|f| *f == self).expect("todo recorte está em ORDER")
     }
 }
 
@@ -146,9 +160,13 @@ fn parse(content: &str) -> Config {
                     cfg.keep_pacman = n;
                 }
             }
-            "RESTORE_FILTER" => match val.to_ascii_lowercase().as_str() {
-                "todos" => cfg.restore_filter = RestoreFilter::All,
-                "manuais" => cfg.restore_filter = RestoreFilter::Manual,
+            "RESTORE_FILTER" => match val.to_lowercase().as_str() {
+                // `manuais` é o valor antigo: abre em Todos, porque Fixos
+                // esconderia o Regret e Saves os saves fixos, que o antigo
+                // Manuais mostrava.
+                "todos" | "manuais" => cfg.restore_filter = RestoreFilter::All,
+                "fixos" => cfg.restore_filter = RestoreFilter::Fixed,
+                "saves" => cfg.restore_filter = RestoreFilter::Saves,
                 "pacman" => cfg.restore_filter = RestoreFilter::Pacman,
                 _ => {}
             },
@@ -193,7 +211,10 @@ mod tests {
     fn reads_restore_filter() {
         use super::RestoreFilter;
         assert_eq!(parse("").restore_filter, RestoreFilter::All);
-        assert_eq!(parse("RESTORE_FILTER=manuais\n").restore_filter, RestoreFilter::Manual);
+        assert_eq!(parse("RESTORE_FILTER=fixos\n").restore_filter, RestoreFilter::Fixed);
+        assert_eq!(parse("RESTORE_FILTER=manuais\n").restore_filter, RestoreFilter::All);
+        assert_eq!(parse("RESTORE_FILTER=saves\n").restore_filter, RestoreFilter::Saves);
+        assert_eq!(parse("RESTORE_FILTER=SAVES\n").restore_filter, RestoreFilter::Saves);
         assert_eq!(parse("RESTORE_FILTER=\"Pacman\"\n").restore_filter, RestoreFilter::Pacman);
         assert_eq!(parse("RESTORE_FILTER=outro\n").restore_filter, RestoreFilter::All);
     }
