@@ -20,7 +20,7 @@ pub(crate) struct DeletePlan {
 }
 
 /// Espaço que a seleção libera, separado por tipo na ordem em que é somado:
-/// backups, depois automáticos, depois fixos. Cada parte é o que ela acrescenta
+/// backups, depois não fixos, depois fixos. Cada parte é o que ela acrescenta
 /// às anteriores (o que dois tipos dividem conta uma vez, no primeiro).
 /// Backups saem na hora; checkpoints, no purge da lixeira (ou na hora com
 /// `--purge`).
@@ -248,7 +248,7 @@ fn pick(
                 }
             }
             Key::Char('o') => toggle_all(&mut sel.orphans, 0..ctx.orphans.len()),
-            Key::Char('a') => toggle_all(
+            Key::Char('n') => toggle_all(
                 &mut sel.groups,
                 (0..ctx.groups.len()).filter(|&i| group::is_auto(&ctx.groups[i])),
             ),
@@ -330,7 +330,7 @@ fn render(
         keys.push("o órfãos");
     }
     if ctx.groups.iter().any(group::is_auto) {
-        keys.push("a automáticos");
+        keys.push("n não fixos");
     }
     if ctx.groups.iter().any(|g| !group::is_auto(g)) {
         keys.push("f fixos");
@@ -415,7 +415,7 @@ fn paint(text: String, paint: Paint) -> String {
     }
 }
 
-/// "libera 8.6 GiB agora · 2.1 GiB automáticos + 1.1 GiB fixos no purge da
+/// "libera 8.6 GiB agora · 2.1 GiB não fixos + 1.1 GiB fixos no purge da
 /// lixeira", na cor de cada parte da barra. Com `--purge`, tudo sai agora.
 fn freed_text(ctx: &DeleteContext<'_>, sel: &Selection, orphans: u64, auto: u64, fixed: u64) -> String {
     if sel.is_empty() {
@@ -425,7 +425,7 @@ fn freed_text(ctx: &DeleteContext<'_>, sel: &Selection, orphans: u64, auto: u64,
     let plus = style(" + ").dim().to_string();
     let mut checkpoints = Vec::new();
     if auto > 0 {
-        checkpoints.push(paint(format!("{} automáticos", human_bytes(auto)), Paint::Purge));
+        checkpoints.push(paint(format!("{} não fixos", human_bytes(auto)), Paint::Purge));
     }
     if fixed > 0 {
         checkpoints.push(paint(format!("{} fixos", human_bytes(fixed)), Paint::Fixed));
@@ -811,7 +811,7 @@ mod tests {
         let gib = 1u64 << 30;
         assert_eq!(
             super::freed_text(&ctx, &sel, 8 * gib, 2 * gib, gib),
-            "libera 8.0 GiB agora · 2.0 GiB automáticos + 1.0 GiB fixos no purge da lixeira"
+            "libera 8.0 GiB agora · 2.0 GiB não fixos + 1.0 GiB fixos no purge da lixeira"
         );
         assert_eq!(
             super::freed_text(&ctx, &sel, 8 * gib, 0, gib),
@@ -820,7 +820,7 @@ mod tests {
         ctx.mode = Mode::Delete { purge: true, trash_days: 15 };
         assert_eq!(
             super::freed_text(&ctx, &sel, 8 * gib, 2 * gib, gib),
-            "libera 8.0 GiB backups + 2.0 GiB automáticos + 1.0 GiB fixos agora"
+            "libera 8.0 GiB backups + 2.0 GiB não fixos + 1.0 GiB fixos agora"
         );
     }
 
@@ -840,6 +840,23 @@ mod tests {
                 },
             }],
         }
+    }
+
+    #[test]
+    fn delete_screen_names_the_fixed_and_not_fixed_keys() {
+        let mut not_fixed = trashed_group(2);
+        not_fixed.members[0].snapshot.userdata = Some(serde_json::json!({"snapgroup-id": "2", "snapgroup-auto": "1"}));
+        let mut fixed = trashed_group(1);
+        fixed.members[0].snapshot.userdata = Some(serde_json::json!({"snapgroup-id": "1", "snapgroup-auto": "0"}));
+        let groups = vec![not_fixed, fixed];
+        let labels = HashMap::new();
+        let rows: Vec<Row> = (0..groups.len()).map(Row::Group).collect();
+        let mode = Mode::Delete { purge: false, trash_days: 15 };
+        let ctx = DeleteContext { groups: &groups, kernel_labels: &labels, origins: &HashMap::new(), orphans: &[], mode, purge_due: &[] };
+        let mut sel = Selection { groups: BTreeSet::new(), orphans: BTreeSet::new(), cursor: 0, offset: 0 };
+        let frame = render(&ctx, &rows, &mut sel, &Estimate::Pending, (20, 120));
+        assert!(frame.contains("n não fixos") && frame.contains("f fixos"));
+        assert!(!frame.contains("automáticos"));
     }
 
     #[test]
