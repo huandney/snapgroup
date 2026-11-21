@@ -11,7 +11,8 @@ pub(crate) struct Item {
     /// Linha pronta, já cortada para a largura do terminal.
     pub(crate) text: String,
     pub(crate) pacman: bool,
-    /// Tem nome escolhido e só sai pelo `delete` (fora da retenção).
+    /// Fora da retenção (nome escolhido, renomeado ou vindo do Regret): só
+    /// sai pelo `delete`.
     pub(crate) fixed: bool,
     /// Resumo mostrado embaixo da lista quando o cursor está no item.
     pub(crate) detail: Vec<String>,
@@ -39,9 +40,7 @@ pub(crate) fn pick(
     state: &mut PickState,
 ) -> Result<Option<usize>> {
     let has_split = splits(items);
-    if !has_split {
-        state.filter = RestoreFilter::All;
-    }
+    state.filter = opening_filter(items, state.filter);
     let mut cursor = state
         .chosen
         .and_then(|chosen| visible(items, state.filter).iter().position(|&i| i == chosen))
@@ -54,8 +53,8 @@ pub(crate) fn pick(
         let visible = visible(items, filter);
         cursor = cursor.min(visible.len().saturating_sub(1));
         // O espaço do resumo é fixo dentro do recorte: a lista não pula quando
-        // o cursor passa de um checkpoint do pacman para um manual, e some
-        // quando nada à vista tem resumo (só checkpoints fora do pacman).
+        // o cursor passa de um checkpoint com resumo (do pacman) para um sem,
+        // e some quando nada à vista tem resumo (só checkpoints fora do pacman).
         let detail_lines = visible.iter().map(|&i| items[i].detail.len()).max().unwrap_or(0);
         let detail_chrome = if detail_lines > 0 { detail_lines + 1 } else { 0 };
         let page = (term.size().0 as usize).saturating_sub(CHROME_LINES + detail_chrome).max(1);
@@ -118,6 +117,16 @@ fn visible(items: &[Item], filter: RestoreFilter) -> Vec<usize> {
     (0..items.len()).filter(|&i| filter.shows(items[i].pacman, items[i].fixed)).collect()
 }
 
+/// Recorte com que o seletor abre: o pedido, ou Todos quando ele não separa
+/// nada ou não mostraria nada (`RESTORE_FILTER=pacman` sem checkpoint do
+/// pacman abriria numa lista vazia).
+fn opening_filter(items: &[Item], wanted: RestoreFilter) -> RestoreFilter {
+    if !splits(items) || visible(items, wanted).is_empty() {
+        return RestoreFilter::All;
+    }
+    wanted
+}
+
 /// Algum recorte mostra só parte da lista?
 fn splits(items: &[Item]) -> bool {
     let mixed = |key: fn(&Item) -> bool| items.iter().any(key) && !items.iter().all(key);
@@ -151,7 +160,7 @@ fn filter_line(active: RestoreFilter) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Item, scroll, splits, visible};
+    use super::{Item, opening_filter, scroll, splits, visible};
     use crate::config::RestoreFilter;
 
     /// `(pacman, fixo)` de cada item.
@@ -182,11 +191,24 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_starting_filter_opens_on_all() {
+        let no_pacman = items(&[(false, true), (false, false)]);
+        assert_eq!(opening_filter(&no_pacman, RestoreFilter::Pacman), RestoreFilter::All);
+        assert_eq!(opening_filter(&no_pacman, RestoreFilter::Fixed), RestoreFilter::Fixed);
+        let all_fixed = items(&[(false, true), (true, true)]);
+        assert_eq!(opening_filter(&all_fixed, RestoreFilter::NotFixed), RestoreFilter::All);
+        assert_eq!(opening_filter(&all_fixed, RestoreFilter::Pacman), RestoreFilter::Pacman);
+    }
+
+    #[test]
     fn tab_cycles_through_the_four() {
         assert_eq!(RestoreFilter::All.next(), RestoreFilter::Fixed);
         assert_eq!(RestoreFilter::Fixed.next(), RestoreFilter::NotFixed);
         assert_eq!(RestoreFilter::NotFixed.next(), RestoreFilter::Pacman);
         assert_eq!(RestoreFilter::Pacman.next(), RestoreFilter::All);
+        for filter in RestoreFilter::ORDER {
+            assert_eq!(filter.next().prev(), filter);
+        }
     }
 
     #[test]

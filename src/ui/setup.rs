@@ -142,12 +142,6 @@ fn filter_value(filter: RestoreFilter) -> &'static str {
     }
 }
 
-fn previous_filter(filter: RestoreFilter) -> RestoreFilter {
-    let order = RestoreFilter::ORDER;
-    let i = order.iter().position(|f| *f == filter).unwrap_or(0);
-    order[(i + order.len() - 1) % order.len()]
-}
-
 /// Uma mudança feita, para o resumo ao sair: nome, antes e agora.
 struct Change {
     item: Item,
@@ -226,7 +220,7 @@ fn change(item: Item, values: &Values, forward: bool) -> Result<String> {
         Item::PacmanHook => switch_pacman(values.hooks != HookOwner::Snapg),
         Item::RestoreFilter => {
             let current = values.config.restore_filter;
-            let next = if forward { current.next() } else { previous_filter(current) };
+            let next = if forward { current.next() } else { current.prev() };
             save(item, filter_value(next))
         }
         _ => {

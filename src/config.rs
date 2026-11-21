@@ -60,8 +60,15 @@ impl RestoreFilter {
     }
 
     pub fn next(self) -> RestoreFilter {
-        let i = Self::ORDER.iter().position(|f| *f == self).unwrap_or(0);
-        Self::ORDER[(i + 1) % Self::ORDER.len()]
+        Self::ORDER[(self.index() + 1) % Self::ORDER.len()]
+    }
+
+    pub fn prev(self) -> RestoreFilter {
+        Self::ORDER[(self.index() + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+
+    fn index(self) -> usize {
+        Self::ORDER.iter().position(|f| *f == self).expect("todo recorte está em ORDER")
     }
 }
 
@@ -152,10 +159,11 @@ fn parse(content: &str) -> Config {
                     cfg.keep_pacman = n;
                 }
             }
-            "RESTORE_FILTER" => match val.to_ascii_lowercase().as_str() {
-                "todos" => cfg.restore_filter = RestoreFilter::All,
-                // `manuais` é o valor antigo, de antes do recorte por fixos: o mais perto.
-                "fixos" | "manuais" => cfg.restore_filter = RestoreFilter::Fixed,
+            "RESTORE_FILTER" => match val.to_lowercase().as_str() {
+                // `manuais` é o valor antigo: abre em Todos, porque Fixos
+                // esconderia o Regret, que o antigo Manuais mostrava.
+                "todos" | "manuais" => cfg.restore_filter = RestoreFilter::All,
+                "fixos" => cfg.restore_filter = RestoreFilter::Fixed,
                 "nao-fixos" | "não-fixos" => cfg.restore_filter = RestoreFilter::NotFixed,
                 "pacman" => cfg.restore_filter = RestoreFilter::Pacman,
                 _ => {}
@@ -202,9 +210,10 @@ mod tests {
         use super::RestoreFilter;
         assert_eq!(parse("").restore_filter, RestoreFilter::All);
         assert_eq!(parse("RESTORE_FILTER=fixos\n").restore_filter, RestoreFilter::Fixed);
-        assert_eq!(parse("RESTORE_FILTER=manuais\n").restore_filter, RestoreFilter::Fixed);
+        assert_eq!(parse("RESTORE_FILTER=manuais\n").restore_filter, RestoreFilter::All);
         assert_eq!(parse("RESTORE_FILTER=nao-fixos\n").restore_filter, RestoreFilter::NotFixed);
         assert_eq!(parse("RESTORE_FILTER=Não-fixos\n").restore_filter, RestoreFilter::NotFixed);
+        assert_eq!(parse("RESTORE_FILTER=NÃO-FIXOS\n").restore_filter, RestoreFilter::NotFixed);
         assert_eq!(parse("RESTORE_FILTER=\"Pacman\"\n").restore_filter, RestoreFilter::Pacman);
         assert_eq!(parse("RESTORE_FILTER=outro\n").restore_filter, RestoreFilter::All);
     }
