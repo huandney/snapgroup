@@ -27,8 +27,8 @@ impl Item {
     fn name(self) -> &'static str {
         match self {
             Item::PacmanHook => "Checkpoints do pacman",
-            Item::KeepGroups => "Automáticos mantidos",
-            Item::KeepPacman => "Do pacman mantidos",
+            Item::KeepGroups => "Não fixos do save",
+            Item::KeepPacman => "Não fixos do pacman",
             Item::TrashDays => "Dias na lixeira",
             Item::RestoreFilter => "Filtro do restore",
         }

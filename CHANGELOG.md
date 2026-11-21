@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Restore
 - **Refine**: Tab in the restore picker cycles through `Todos · Fixos · Não fixos · Pacman` instead of `Todos · Manuais · Pacman`. Fixos are the checkpoints with a chosen name, from any origin, which only `snapg delete` removes; Não fixos are the ones with the default name, which retention sends to the trash, from `save` or from pacman, plus the Regret, which the next restore replaces; Pacman is everything the hook took, renamed or not. Each name holds literally, so a pacman checkpoint with the default name shows under both Não fixos and Pacman. "Manuais" mixed checkpoints that stay with ones that rotate out. The filter line and Tab show whenever a filter would leave something out, no longer only when there are pacman checkpoints. `RESTORE_FILTER` takes `todos`, `fixos`, `nao-fixos` or `pacman`; the old `manuais` still works and opens on Fixos.
 
+### Delete and setup
+- **Refine**: Checkpoints with the default name are called "não fixos" instead of "automáticos", which read like checkpoints taken on a schedule: `n não fixos` marks them in `snapg delete` (the key was `a`), the freed space reads "… GiB não fixos", the `save` retention line says "não fixos mantidos", and `snapg setup` names the two retention settings "Não fixos do save" (`KEEP_GROUPS`) and "Não fixos do pacman" (`KEEP_PACMAN`).
+
 ## [0.15.0-beta] - 2026-11-20
 > Commits: `cb7f5ca`, `12e095b`, `a5a920a`, `6cbf8ab`, `407a508`
 

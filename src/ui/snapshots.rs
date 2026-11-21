@@ -37,7 +37,7 @@ pub(crate) fn prompt_save_name(
                 "{:<9} {}",
                 "retenção",
                 style(format!(
-                    "nome padrão entra nos {keep_groups} automáticos mantidos · nome digitado fixa"
+                    "nome padrão entra nos {keep_groups} não fixos mantidos · nome digitado fixa"
                 ))
                 .dim()
             ));
