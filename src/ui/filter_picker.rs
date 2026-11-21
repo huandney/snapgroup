@@ -1,4 +1,4 @@
-//! Seletor do restore com recortes: Tab alterna Todos · Fixos · Não fixos ·
+//! Seletor do restore com recortes: Tab alterna Todos · Fixos · Saves ·
 //! Pacman. O `Select` do dialoguer não aceita outra tecla além das dele, por
 //! isso este é próprio; fora o Tab, ele se comporta igual (setas, enter, esc).
 
@@ -30,8 +30,8 @@ pub(crate) struct PickState {
 const CHROME_LINES: usize = 8;
 
 /// Índice do item escolhido em `items`, ou `None` com Esc. Quando nenhum
-/// recorte separa nada (todos fixos ou todos não fixos, e nenhum ou todos do
-/// pacman), a linha do filtro e o Tab somem.
+/// recorte separa nada (a lista toda cabe num só dos três), a linha do filtro
+/// e o Tab somem.
 pub(crate) fn pick(
     title: &str,
     prompt: &str,
@@ -127,10 +127,14 @@ fn opening_filter(items: &[Item], wanted: RestoreFilter) -> RestoreFilter {
     wanted
 }
 
-/// Algum recorte mostra só parte da lista?
+/// Algum recorte mostra só parte da lista? Como Fixos, Saves e Pacman não se
+/// sobrepõem, isso é a lista ocupar pelo menos dois deles.
 fn splits(items: &[Item]) -> bool {
-    let mixed = |key: fn(&Item) -> bool| items.iter().any(key) && !items.iter().all(key);
-    mixed(|item| item.fixed) || mixed(|item| item.pacman)
+    let occupied = RestoreFilter::ORDER[1..]
+        .iter()
+        .filter(|f| items.iter().any(|item| f.shows(item.pacman, item.fixed)))
+        .count();
+    occupied >= 2
 }
 
 /// Primeira linha da janela, mantendo o cursor dentro dela.
@@ -144,7 +148,7 @@ fn scroll(offset: usize, cursor: usize, page: usize) -> usize {
     offset
 }
 
-/// `Mostrar  Todos · [Fixos] · Não fixos · Pacman`, com o recorte ativo em destaque.
+/// `Mostrar  Todos · [Fixos] · Saves · Pacman`, com o recorte ativo em destaque.
 fn filter_line(active: RestoreFilter) -> String {
     let options: Vec<String> = RestoreFilter::ORDER
         .iter()
@@ -177,8 +181,16 @@ mod tests {
         let list = items(&[(true, false), (false, true), (true, true), (false, false)]);
         assert_eq!(visible(&list, RestoreFilter::All), vec![0, 1, 2, 3]);
         assert_eq!(visible(&list, RestoreFilter::Fixed), vec![1, 2]);
-        assert_eq!(visible(&list, RestoreFilter::NotFixed), vec![0, 3]);
-        assert_eq!(visible(&list, RestoreFilter::Pacman), vec![0, 2]);
+        assert_eq!(visible(&list, RestoreFilter::Saves), vec![3]);
+        assert_eq!(visible(&list, RestoreFilter::Pacman), vec![0]);
+    }
+
+    #[test]
+    fn the_three_filters_add_up_to_all() {
+        let list = items(&[(true, false), (false, true), (true, true), (false, false), (true, false)]);
+        let mut shown: Vec<usize> = RestoreFilter::ORDER[1..].iter().flat_map(|f| visible(&list, *f)).collect();
+        shown.sort();
+        assert_eq!(shown, visible(&list, RestoreFilter::All));
     }
 
     #[test]
@@ -186,8 +198,11 @@ mod tests {
         assert!(!splits(&items(&[])));
         assert!(!splits(&items(&[(false, true), (false, true)])));
         assert!(!splits(&items(&[(true, false), (true, false)])));
+        // Fixos de origens diferentes caem todos em Fixos.
+        assert!(!splits(&items(&[(false, true), (true, true)])));
         assert!(splits(&items(&[(false, true), (false, false)])));
         assert!(splits(&items(&[(false, false), (true, false)])));
+        assert!(splits(&items(&[(true, true), (true, false)])));
     }
 
     #[test]
@@ -195,16 +210,16 @@ mod tests {
         let no_pacman = items(&[(false, true), (false, false)]);
         assert_eq!(opening_filter(&no_pacman, RestoreFilter::Pacman), RestoreFilter::All);
         assert_eq!(opening_filter(&no_pacman, RestoreFilter::Fixed), RestoreFilter::Fixed);
-        let all_fixed = items(&[(false, true), (true, true)]);
-        assert_eq!(opening_filter(&all_fixed, RestoreFilter::NotFixed), RestoreFilter::All);
-        assert_eq!(opening_filter(&all_fixed, RestoreFilter::Pacman), RestoreFilter::Pacman);
+        let fixed_pacman = items(&[(false, false), (true, true)]);
+        assert_eq!(opening_filter(&fixed_pacman, RestoreFilter::Pacman), RestoreFilter::All);
+        assert_eq!(opening_filter(&fixed_pacman, RestoreFilter::Saves), RestoreFilter::Saves);
     }
 
     #[test]
     fn tab_cycles_through_the_four() {
         assert_eq!(RestoreFilter::All.next(), RestoreFilter::Fixed);
-        assert_eq!(RestoreFilter::Fixed.next(), RestoreFilter::NotFixed);
-        assert_eq!(RestoreFilter::NotFixed.next(), RestoreFilter::Pacman);
+        assert_eq!(RestoreFilter::Fixed.next(), RestoreFilter::Saves);
+        assert_eq!(RestoreFilter::Saves.next(), RestoreFilter::Pacman);
         assert_eq!(RestoreFilter::Pacman.next(), RestoreFilter::All);
         for filter in RestoreFilter::ORDER {
             assert_eq!(filter.next().prev(), filter);

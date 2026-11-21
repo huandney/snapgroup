@@ -137,7 +137,7 @@ fn filter_value(filter: RestoreFilter) -> &'static str {
     match filter {
         RestoreFilter::All => "todos",
         RestoreFilter::Fixed => "fixos",
-        RestoreFilter::NotFixed => "nao-fixos",
+        RestoreFilter::Saves => "saves",
         RestoreFilter::Pacman => "pacman",
     }
 }
