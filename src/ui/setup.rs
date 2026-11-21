@@ -136,13 +136,16 @@ fn step(steps: &[u64], current: u64, forward: bool) -> u64 {
 fn filter_value(filter: RestoreFilter) -> &'static str {
     match filter {
         RestoreFilter::All => "todos",
-        RestoreFilter::Manual => "manuais",
+        RestoreFilter::Fixed => "fixos",
+        RestoreFilter::NotFixed => "nao-fixos",
         RestoreFilter::Pacman => "pacman",
     }
 }
 
 fn previous_filter(filter: RestoreFilter) -> RestoreFilter {
-    filter.next().next()
+    let order = RestoreFilter::ORDER;
+    let i = order.iter().position(|f| *f == filter).unwrap_or(0);
+    order[(i + order.len() - 1) % order.len()]
 }
 
 /// Uma mudança feita, para o resumo ao sair: nome, antes e agora.

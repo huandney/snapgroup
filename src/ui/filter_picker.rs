@@ -1,4 +1,4 @@
-//! Seletor do restore com recorte por origem: Tab alterna Todos · Manuais ·
+//! Seletor do restore com recortes: Tab alterna Todos · Fixos · Não fixos ·
 //! Pacman. O `Select` do dialoguer não aceita outra tecla além das dele, por
 //! isso este é próprio; fora o Tab, ele se comporta igual (setas, enter, esc).
 
@@ -11,6 +11,8 @@ pub(crate) struct Item {
     /// Linha pronta, já cortada para a largura do terminal.
     pub(crate) text: String,
     pub(crate) pacman: bool,
+    /// Tem nome escolhido e só sai pelo `delete` (fora da retenção).
+    pub(crate) fixed: bool,
     /// Resumo mostrado embaixo da lista quando o cursor está no item.
     pub(crate) detail: Vec<String>,
 }
@@ -26,8 +28,9 @@ pub(crate) struct PickState {
 /// (branco, dica, cursor), fora o resumo do item.
 const CHROME_LINES: usize = 8;
 
-/// Índice do item escolhido em `items`, ou `None` com Esc. Sem item do pacman
-/// o recorte não tem o que separar: a linha do filtro e o Tab somem.
+/// Índice do item escolhido em `items`, ou `None` com Esc. Quando nenhum
+/// recorte separa nada (todos fixos ou todos não fixos, e nenhum ou todos do
+/// pacman), a linha do filtro e o Tab somem.
 pub(crate) fn pick(
     title: &str,
     prompt: &str,
@@ -35,8 +38,8 @@ pub(crate) fn pick(
     items: &[Item],
     state: &mut PickState,
 ) -> Result<Option<usize>> {
-    let has_pacman = items.iter().any(|item| item.pacman);
-    if !has_pacman {
+    let has_split = splits(items);
+    if !has_split {
         state.filter = RestoreFilter::All;
     }
     let mut cursor = state
@@ -52,7 +55,7 @@ pub(crate) fn pick(
         cursor = cursor.min(visible.len().saturating_sub(1));
         // O espaço do resumo é fixo dentro do recorte: a lista não pula quando
         // o cursor passa de um checkpoint do pacman para um manual, e some
-        // quando nada à vista tem resumo (o filtro Manuais).
+        // quando nada à vista tem resumo (só checkpoints fora do pacman).
         let detail_lines = visible.iter().map(|&i| items[i].detail.len()).max().unwrap_or(0);
         let detail_chrome = if detail_lines > 0 { detail_lines + 1 } else { 0 };
         let page = (term.size().0 as usize).saturating_sub(CHROME_LINES + detail_chrome).max(1);
@@ -61,7 +64,7 @@ pub(crate) fn pick(
         clear_screen();
         header(title);
         line(format_args!("{}", style(prompt).bold()));
-        if has_pacman {
+        if has_split {
             line(format_args!("{}", filter_line(filter)));
         }
         line(format_args!("  {}", style(columns_header).bold()));
@@ -84,7 +87,7 @@ pub(crate) fn pick(
             }
         }
         println!();
-        let tab = if has_pacman { " · tab filtra" } else { "" };
+        let tab = if has_split { " · tab filtra" } else { "" };
         line(format_args!("{}", style(format!("↑/↓ move{tab} · enter confirma")).dim()));
 
         // As teclas do Select do dialoguer, que este substitui, mais o Tab.
@@ -95,7 +98,7 @@ pub(crate) fn pick(
             Key::PageDown | Key::ArrowRight | Key::Char('l') => cursor = (cursor + page).min(visible.len().saturating_sub(1)),
             Key::Home => cursor = 0,
             Key::End => cursor = visible.len().saturating_sub(1),
-            Key::Tab if has_pacman => {
+            Key::Tab if has_split => {
                 state.filter = filter.next();
                 cursor = 0;
                 offset = 0;
@@ -112,7 +115,13 @@ pub(crate) fn pick(
 
 /// Índices dos itens que o recorte mostra, na ordem original (data).
 fn visible(items: &[Item], filter: RestoreFilter) -> Vec<usize> {
-    (0..items.len()).filter(|&i| filter.shows(items[i].pacman)).collect()
+    (0..items.len()).filter(|&i| filter.shows(items[i].pacman, items[i].fixed)).collect()
+}
+
+/// Algum recorte mostra só parte da lista?
+fn splits(items: &[Item]) -> bool {
+    let mixed = |key: fn(&Item) -> bool| items.iter().any(key) && !items.iter().all(key);
+    mixed(|item| item.fixed) || mixed(|item| item.pacman)
 }
 
 /// Primeira linha da janela, mantendo o cursor dentro dela.
@@ -126,7 +135,7 @@ fn scroll(offset: usize, cursor: usize, page: usize) -> usize {
     offset
 }
 
-/// `Mostrar  Todos · [Manuais] · Pacman`, com o recorte ativo em destaque.
+/// `Mostrar  Todos · [Fixos] · Não fixos · Pacman`, com o recorte ativo em destaque.
 fn filter_line(active: RestoreFilter) -> String {
     let options: Vec<String> = RestoreFilter::ORDER
         .iter()
@@ -142,25 +151,41 @@ fn filter_line(active: RestoreFilter) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Item, scroll, visible};
+    use super::{Item, scroll, splits, visible};
     use crate::config::RestoreFilter;
 
-    fn items(kinds: &[bool]) -> Vec<Item> {
-        kinds.iter().map(|&pacman| Item { text: String::new(), pacman, detail: Vec::new() }).collect()
+    /// `(pacman, fixo)` de cada item.
+    fn items(kinds: &[(bool, bool)]) -> Vec<Item> {
+        kinds
+            .iter()
+            .map(|&(pacman, fixed)| Item { text: String::new(), pacman, fixed, detail: Vec::new() })
+            .collect()
     }
 
     #[test]
     fn filters_keep_the_date_order() {
-        let list = items(&[true, false, true, false]);
+        // Do pacman não fixo, manual fixo, do pacman renomeado, manual não fixo.
+        let list = items(&[(true, false), (false, true), (true, true), (false, false)]);
         assert_eq!(visible(&list, RestoreFilter::All), vec![0, 1, 2, 3]);
-        assert_eq!(visible(&list, RestoreFilter::Manual), vec![1, 3]);
+        assert_eq!(visible(&list, RestoreFilter::Fixed), vec![1, 2]);
+        assert_eq!(visible(&list, RestoreFilter::NotFixed), vec![0, 3]);
         assert_eq!(visible(&list, RestoreFilter::Pacman), vec![0, 2]);
     }
 
     #[test]
-    fn tab_cycles_through_the_three() {
-        assert_eq!(RestoreFilter::All.next(), RestoreFilter::Manual);
-        assert_eq!(RestoreFilter::Manual.next(), RestoreFilter::Pacman);
+    fn the_filter_shows_only_when_it_separates_something() {
+        assert!(!splits(&items(&[])));
+        assert!(!splits(&items(&[(false, true), (false, true)])));
+        assert!(!splits(&items(&[(true, false), (true, false)])));
+        assert!(splits(&items(&[(false, true), (false, false)])));
+        assert!(splits(&items(&[(false, false), (true, false)])));
+    }
+
+    #[test]
+    fn tab_cycles_through_the_four() {
+        assert_eq!(RestoreFilter::All.next(), RestoreFilter::Fixed);
+        assert_eq!(RestoreFilter::Fixed.next(), RestoreFilter::NotFixed);
+        assert_eq!(RestoreFilter::NotFixed.next(), RestoreFilter::Pacman);
         assert_eq!(RestoreFilter::Pacman.next(), RestoreFilter::All);
     }
 
